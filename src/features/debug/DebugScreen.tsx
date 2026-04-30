@@ -188,7 +188,9 @@ export default function DebugScreen() {
             <Paragraph><Text style={{fontWeight: 'bold'}}>Nombre:</Text> {e.name}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Tipo:</Text> {e.type}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Padre:</Text> {e.parent_id || 'Raíz'}</Paragraph>
-            <Paragraph><Text style={{fontWeight: 'bold'}}>Coords:</Text> {e.latitude ? `${e.latitude}, ${e.longitude}` : 'Sin ubicar'}</Paragraph>
+            {e.type === 'LOCATION' && (
+              <Paragraph><Text style={{fontWeight: 'bold'}}>Coords:</Text> {e.latitude ? `${e.latitude}, ${e.longitude}` : 'Sin ubicar'}</Paragraph>
+            )}
           </Card.Content>
         </Card>
       ))}

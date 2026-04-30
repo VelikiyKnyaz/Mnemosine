@@ -43,8 +43,13 @@ export const processPendingMemories = async () => {
           textToProcess.trim(), dates.start_date, dates.end_date, aiData.sentiment, memory.id
         );
 
-        // 6. Hydrate Entities with Hierarchies
+        // 4.5 Fetch User Profile para contexto geográfico
+        const userProfile = await db.getFirstAsync<{hometown: string | null}>('SELECT hometown FROM user_profile LIMIT 1');
+        const hometownContext = userProfile?.hometown ? `, ${userProfile.hometown}` : '';
+
+        // 6. Hydrate Entities with Hierarchies and Geocoding
         const entityIdMap: Record<string, string> = {}; 
+        let geocodedLocations = 0;
         
         // Fase 6A: Crear/Encontrar entidades
         for (const entity of aiData.entities) {
@@ -54,12 +59,31 @@ export const processPendingMemories = async () => {
           );
 
           let entityId = existingEntity?.id;
+          let lat: number | null = null;
+          let lon: number | null = null;
+
+          if (!entityId && entity.type === 'LOCATION') {
+            try {
+              const query = encodeURIComponent(`${entity.name}${hometownContext}`);
+              const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1`, {
+                headers: { 'User-Agent': 'MnemosineApp/1.0 (test@example.com)' }
+              });
+              const data = await res.json();
+              if (data && data.length > 0) {
+                lat = parseFloat(data[0].lat);
+                lon = parseFloat(data[0].lon);
+                geocodedLocations++;
+              }
+            } catch (e) {
+              console.log('Geocoding error para', entity.name);
+            }
+          }
 
           if (!entityId) {
             entityId = uuidv4();
             await db.runAsync(
-              "INSERT INTO entities (id, type, name) VALUES (?, ?, ?)",
-              entityId, entity.type, entity.name
+              "INSERT INTO entities (id, type, name, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
+              entityId, entity.type, entity.name, lat, lon
             );
           }
           
@@ -86,6 +110,11 @@ export const processPendingMemories = async () => {
         // 7. Generar Inbox Tasks para Ambigüedades
         if (aiData.ambiguities && aiData.ambiguities.length > 0) {
           for (const amb of aiData.ambiguities) {
+            // Si la IA pensó que la ubicación era ambigua, pero Nominatim logró ubicar al menos un lugar, descartamos la duda.
+            if (amb === 'LOCATION_UNCLEAR' && geocodedLocations > 0) {
+              continue;
+            }
+
             let question = 'Por favor aclara este detalle.';
             if (amb === 'DATE_UNCLEAR') question = '¿Cuándo ocurrió exactamente esto?';
             if (amb === 'LOCATION_UNCLEAR') question = 'Mencionaste un lugar, pero no estoy seguro de dónde es. ¿Puedes ubicarlo en el mapa?';
