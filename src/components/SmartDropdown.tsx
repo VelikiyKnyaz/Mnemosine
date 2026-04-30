@@ -27,7 +27,6 @@ export default function SmartDropdown({ label, value, onSelect, onCreateNew, ite
       }))
       .filter(item => item.matchScore > 0 || (item.score && item.score > 0))
       .sort((a, b) => {
-        // Prioritize: match score, then pre-assigned relevance score
         if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
         return (b.score || 0) - (a.score || 0);
       })
@@ -35,6 +34,35 @@ export default function SmartDropdown({ label, value, onSelect, onCreateNew, ite
   }, [query, items]);
 
   const exactMatch = items.find(i => i.name.toLowerCase() === query.toLowerCase());
+
+  const handleSubmit = () => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+
+    // If there's an exact match, select it
+    if (exactMatch) {
+      onSelect(exactMatch);
+      setShowDropdown(false);
+      Keyboard.dismiss();
+      return;
+    }
+
+    // If there's a top filtered result, select it
+    if (filtered.length > 0 && filtered[0].matchScore > 0) {
+      setQuery(filtered[0].name);
+      onSelect(filtered[0]);
+      setShowDropdown(false);
+      Keyboard.dismiss();
+      return;
+    }
+
+    // Otherwise, create new
+    if (onCreateNew) {
+      onCreateNew(trimmed);
+      setShowDropdown(false);
+      Keyboard.dismiss();
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -47,6 +75,9 @@ export default function SmartDropdown({ label, value, onSelect, onCreateNew, ite
           if (!text.trim()) onSelect(null);
         }}
         onFocus={() => setShowDropdown(true)}
+        onSubmitEditing={handleSubmit}
+        returnKeyType="done"
+        blurOnSubmit={false}
         placeholder={placeholder}
         mode="outlined"
         dense
@@ -104,13 +135,17 @@ export default function SmartDropdown({ label, value, onSelect, onCreateNew, ite
 const styles = StyleSheet.create({
   container: { position: 'relative', zIndex: 10, marginBottom: 10 },
   dropdown: {
+    position: 'absolute',
+    top: -210,
+    left: 0,
+    right: 0,
     backgroundColor: 'white',
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 4,
     maxHeight: 200,
-    elevation: 5,
-    marginTop: 2,
+    elevation: 20,
+    zIndex: 100,
   },
   list: { maxHeight: 195 },
   option: {

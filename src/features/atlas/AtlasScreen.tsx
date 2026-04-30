@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView } from 'react-native';
+import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { Appbar, Text, Button, IconButton, Chip, Title } from 'react-native-paper';
 import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -47,11 +47,11 @@ export default function AtlasScreen({ route, navigation }: any) {
         coordinate: { latitude: r.latitude, longitude: r.longitude }
       })));
 
-      // 1. Destacados
+      // 1. Todos los lugares, ordenados por cantidad de recuerdos
       const topRows = await db.getAllAsync<any>(`
         SELECT e.id, e.name as title, e.latitude, e.longitude, COUNT(me.memory_id) as mem_count
         FROM entities e
-        JOIN memory_entities me ON e.id = me.entity_id
+        LEFT JOIN memory_entities me ON e.id = me.entity_id
         WHERE e.type = 'LOCATION' AND e.latitude IS NOT NULL
         GROUP BY e.id
         ORDER BY mem_count DESC
@@ -256,41 +256,43 @@ export default function AtlasScreen({ route, navigation }: any) {
           </Button>
         </View>
       ) : actionEntity ? (
-        <View style={styles.actionPanel}>
-          <Title style={styles.actionTitle}>{actionEntity.title}</Title>
-          <Text style={{marginBottom: 10}}>¿Qué deseas hacer con este lugar?</Text>
-          
-          {actionEntity.is_confirmed === 0 && (
-            <Button mode="contained" onPress={() => acceptLocation(actionEntity.id)} style={{marginBottom: 8}}>
-              ✅ Aceptar Ubicación Sugerida
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.actionPanel}>
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <Title style={styles.actionTitle}>{actionEntity.title}</Title>
+            <Text style={{marginBottom: 10}}>¿Qué deseas hacer con este lugar?</Text>
+            
+            {actionEntity.is_confirmed === 0 && (
+              <Button mode="contained" onPress={() => acceptLocation(actionEntity.id)} style={{marginBottom: 8}}>
+                ✅ Aceptar Ubicación Sugerida
+              </Button>
+            )}
+            <Button mode="outlined" icon="map-marker" onPress={() => {
+              const ent = actionEntity;
+              setActionEntity(null);
+              startEditing(ent);
+            }} style={{marginBottom: 15}}>
+              Ubicar Manualmente en Mapa
             </Button>
-          )}
-          <Button mode="outlined" icon="map-marker" onPress={() => {
-            const ent = actionEntity;
-            setActionEntity(null);
-            startEditing(ent);
-          }} style={{marginBottom: 15}}>
-            Ubicar Manualmente en Mapa
-          </Button>
 
-          <Text style={{fontWeight: 'bold', marginBottom: 5}}>O asignar a un Lugar Padre:</Text>
-          <SmartDropdown
-            label="Lugar padre (ej: Colegio)"
-            value=""
-            items={allLocations}
-            onSelect={(item) => {
-               if (item) assignParent_Action(item.id);
-            }}
-            onCreateNew={createAndGeocodeParent}
-            placeholder="Buscar o crear lugar..."
-          />
-          
-          <Button onPress={() => setActionEntity(null)} style={{marginTop: 10}}>Cancelar</Button>
-        </View>
+            <Text style={{fontWeight: 'bold', marginBottom: 5}}>O asignar a un Lugar Padre:</Text>
+            <SmartDropdown
+              label="Lugar padre (ej: Colegio)"
+              value=""
+              items={allLocations}
+              onSelect={(item) => {
+                 if (item) assignParent_Action(item.id);
+              }}
+              onCreateNew={createAndGeocodeParent}
+              placeholder="Escribe y presiona Enter..."
+            />
+            
+            <Button onPress={() => setActionEntity(null)} style={{marginTop: 10}}>Cancelar</Button>
+          </ScrollView>
+        </KeyboardAvoidingView>
       ) : (
         <View style={styles.bottomSection}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroll}>
-            <Chip selected={activeTab === 'destacados'} onPress={() => setActiveTab('destacados')} style={styles.tabChip}>⭐️ Top</Chip>
+            <Chip selected={activeTab === 'destacados'} onPress={() => setActiveTab('destacados')} style={styles.tabChip}>📍 Lugares ({destacados.length})</Chip>
             <Chip selected={activeTab === 'confirmar'} onPress={() => setActiveTab('confirmar')} style={styles.tabChip}>
               ✅ Confirmar ({porConfirmar.length})
             </Chip>
@@ -298,13 +300,13 @@ export default function AtlasScreen({ route, navigation }: any) {
 
           <ScrollView style={styles.listArea}>
             {activeTab === 'destacados' && (
-              destacados.length === 0 ? <Text style={styles.emptyText}>No hay lugares destacados aún.</Text> :
+              destacados.length === 0 ? <Text style={styles.emptyText}>No hay lugares registrados aún.</Text> :
               destacados.map(item => (
                 <TouchableOpacity key={item.id} onPress={() => jumpTo(item.coordinate)} style={styles.listItem}>
-                  <Text style={styles.listIcon}>⭐️</Text>
+                  <Text style={styles.listIcon}>{item.mem_count > 0 ? '⭐️' : '📍'}</Text>
                   <View style={{flex:1}}>
                     <Text style={styles.listTitle}>{item.title}</Text>
-                    <Text style={styles.listSub}>{item.mem_count} recuerdos</Text>
+                    <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
                   </View>
                 </TouchableOpacity>
               ))
