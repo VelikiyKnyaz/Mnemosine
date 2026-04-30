@@ -82,6 +82,7 @@ export const processPendingMemories = async () => {
         // 6. Hydrate Entities with Hierarchies and Geocoding
         const entityIdMap: Record<string, string> = {}; 
         let geocodedLocations = 0;
+        const newlyGeocodedEntities: {id: string, name: string}[] = [];
         
         for (const entity of aiData.entities) {
           const existingEntity = await db.getFirstAsync<{id: string, latitude: number | null}>(
@@ -111,6 +112,7 @@ export const processPendingMemories = async () => {
                     entityId, entity.type, entity.name, coords.lat, coords.lon
                   );
                 }
+                newlyGeocodedEntities.push({ id: entityId, name: entity.name });
               } else if (!entityId) {
                 entityId = uuidv4();
                 await db.runAsync(
@@ -194,6 +196,14 @@ export const processPendingMemories = async () => {
                uuidv4(), memory.id, entityId, 'LOCATION_UNCLEAR', question
              );
            }
+        }
+
+        for (const geocoded of newlyGeocodedEntities) {
+           const question = `El sistema ubicó "${geocoded.name}" automáticamente en el mapa. ¿Es correcto?`;
+           await db.runAsync(
+             "INSERT INTO inbox_tasks (id, memory_id, entity_id, ambiguity_type, question) VALUES (?, ?, ?, ?, ?)",
+             uuidv4(), memory.id, geocoded.id, 'LOCATION_CONFIRMATION', question
+           );
         }
 
         if (ambiguities.length > 0) {

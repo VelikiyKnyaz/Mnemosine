@@ -6,7 +6,7 @@ import * as Location from 'expo-location';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
 
-export default function AtlasScreen() {
+export default function AtlasScreen({ route, navigation }: any) {
   const [markers, setMarkers] = useState<any[]>([]);
   const [unlocated, setUnlocated] = useState<any[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
@@ -42,6 +42,17 @@ export default function AtlasScreen() {
 
       setMarkers(located);
       setUnlocated(notLocated);
+
+      // Manejar el parámetro de navegación para ubicar directo
+      if (route.params?.placingEntityId) {
+        const entityId = route.params.placingEntityId;
+        const entityToPlace = located.find(e => e.id === entityId) || notLocated.find(e => e.id === entityId);
+        if (entityToPlace) {
+          startEditing(entityToPlace);
+        }
+        // Limpiar el parámetro para que no se re-dispare
+        navigation.setParams({ placingEntityId: undefined });
+      }
     } catch (err) {
       console.error(err);
     }
@@ -79,7 +90,7 @@ export default function AtlasScreen() {
       loadLocations();
       if (!initialRegion) getUserLocation();
     }
-  }, [isFocused]);
+  }, [isFocused, route.params?.placingEntityId]);
 
   const startEditing = (entity: any) => {
     setEditingEntity(entity);
