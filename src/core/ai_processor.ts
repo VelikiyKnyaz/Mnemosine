@@ -49,6 +49,51 @@ async function getOrCreateTerritory(db: any, name: string, lat: number, lon: num
    return newId;
 }
 
+export async function generateTerritorialHierarchy(db: any, entityId: string, entityName: string, coords: any) {
+  if (!coords || !coords.address) return;
+  const addr = coords.address;
+  
+  let rawCity = addr.city || addr.town || addr.village || addr.municipality || '';
+  rawCity = rawCity.replace(/^(Perímetro Urbano|Municipio de|Ciudad de)\s*/i, '').trim();
+  const cityName = rawCity || null;
+  
+  let rawState = addr.state || '';
+  rawState = rawState.replace(/^(Departamento de|Provincia de|Estado de)\s*/i, '').trim();
+  const stateName = rawState || null;
+  
+  const countryName = addr.country || null;
+  const continentName = addr.continent || null;
+
+  let currentChildId = entityId;
+  let currentChildName = entityName.toLowerCase();
+
+  if (cityName && currentChildName !== cityName.toLowerCase()) {
+     let cityId = await getOrCreateTerritory(db, cityName, coords.lat, coords.lon, 'city');
+     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", cityId, currentChildId);
+     currentChildId = cityId;
+     currentChildName = cityName.toLowerCase();
+  }
+  
+  if (stateName && currentChildName !== stateName.toLowerCase()) {
+     let stateId = await getOrCreateTerritory(db, stateName, coords.lat, coords.lon, 'state');
+     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", stateId, currentChildId);
+     currentChildId = stateId;
+     currentChildName = stateName.toLowerCase();
+  }
+
+  if (countryName && currentChildName !== countryName.toLowerCase()) {
+     let countryId = await getOrCreateTerritory(db, countryName, coords.lat, coords.lon, 'country');
+     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", countryId, currentChildId);
+     currentChildId = countryId;
+     currentChildName = countryName.toLowerCase();
+  }
+  
+  if (continentName && currentChildName !== continentName.toLowerCase()) {
+     let continentId = await getOrCreateTerritory(db, continentName, coords.lat, coords.lon, 'country'); // Use country level jitter for continent
+     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", continentId, currentChildId);
+  }
+}
+
 export const processPendingMemories = async () => {
   try {
     const db = await getDb();
@@ -135,41 +180,7 @@ export const processPendingMemories = async () => {
                 }
 
                 // Generar Jerarquía Territorial
-                if (coords.address) {
-                  const addr = coords.address;
-                  // Prefer city, fallback to town/village/municipality. Clean up common prefixes.
-                  let rawCity = addr.city || addr.town || addr.village || addr.municipality || '';
-                  rawCity = rawCity.replace(/^(Perímetro Urbano|Municipio de|Ciudad de)\s*/i, '').trim();
-                  const cityName = rawCity || null;
-                  
-                  let rawState = addr.state || '';
-                  rawState = rawState.replace(/^(Departamento de|Provincia de|Estado de)\s*/i, '').trim();
-                  const stateName = rawState || null;
-                  
-                  const countryName = addr.country || null;
-
-                  let currentChildId = entityId;
-                  let currentChildName = entity.name.toLowerCase();
-
-                  if (cityName && currentChildName !== cityName.toLowerCase()) {
-                     let cityId = await getOrCreateTerritory(db, cityName, coords.lat, coords.lon, 'city');
-                     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", cityId, currentChildId);
-                     currentChildId = cityId;
-                     currentChildName = cityName.toLowerCase();
-                  }
-                  
-                  if (stateName && currentChildName !== stateName.toLowerCase()) {
-                     let stateId = await getOrCreateTerritory(db, stateName, coords.lat, coords.lon, 'state');
-                     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", stateId, currentChildId);
-                     currentChildId = stateId;
-                     currentChildName = stateName.toLowerCase();
-                  }
-
-                  if (countryName && currentChildName !== countryName.toLowerCase()) {
-                     let countryId = await getOrCreateTerritory(db, countryName, coords.lat, coords.lon, 'country');
-                     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", countryId, currentChildId);
-                  }
-                }
+                await generateTerritorialHierarchy(db, entityId, entity.name, coords);
               } else if (!entityId) {
                 entityId = uuidv4();
                 await db.runAsync(

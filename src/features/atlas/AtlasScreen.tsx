@@ -7,7 +7,7 @@ import { getDb, inheritCoordinatesFromParent } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
 import SmartDropdown, { NominatimSuggestion } from '../../components/SmartDropdown';
 import { v4 as uuidv4 } from 'uuid';
-import { geocodeLocation } from '../../core/ai_processor';
+import { geocodeLocation, generateTerritorialHierarchy } from '../../core/ai_processor';
 
 export default function AtlasScreen({ route, navigation }: any) {
   const [markers, setMarkers] = useState<any[]>([]);
@@ -224,6 +224,9 @@ export default function AtlasScreen({ route, navigation }: any) {
     const coords = await geocodeLocation(name, ''); 
     if (coords) {
       await db.runAsync("UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?", coords.lat, coords.lon, newId);
+      if (coords.address) {
+        await generateTerritorialHierarchy(db, newId, name, coords);
+      }
     } else if (actionEntity && actionEntity.coordinate) {
       // Reverse inheritance: If parent not found, place parent exactly at child's position
       await db.runAsync("UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?", actionEntity.coordinate.latitude, actionEntity.coordinate.longitude, newId);
@@ -253,6 +256,11 @@ export default function AtlasScreen({ route, navigation }: any) {
       "INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 0)",
       newId, name, lat, lon
     );
+    
+    if (suggestion.address) {
+      await generateTerritorialHierarchy(db, newId, name, { lat, lon, address: suggestion.address });
+    }
+    
     await assignParent_Action(newId);
   };
 
