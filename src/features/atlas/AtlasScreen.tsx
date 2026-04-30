@@ -319,11 +319,14 @@ export default function AtlasScreen({ route, navigation }: any) {
     const delta = currentRegion?.latitudeDelta || 100;
     
     // Determine the visible depth threshold based on zoom level
+    // Tweaked to divide 20%+ earlier and support infinite depths at max zoom
     let visibleDepth = 0;
-    if (delta <= 0.1) visibleDepth = 3;       // Zoom de calle: ver todo
-    else if (delta <= 2) visibleDepth = 2;    // Zoom de ciudad
-    else if (delta <= 15) visibleDepth = 1;   // Zoom de estado/nación
-    else visibleDepth = 0;                    // Zoom global: continentes/países
+    if (delta <= 0.05) visibleDepth = Infinity; // Zoom máximo: ver TODOS los lugares finales, ocultar todos los clústeres
+    else if (delta <= 0.3) visibleDepth = 4;    // Calles/barrios
+    else if (delta <= 1.5) visibleDepth = 3;    // Zonas urbanas
+    else if (delta <= 5) visibleDepth = 2;      // Ciudades (antes era 2, ahora es 5 para dividirse antes)
+    else if (delta <= 20) visibleDepth = 1;     // Estados/Departamentos
+    else visibleDepth = 0;                      // Países/Continentes
 
     return markers.filter(m => {
       // 1. Always show the marker being acted upon
