@@ -82,7 +82,6 @@ export const processPendingMemories = async () => {
         // 6. Hydrate Entities with Hierarchies and Geocoding
         const entityIdMap: Record<string, string> = {}; 
         let geocodedLocations = 0;
-        const newlyGeocodedEntities: {id: string, name: string}[] = [];
         
         for (const entity of aiData.entities) {
           const existingEntity = await db.getFirstAsync<{id: string, latitude: number | null}>(
@@ -102,17 +101,16 @@ export const processPendingMemories = async () => {
                 geocodedLocations++;
                 if (entityId) {
                   await db.runAsync(
-                    "UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?",
+                    "UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 0 WHERE id = ?",
                     coords.lat, coords.lon, entityId
                   );
                 } else {
                   entityId = uuidv4();
                   await db.runAsync(
-                    "INSERT INTO entities (id, type, name, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, ?, ?, ?, ?, 0)",
                     entityId, entity.type, entity.name, coords.lat, coords.lon
                   );
                 }
-                newlyGeocodedEntities.push({ id: entityId, name: entity.name });
               } else if (!entityId) {
                 entityId = uuidv4();
                 await db.runAsync(
@@ -164,57 +162,15 @@ export const processPendingMemories = async () => {
           ambiguities.push('DATE_UNCLEAR');
         }
 
-        // Detección proactiva de ubicaciones del recuerdo
-        const hasLocation = aiData.entities.some(e => e.type === 'LOCATION');
-        if (!hasLocation && !ambiguities.includes('MEMORY_LOCATION_UNCLEAR')) {
-          ambiguities.push('MEMORY_LOCATION_UNCLEAR');
-        }
-
-        // Detección proactiva: lugares sin coordenadas y sin padre
-        const orphanLocations = aiData.entities.filter(
-          e => e.type === 'LOCATION' && !e.parent_name && !entityIdMap[e.name] // Wait, entityIdMap has the id, not coords
-        );
-        // Let's refine: we check if they were NOT geocoded in step 6.
-        // Actually, it's easier to just push LOCATION_UNCLEAR for any LOCATION that failed geocoding.
-        const unmappedLocations = aiData.entities.filter(e => {
-          if (e.type !== 'LOCATION') return false;
-          // Si tiene padre, no pedimos ubicar, porque heredará del padre
-          if (e.parent_name) return false;
-          // Si NO incrementó geocodedLocations para este memory...
-          // We can't easily check per entity here. But we can query the DB.
-          return true;
-        });
-        
-        // Wait, better approach:
-        for (const loc of unmappedLocations) {
-           const entityId = entityIdMap[loc.name];
-           const dbLoc = await db.getFirstAsync<{latitude: number | null}>("SELECT latitude FROM entities WHERE id = ?", entityId);
-           if (dbLoc && dbLoc.latitude === null) {
-             const question = `El lugar "${loc.name}" no se pudo ubicar. ¿A qué lugar mayor pertenece, o dónde está en el mapa?`;
-             await db.runAsync(
-               "INSERT INTO inbox_tasks (id, memory_id, entity_id, ambiguity_type, question) VALUES (?, ?, ?, ?, ?)",
-               uuidv4(), memory.id, entityId, 'LOCATION_UNCLEAR', question
-             );
-           }
-        }
-
-        for (const geocoded of newlyGeocodedEntities) {
-           const question = `El sistema ubicó "${geocoded.name}" automáticamente en el mapa. ¿Es correcto?`;
-           await db.runAsync(
-             "INSERT INTO inbox_tasks (id, memory_id, entity_id, ambiguity_type, question) VALUES (?, ?, ?, ?, ?)",
-             uuidv4(), memory.id, geocoded.id, 'LOCATION_CONFIRMATION', question
-           );
-        }
-
         if (ambiguities.length > 0) {
-          // Remover duplicados si AI devolvió multiples o para evitar los que ya manejamos
+          // Remover duplicados si AI devolvió multiples
           const uniqueAmbs = Array.from(new Set(ambiguities));
           for (const amb of uniqueAmbs) {
-            if (amb === 'ENTITY_AMBIGUOUS' || amb === 'LOCATION_UNCLEAR') continue;
+            // Ignorar ambigüedades geográficas porque ahora todo se resuelve en el Atlas
+            if (amb === 'ENTITY_AMBIGUOUS' || amb === 'LOCATION_UNCLEAR' || amb === 'MEMORY_LOCATION_UNCLEAR') continue;
 
             let question = 'Por favor aclara este detalle.';
             if (amb === 'DATE_UNCLEAR') question = '¿Cuándo ocurrió esto? Puedes indicar un año, una edad o una fecha aproximada.';
-            if (amb === 'MEMORY_LOCATION_UNCLEAR') question = 'No mencionaste dónde ocurrió este recuerdo. ¿Dónde estabas?';
             
             await db.runAsync(
               "INSERT INTO inbox_tasks (id, memory_id, ambiguity_type, question) VALUES (?, ?, ?, ?)",

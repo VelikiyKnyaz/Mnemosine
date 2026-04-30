@@ -19,9 +19,6 @@ export default function InboxScreen({ navigation }: any) {
   const [resolveDate, setResolveDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
 
-  // For LOCATION_UNCLEAR resolution
-  const [resolveParentId, setResolveParentId] = useState<string | null>(null);
-
   const isFocused = useIsFocused();
 
   const loadTasks = async () => {
@@ -74,37 +71,6 @@ export default function InboxScreen({ navigation }: any) {
     }
   };
 
-  const resolveLocation_task = async () => {
-    if (!resolvingTask || !resolveParentId) {
-      Alert.alert('Atención', 'Selecciona o crea un lugar padre.');
-      return;
-    }
-    try {
-      const db = await getDb();
-      // resolvingTask for LOCATION_UNCLEAR has entity_id
-      if (resolvingTask.entity_id) {
-        await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", resolveParentId, resolvingTask.entity_id);
-        await inheritCoordinatesFromParent(resolvingTask.entity_id, resolveParentId);
-      } else if (resolvingTask.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR') {
-        // If it's a memory location unclear, and user selects a parent? 
-        // No, for memory location unclear, they are selecting a general location for the memory.
-        // So we link the selected 'parent' (which is just a location) to the memory.
-        const pivotId = uuidv4();
-        await db.runAsync(
-          "INSERT INTO memory_entities (id, memory_id, entity_id, relationship_type) VALUES (?, ?, ?, ?)",
-          pivotId, resolvingTask.memory_id, resolveParentId, 'MENTIONED'
-        );
-      }
-
-      await db.runAsync("UPDATE inbox_tasks SET status = 'RESOLVED' WHERE id = ?", resolvingTask.id);
-      setResolvingTask(null);
-      loadTasks();
-      Alert.alert('Resuelto', 'Jerarquía de lugar asignada.');
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
   const dismissTask = async (taskId: string) => {
     try {
       const db = await getDb();
@@ -115,29 +81,12 @@ export default function InboxScreen({ navigation }: any) {
     }
   };
 
-  const acceptConfirmation_task = async (taskId: string) => {
-    try {
-      const db = await getDb();
-      await db.runAsync("UPDATE inbox_tasks SET status = 'RESOLVED' WHERE id = ?", taskId);
-      loadTasks();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
   const dateTasks = tasks.filter(t => t.ambiguity_type === 'DATE_UNCLEAR');
-  const locationTasks = tasks.filter(t => t.ambiguity_type === 'LOCATION_UNCLEAR' || t.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR');
-  const confirmationTasks = tasks.filter(t => t.ambiguity_type === 'LOCATION_CONFIRMATION');
 
   const renderTask = (task: any) => (
     <Card key={task.id} style={styles.card}>
       <Card.Content>
-        <Title style={{fontSize: 15}}>
-          {task.ambiguity_type === 'DATE_UNCLEAR' ? '📅 ¿Cuándo fue?' 
-            : task.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR' ? '🗺️ ¿Dónde ocurrió?'
-            : task.ambiguity_type === 'LOCATION_CONFIRMATION' ? '✅ Confirmar Ubicación'
-            : '📍 Lugar sin ubicar'}
-        </Title>
+        <Title style={{fontSize: 15}}>📅 ¿Cuándo fue?</Title>
         <Paragraph>{task.question}</Paragraph>
         <View style={styles.contextBox}>
           <Text style={styles.contextLabel}>Fragmento del Recuerdo:</Text>
@@ -147,81 +96,33 @@ export default function InboxScreen({ navigation }: any) {
 
       {resolvingTask?.id === task.id ? (
         <Card.Content style={{marginTop: 10}}>
-          {task.ambiguity_type === 'DATE_UNCLEAR' ? (
-            <View>
-              <Button 
-                mode="outlined" 
-                onPress={() => setShowDatePicker(true)} 
-                icon="calendar"
-                style={{marginBottom: 8}}
-              >
-                Fecha: {toDateStr(resolveDate)}
-              </Button>
-              {showDatePicker && (
-                <DateTimePicker
-                  value={resolveDate}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(event, date) => {
-                    if (Platform.OS === 'android') setShowDatePicker(false);
-                    if (date) setResolveDate(date);
-                  }}
-                />
-              )}
-              <Button mode="contained" onPress={resolveDate_task}>Asignar Fecha</Button>
-            </View>
-          ) : (
-            <View>
-              <Text style={{marginBottom: 8, color: '#666'}}>
-                {task.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR' 
-                  ? 'Selecciona el lugar donde ocurrió este recuerdo, o crea uno nuevo.'
-                  : '¿A qué lugar mayor pertenece? (Ej: "Arenero" pertenece a "Colegio")'}
-              </Text>
-              <SmartDropdown
-                label={task.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR' ? "Lugar del recuerdo" : "Lugar padre (ej: Colegio, Casa...)"}
-                value=""
-                items={locations}
-                onSelect={(item) => setResolveParentId(item?.id || null)}
-                onCreateNew={async (name) => {
-                  const db = await getDb();
-                  const newId = uuidv4();
-                  await db.runAsync("INSERT INTO entities (id, type, name) VALUES (?, 'LOCATION', ?)", newId, name);
-                  setResolveParentId(newId);
-                  loadTasks(); // refresh locations list
+          <View>
+            <Button 
+              mode="outlined" 
+              onPress={() => setShowDatePicker(true)} 
+              icon="calendar"
+              style={{marginBottom: 8}}
+            >
+              Fecha: {toDateStr(resolveDate)}
+            </Button>
+            {showDatePicker && (
+              <DateTimePicker
+                value={resolveDate}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(event, date) => {
+                  if (Platform.OS === 'android') setShowDatePicker(false);
+                  if (date) setResolveDate(date);
                 }}
-                placeholder="Buscar lugar existente..."
               />
-              <Button mode="contained" onPress={resolveLocation_task} style={{marginTop: 8}}>
-                {task.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR' ? 'Asignar Lugar' : 'Asignar Lugar Padre'}
-              </Button>
-              
-              {(task.ambiguity_type === 'LOCATION_UNCLEAR' || task.ambiguity_type === 'LOCATION_CONFIRMATION') && (
-                <Button 
-                  mode="outlined" 
-                  icon="map"
-                  onPress={() => {
-                    setResolvingTask(null);
-                    navigation.navigate('Atlas', { placingEntityId: task.entity_id });
-                  }} 
-                  style={{marginTop: 8}}
-                >
-                  Ubicar en el Mapa directamente
-                </Button>
-              )}
-            </View>
-          )}
+            )}
+            <Button mode="contained" onPress={resolveDate_task}>Asignar Fecha</Button>
+          </View>
           <Button onPress={() => setResolvingTask(null)} style={{marginTop: 5}}>Cancelar</Button>
         </Card.Content>
       ) : (
         <Card.Actions>
-          {task.ambiguity_type === 'LOCATION_CONFIRMATION' && (
-            <Button mode="contained" onPress={() => acceptConfirmation_task(task.id)}>
-              Sí, es correcto
-            </Button>
-          )}
-          <Button onPress={() => startResolve(task)}>
-            {task.ambiguity_type === 'LOCATION_CONFIRMATION' ? 'Cambiar / Reubicar' : 'Resolver'}
-          </Button>
+          <Button onPress={() => startResolve(task)}>Resolver</Button>
           <Button textColor="#999" onPress={() => dismissTask(task.id)}>Ignorar</Button>
         </Card.Actions>
       )}
@@ -242,20 +143,6 @@ export default function InboxScreen({ navigation }: any) {
           </View>
         ) : (
           <View>
-            {confirmationTasks.length > 0 && (
-              <View style={styles.section}>
-                <Title style={styles.sectionTitle}>✅ Confirmaciones del Sistema</Title>
-                {confirmationTasks.map(renderTask)}
-              </View>
-            )}
-
-            {locationTasks.length > 0 && (
-              <View style={styles.section}>
-                <Title style={styles.sectionTitle}>🗺️ Ubicaciones Pendientes</Title>
-                {locationTasks.map(renderTask)}
-              </View>
-            )}
-
             {dateTasks.length > 0 && (
               <View style={styles.section}>
                 <Title style={styles.sectionTitle}>📅 Fechas por Aclarar</Title>

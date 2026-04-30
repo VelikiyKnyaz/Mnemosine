@@ -42,7 +42,9 @@ export const initDatabase = async () => {
       metadata TEXT,
       parent_id TEXT,
       latitude REAL,
-      longitude REAL
+      longitude REAL,
+      is_confirmed INTEGER DEFAULT 1,
+      FOREIGN KEY (parent_id) REFERENCES entities(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS memory_entities (
@@ -73,7 +75,8 @@ export const initDatabase = async () => {
     'ALTER TABLE memories ADD COLUMN end_date TEXT;',
     'ALTER TABLE entities ADD COLUMN parent_id TEXT;',
     'ALTER TABLE entities ADD COLUMN latitude REAL;',
-    'ALTER TABLE entities ADD COLUMN longitude REAL;'
+    'ALTER TABLE entities ADD COLUMN longitude REAL;',
+    'ALTER TABLE entities ADD COLUMN is_confirmed INTEGER DEFAULT 1;'
   ];
 
   for (const query of migrations) {
