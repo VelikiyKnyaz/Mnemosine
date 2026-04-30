@@ -55,7 +55,6 @@ export default function AtlasScreen({ route, navigation }: any) {
         WHERE e.type = 'LOCATION' AND e.latitude IS NOT NULL
         GROUP BY e.id
         ORDER BY mem_count DESC
-        LIMIT 10
       `);
       setDestacados(topRows.map(r => ({ ...r, coordinate: { latitude: r.latitude, longitude: r.longitude } })));
 
@@ -184,7 +183,10 @@ export default function AtlasScreen({ route, navigation }: any) {
     const coords = await geocodeLocation(name, ''); 
     if (coords) {
       await db.runAsync("UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?", coords.lat, coords.lon, newId);
-    } 
+    } else if (actionEntity && actionEntity.coordinate) {
+      // Reverse inheritance: If parent not found, place parent exactly at child's position
+      await db.runAsync("UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?", actionEntity.coordinate.latitude, actionEntity.coordinate.longitude, newId);
+    }
     
     await assignParent_Action(newId);
   };

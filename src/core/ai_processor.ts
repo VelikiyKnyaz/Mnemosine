@@ -36,11 +36,16 @@ const geocodeLocation = async (name: string, hometownContext: string): Promise<{
   return null;
 };
 
-async function getOrCreateTerritory(db: any, name: string, lat: number, lon: number): Promise<string> {
+async function getOrCreateTerritory(db: any, name: string, lat: number, lon: number, level: 'city'|'state'|'country'): Promise<string> {
    const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'LOCATION' AND name = ? COLLATE NOCASE", name);
    if (existing) return existing.id;
    const newId = uuidv4();
-   await db.runAsync("INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 1)", newId, name, lat, lon);
+   
+   const jitterMag = level === 'country' ? 2 : level === 'state' ? 0.5 : 0.05;
+   const jLat = lat + (Math.random() - 0.5) * jitterMag;
+   const jLon = lon + (Math.random() - 0.5) * jitterMag;
+
+   await db.runAsync("INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 1)", newId, name, jLat, jLon);
    return newId;
 }
 
@@ -140,21 +145,21 @@ export const processPendingMemories = async () => {
                   let currentChildName = entity.name.toLowerCase();
 
                   if (cityName && currentChildName !== cityName.toLowerCase()) {
-                     let cityId = await getOrCreateTerritory(db, cityName, coords.lat, coords.lon);
+                     let cityId = await getOrCreateTerritory(db, cityName, coords.lat, coords.lon, 'city');
                      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", cityId, currentChildId);
                      currentChildId = cityId;
                      currentChildName = cityName.toLowerCase();
                   }
                   
                   if (stateName && currentChildName !== stateName.toLowerCase()) {
-                     let stateId = await getOrCreateTerritory(db, stateName, coords.lat, coords.lon);
+                     let stateId = await getOrCreateTerritory(db, stateName, coords.lat, coords.lon, 'state');
                      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", stateId, currentChildId);
                      currentChildId = stateId;
                      currentChildName = stateName.toLowerCase();
                   }
 
                   if (countryName && currentChildName !== countryName.toLowerCase()) {
-                     let countryId = await getOrCreateTerritory(db, countryName, coords.lat, coords.lon);
+                     let countryId = await getOrCreateTerritory(db, countryName, coords.lat, coords.lon, 'country');
                      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", countryId, currentChildId);
                   }
                 }
