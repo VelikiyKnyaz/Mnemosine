@@ -5,10 +5,10 @@ import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
 // Helper: buscar coordenadas en Nominatim
-const geocodeLocation = async (name: string, hometownContext: string): Promise<{lat: number, lon: number} | null> => {
+const geocodeLocation = async (name: string, hometownContext: string): Promise<{lat: number, lon: number, address?: any} | null> => {
   try {
     const query = encodeURIComponent(`${name}${hometownContext}`);
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1`, {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1&addressdetails=1`, {
       headers: { 'User-Agent': 'MnemosineApp/1.0 (memory@app.com)' }
     });
     const data = await res.json();
@@ -28,13 +28,21 @@ const geocodeLocation = async (name: string, hometownContext: string): Promise<{
       // Filtro de confianza eliminado: Nominatim le da importancia muy baja a lugares locales (ej. Unicentro).
       // Nos basamos únicamente en el filtro de ciudad (hometownStr).
 
-      return { lat: parseFloat(result.lat), lon: parseFloat(result.lon) };
+      return { lat: parseFloat(result.lat), lon: parseFloat(result.lon), address: result.address };
     }
   } catch (e) {
     console.log('Geocoding failed for:', name);
   }
   return null;
 };
+
+async function getOrCreateTerritory(db: any, name: string, lat: number, lon: number): Promise<string> {
+   const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'LOCATION' AND name = ? COLLATE NOCASE", name);
+   if (existing) return existing.id;
+   const newId = uuidv4();
+   await db.runAsync("INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 1)", newId, name, lat, lon);
+   return newId;
+}
 
 export const processPendingMemories = async () => {
   try {
@@ -96,7 +104,16 @@ export const processPendingMemories = async () => {
             const needsGeocode = !entityId || (existingEntity && existingEntity.latitude === null);
             
             if (needsGeocode) {
-              const coords = await geocodeLocation(entity.name, hometownContext);
+              let coords = await geocodeLocation(entity.name, hometownContext);
+              
+              // Fallback a la ciudad base si falla la busqueda especifica
+              if (!coords && hometownContext) {
+                 const fallbackContext = hometownContext.replace(', ', '').trim();
+                 if (fallbackContext) {
+                    coords = await geocodeLocation(fallbackContext, '');
+                 }
+              }
+
               if (coords) {
                 geocodedLocations++;
                 if (entityId) {
@@ -110,6 +127,36 @@ export const processPendingMemories = async () => {
                     "INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, ?, ?, ?, ?, 0)",
                     entityId, entity.type, entity.name, coords.lat, coords.lon
                   );
+                }
+
+                // Generar Jerarquía Territorial
+                if (coords.address) {
+                  const { city, town, village, municipality, state, country } = coords.address;
+                  const cityName = city || town || village || municipality;
+                  const stateName = state;
+                  const countryName = country;
+
+                  let currentChildId = entityId;
+                  let currentChildName = entity.name.toLowerCase();
+
+                  if (cityName && currentChildName !== cityName.toLowerCase()) {
+                     let cityId = await getOrCreateTerritory(db, cityName, coords.lat, coords.lon);
+                     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", cityId, currentChildId);
+                     currentChildId = cityId;
+                     currentChildName = cityName.toLowerCase();
+                  }
+                  
+                  if (stateName && currentChildName !== stateName.toLowerCase()) {
+                     let stateId = await getOrCreateTerritory(db, stateName, coords.lat, coords.lon);
+                     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", stateId, currentChildId);
+                     currentChildId = stateId;
+                     currentChildName = stateName.toLowerCase();
+                  }
+
+                  if (countryName && currentChildName !== countryName.toLowerCase()) {
+                     let countryId = await getOrCreateTerritory(db, countryName, coords.lat, coords.lon);
+                     await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", countryId, currentChildId);
+                  }
                 }
               } else if (!entityId) {
                 entityId = uuidv4();

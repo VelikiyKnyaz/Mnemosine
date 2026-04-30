@@ -16,10 +16,9 @@ export default function AtlasScreen({ route, navigation }: any) {
   // Lists
   const [destacados, setDestacados] = useState<any[]>([]);
   const [porConfirmar, setPorConfirmar] = useState<any[]>([]);
-  const [sinUbicar, setSinUbicar] = useState<any[]>([]);
   const [allLocations, setAllLocations] = useState<any[]>([]); // For dropdown
   
-  const [activeTab, setActiveTab] = useState<'destacados' | 'confirmar' | 'sin_ubicar'>('destacados');
+  const [activeTab, setActiveTab] = useState<'destacados' | 'confirmar'>('destacados');
   
   // Interaction States
   const [editingEntity, setEditingEntity] = useState<any | null>(null);
@@ -66,16 +65,10 @@ export default function AtlasScreen({ route, navigation }: any) {
       );
       setPorConfirmar(confRows.map(r => ({ ...r, coordinate: { latitude: r.latitude, longitude: r.longitude }, is_confirmed: 0 })));
 
-      // 3. Sin Ubicar
-      const unlocRows = await db.getAllAsync<any>(
-        "SELECT id, name as title FROM entities WHERE type = 'LOCATION' AND latitude IS NULL"
-      );
-      setSinUbicar(unlocRows);
-
       // Auto-start editing if requested from route
       if (route.params?.placingEntityId) {
         const entityId = route.params.placingEntityId;
-        const entityToPlace = locatedRows.find(e => e.id === entityId) || unlocRows.find(e => e.id === entityId);
+        const entityToPlace = locatedRows.find(e => e.id === entityId);
         if (entityToPlace) {
           const formatted = {
             id: entityToPlace.id,
@@ -166,12 +159,12 @@ export default function AtlasScreen({ route, navigation }: any) {
     }
   };
 
-  const assignParent_Action = async () => {
-    if (!actionEntity || !resolveParentId) return;
+  const assignParent_Action = async (parentId: string) => {
+    if (!actionEntity || !parentId) return;
     try {
       const db = await getDb();
-      await db.runAsync("UPDATE entities SET parent_id = ?, is_confirmed = 1 WHERE id = ?", resolveParentId, actionEntity.id);
-      await inheritCoordinatesFromParent(actionEntity.id, resolveParentId);
+      await db.runAsync("UPDATE entities SET parent_id = ?, is_confirmed = 1 WHERE id = ?", parentId, actionEntity.id);
+      await inheritCoordinatesFromParent(actionEntity.id, parentId);
       Alert.alert('Asignado', 'Lugar padre asignado con éxito.');
       setResolveParentId(null);
       setActionEntity(null);
@@ -188,16 +181,12 @@ export default function AtlasScreen({ route, navigation }: any) {
     await db.runAsync("INSERT INTO entities (id, type, name, is_confirmed) VALUES (?, 'LOCATION', ?, 0)", newId, name);
     
     // Attempt Geocoding
-    const coords = await geocodeLocation(name, ''); // the hometown context could be passed if we had it, but generic is fine
+    const coords = await geocodeLocation(name, ''); 
     if (coords) {
       await db.runAsync("UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?", coords.lat, coords.lon, newId);
-      Alert.alert('Padre Ubicado', `Se encontró "${name}" en el mapa. Pendiente de tu confirmación.`);
-    } else {
-      Alert.alert('Lugar Creado', `Se creó "${name}" pero no se pudo ubicar automáticamente.`);
-    }
+    } 
     
-    setResolveParentId(newId);
-    loadLocations();
+    await assignParent_Action(newId);
   };
 
   const jumpTo = (coordinate: any) => {
@@ -287,11 +276,12 @@ export default function AtlasScreen({ route, navigation }: any) {
             label="Lugar padre (ej: Colegio)"
             value=""
             items={allLocations}
-            onSelect={(item) => setResolveParentId(item?.id || null)}
+            onSelect={(item) => {
+               if (item) assignParent_Action(item.id);
+            }}
             onCreateNew={createAndGeocodeParent}
-            placeholder="Buscar lugar..."
+            placeholder="Buscar o crear lugar..."
           />
-          <Button mode="contained" onPress={assignParent_Action} style={{marginTop: 8}}>Asignar Padre</Button>
           
           <Button onPress={() => setActionEntity(null)} style={{marginTop: 10}}>Cancelar</Button>
         </View>
@@ -301,9 +291,6 @@ export default function AtlasScreen({ route, navigation }: any) {
             <Chip selected={activeTab === 'destacados'} onPress={() => setActiveTab('destacados')} style={styles.tabChip}>⭐️ Top</Chip>
             <Chip selected={activeTab === 'confirmar'} onPress={() => setActiveTab('confirmar')} style={styles.tabChip}>
               ✅ Confirmar ({porConfirmar.length})
-            </Chip>
-            <Chip selected={activeTab === 'sin_ubicar'} onPress={() => setActiveTab('sin_ubicar')} style={styles.tabChip}>
-              📍 Sin Ubicar ({sinUbicar.length})
             </Chip>
           </ScrollView>
 
@@ -329,19 +316,6 @@ export default function AtlasScreen({ route, navigation }: any) {
                   <View style={{flex:1}}>
                     <Text style={styles.listTitle}>{item.title}</Text>
                     <Text style={styles.listSub}>Toca para confirmar</Text>
-                  </View>
-                </TouchableOpacity>
-              ))
-            )}
-
-            {activeTab === 'sin_ubicar' && (
-              sinUbicar.length === 0 ? <Text style={styles.emptyText}>Todos los lugares están ubicados.</Text> :
-              sinUbicar.map(item => (
-                <TouchableOpacity key={item.id} onPress={() => setActionEntity(item)} style={styles.listItem}>
-                  <Text style={styles.listIcon}>📍</Text>
-                  <View style={{flex:1}}>
-                    <Text style={styles.listTitle}>{item.title}</Text>
-                    <Text style={styles.listSub}>Toca para ubicar o asignar padre</Text>
                   </View>
                 </TouchableOpacity>
               ))
