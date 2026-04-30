@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { View, StyleSheet, FlatList, TouchableOpacity, Keyboard } from 'react-native';
-import { TextInput, Text, Chip, Divider } from 'react-native-paper';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { View, StyleSheet, FlatList, TouchableOpacity, Keyboard, Modal, SafeAreaView, Platform, KeyboardAvoidingView } from 'react-native';
+import { TextInput, Text, Chip, Appbar } from 'react-native-paper';
 
 export interface NominatimSuggestion {
   display_name: string;
@@ -23,14 +23,14 @@ interface SmartDropdownProps {
 export default function SmartDropdown({ 
   label, value, onSelect, onCreateNew, onSelectNominatim, enableNominatim, items, placeholder 
 }: SmartDropdownProps) {
+  const [modalVisible, setModalVisible] = useState(false);
   const [query, setQuery] = useState(value || '');
-  const [showDropdown, setShowDropdown] = useState(false);
   const [nominatimResults, setNominatimResults] = useState<NominatimSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return items.slice(0, 5);
+    if (!query.trim()) return items.slice(0, 15);
     const q = query.toLowerCase();
     return items
       .map(item => ({
@@ -44,12 +44,11 @@ export default function SmartDropdown({
         if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
         return (b.score || 0) - (a.score || 0);
       })
-      .slice(0, 5);
+      .slice(0, 15);
   }, [query, items]);
 
   const exactMatch = items.find(i => i.name.toLowerCase() === query.toLowerCase());
 
-  // Debounced Nominatim autocomplete
   useEffect(() => {
     if (!enableNominatim || !query.trim() || query.trim().length < 3) {
       setNominatimResults([]);
@@ -85,35 +84,29 @@ export default function SmartDropdown({
 
     if (exactMatch) {
       onSelect(exactMatch);
-      setShowDropdown(false);
-      Keyboard.dismiss();
+      setModalVisible(false);
       return;
     }
 
-    // If there's a Nominatim result, select the first one
     if (enableNominatim && nominatimResults.length > 0 && onSelectNominatim) {
       onSelectNominatim(nominatimResults[0]);
-      setShowDropdown(false);
-      Keyboard.dismiss();
+      setModalVisible(false);
       return;
     }
 
     if (filtered.length > 0 && filtered[0].matchScore > 0) {
       setQuery(filtered[0].name);
       onSelect(filtered[0]);
-      setShowDropdown(false);
-      Keyboard.dismiss();
+      setModalVisible(false);
       return;
     }
 
     if (onCreateNew) {
       onCreateNew(trimmed);
-      setShowDropdown(false);
-      Keyboard.dismiss();
+      setModalVisible(false);
     }
   };
 
-  // Extract a short, readable name from display_name
   const shortName = (displayName: string) => {
     const parts = displayName.split(',').map(p => p.trim());
     return parts.slice(0, 3).join(', ');
@@ -123,169 +116,162 @@ export default function SmartDropdown({
 
   return (
     <View style={styles.container}>
-      <TextInput
-        label={label}
-        value={query}
-        onChangeText={(text) => {
-          setQuery(text);
-          setShowDropdown(true);
-          if (!text.trim()) { onSelect(null); setNominatimResults([]); }
-        }}
-        onFocus={() => setShowDropdown(true)}
-        onSubmitEditing={handleSubmit}
-        returnKeyType="done"
-        blurOnSubmit={false}
-        placeholder={placeholder}
-        mode="outlined"
-        dense
-        right={
-          searching ? (
-            <TextInput.Icon icon="loading" />
-          ) : query.trim() ? (
-            <TextInput.Icon icon="close" onPress={() => { setQuery(''); onSelect(null); setNominatimResults([]); }} />
-          ) : undefined
-        }
-      />
-      
-      {showDropdown && (query.trim() || items.length > 0) && hasResults && (
-        <View style={styles.dropdown}>
-          <FlatList
-            data={[
-              // Local items first
-              ...filtered.map(item => ({ ...item, _type: 'local' as const })),
-              // Separator
-              ...(filtered.length > 0 && nominatimResults.length > 0 ? [{ _type: 'separator' as const, id: '__sep__', name: '' }] : []),
-              // Nominatim results
-              ...nominatimResults.map((nr, i) => ({ 
-                id: `nom_${i}`, 
-                name: shortName(nr.display_name), 
-                _type: 'nominatim' as const,
-                _nominatim: nr 
-              })),
-            ]}
-            keyExtractor={(item) => item.id}
-            keyboardShouldPersistTaps="handled"
-            style={styles.list}
-            renderItem={({ item }: { item: any }) => {
-              if (item._type === 'separator') {
-                return (
-                  <View style={styles.separatorRow}>
-                    <Text style={styles.separatorText}>📍 Sugerencias del mapa</Text>
-                  </View>
-                );
-              }
-              if (item._type === 'nominatim') {
-                return (
-                  <TouchableOpacity 
-                    style={styles.nominatimOption}
-                    onPress={() => {
-                      if (onSelectNominatim) {
-                        onSelectNominatim(item._nominatim);
-                      }
-                      setQuery(item.name.split(',')[0]);
-                      setShowDropdown(false);
-                      Keyboard.dismiss();
-                    }}
-                  >
-                    <Text style={styles.nominatimIcon}>📍</Text>
-                    <View style={{flex: 1}}>
-                      <Text style={styles.nominatimName}>{item.name.split(',')[0]}</Text>
-                      <Text style={styles.nominatimAddress} numberOfLines={1}>{item.name}</Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              }
-              // Local item
-              return (
-                <TouchableOpacity 
-                  style={styles.option}
-                  onPress={() => {
-                    setQuery(item.name);
-                    onSelect(item);
-                    setShowDropdown(false);
-                    Keyboard.dismiss();
-                  }}
-                >
-                  <Text>{item.name}</Text>
-                  {item.score && item.score > 0 && (
-                    <Chip compact style={styles.suggestedChip} textStyle={{fontSize: 10}}>Guardado</Chip>
-                  )}
-                </TouchableOpacity>
-              );
-            }}
+      {/* Fake input that opens the modal */}
+      <TouchableOpacity activeOpacity={0.8} onPress={() => setModalVisible(true)}>
+        <View pointerEvents="none">
+          <TextInput
+            label={label}
+            value={value || query}
+            placeholder={placeholder}
+            mode="outlined"
+            dense
+            right={<TextInput.Icon icon="magnify" />}
           />
         </View>
-      )}
+      </TouchableOpacity>
+
+      <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setModalVisible(false)}>
+        <SafeAreaView style={styles.modalContainer}>
+          <Appbar.Header style={{ backgroundColor: 'white', elevation: 0 }}>
+            <Appbar.BackAction onPress={() => setModalVisible(false)} />
+            <Appbar.Content title="Asignar Lugar Padre" titleStyle={{fontSize: 16}} />
+          </Appbar.Header>
+
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+            <View style={styles.searchHeader}>
+              <TextInput
+                autoFocus
+                label={label}
+                value={query}
+                onChangeText={setQuery}
+                onSubmitEditing={handleSubmit}
+                returnKeyType="done"
+                mode="outlined"
+                dense
+                right={
+                  searching ? (
+                    <TextInput.Icon icon="loading" />
+                  ) : query.trim() ? (
+                    <TextInput.Icon icon="close" onPress={() => { setQuery(''); setNominatimResults([]); }} />
+                  ) : undefined
+                }
+              />
+            </View>
+
+            <FlatList
+              data={[
+                ...filtered.map(item => ({ ...item, _type: 'local' as const })),
+                ...(filtered.length > 0 && nominatimResults.length > 0 ? [{ _type: 'separator' as const, id: '__sep__', name: '' }] : []),
+                ...nominatimResults.map((nr, i) => ({ 
+                  id: `nom_${i}`, 
+                  name: shortName(nr.display_name), 
+                  _type: 'nominatim' as const,
+                  _nominatim: nr 
+                })),
+              ]}
+              keyExtractor={(item) => item.id}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 20 }}
+              renderItem={({ item }: { item: any }) => {
+                if (item._type === 'separator') {
+                  return (
+                    <View style={styles.separatorRow}>
+                      <Text style={styles.separatorText}>📍 Sugerencias del mapa</Text>
+                    </View>
+                  );
+                }
+                if (item._type === 'nominatim') {
+                  return (
+                    <TouchableOpacity 
+                      style={styles.nominatimOption}
+                      onPress={() => {
+                        if (onSelectNominatim) onSelectNominatim(item._nominatim);
+                        setQuery(item.name.split(',')[0]);
+                        setModalVisible(false);
+                      }}
+                    >
+                      <Text style={styles.nominatimIcon}>📍</Text>
+                      <View style={{flex: 1}}>
+                        <Text style={styles.nominatimName}>{item.name.split(',')[0]}</Text>
+                        <Text style={styles.nominatimAddress} numberOfLines={1}>{item.name}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }
+                return (
+                  <TouchableOpacity 
+                    style={styles.option}
+                    onPress={() => {
+                      setQuery(item.name);
+                      onSelect(item);
+                      setModalVisible(false);
+                    }}
+                  >
+                    <Text style={styles.localName}>{item.name}</Text>
+                    {item.score && item.score > 0 && (
+                      <Chip compact style={styles.suggestedChip} textStyle={{fontSize: 10}}>Guardado</Chip>
+                    )}
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                query.trim().length > 2 && !searching ? (
+                  <View style={styles.emptyContainer}>
+                    <Text style={{color: '#888', marginBottom: 10}}>No se encontraron resultados.</Text>
+                    {onCreateNew && (
+                      <TouchableOpacity onPress={() => { onCreateNew(query.trim()); setModalVisible(false); }} style={styles.createBtn}>
+                        <Text style={styles.createBtnText}>+ Crear manualmente "{query.trim()}"</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ) : null
+              }
+            />
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { position: 'relative', zIndex: 10, marginBottom: 10 },
-  dropdown: {
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    maxHeight: 200,
-    elevation: 20,
-    zIndex: 100,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-  },
-  list: { maxHeight: 195 },
+  container: { marginBottom: 10 },
+  modalContainer: { flex: 1, backgroundColor: 'white' },
+  searchHeader: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#eee' },
   option: {
-    padding: 12,
+    padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  suggestedChip: {
-    backgroundColor: '#e8f5e9',
-    height: 24,
-  },
+  localName: { fontSize: 16, color: '#333' },
+  suggestedChip: { backgroundColor: '#e8f5e9', height: 24 },
   separatorRow: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     backgroundColor: '#f5f5f5',
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
   },
-  separatorText: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: '#888',
-  },
+  separatorText: { fontSize: 12, fontWeight: 'bold', color: '#888' },
   nominatimOption: {
-    padding: 10,
+    padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
     flexDirection: 'row',
     alignItems: 'center',
   },
-  nominatimIcon: {
-    fontSize: 16,
-    marginRight: 8,
-  },
-  nominatimName: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  nominatimAddress: {
-    fontSize: 11,
-    color: '#888',
-  },
-  createOption: {
-    padding: 12,
+  nominatimIcon: { fontSize: 20, marginRight: 12 },
+  nominatimName: { fontSize: 16, fontWeight: 'bold', color: '#333', marginBottom: 2 },
+  nominatimAddress: { fontSize: 12, color: '#888' },
+  emptyContainer: { padding: 20, alignItems: 'center' },
+  createBtn: {
     backgroundColor: '#f3e5f5',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
   },
-  createText: {
-    color: '#6200ee',
-    fontWeight: 'bold',
-  },
+  createBtnText: { color: '#6200ee', fontWeight: 'bold' },
 });
