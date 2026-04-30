@@ -313,7 +313,6 @@ export default function AtlasScreen({ route, navigation }: any) {
       longitude: coordinate.longitude,
       latitudeDelta: 0.01, longitudeDelta: 0.01,
     });
-    });
   };
 
   const visibleMarkers = React.useMemo(() => {
