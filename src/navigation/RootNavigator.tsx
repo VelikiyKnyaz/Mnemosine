@@ -13,6 +13,7 @@ import TimelineScreen from '../features/timeline/TimelineScreen';
 import AtlasScreen from '../features/atlas/AtlasScreen';
 import FamilyTreeScreen from '../features/familyTree/FamilyTreeScreen';
 import InboxScreen from '../features/inbox/InboxScreen';
+import ProfileScreen from '../features/profile/ProfileScreen';
 import DebugScreen from '../features/debug/DebugScreen';
 
 const Stack = createNativeStackNavigator();
@@ -37,6 +38,7 @@ function MainTabs() {
       <Tab.Screen name="Atlas" component={AtlasScreen} options={{ title: 'Atlas' }} />
       <Tab.Screen name="FamilyTree" component={FamilyTreeScreen} options={{ title: 'Árbol' }} />
       <Tab.Screen name="Inbox" component={InboxScreen} options={{ title: 'Buzón' }} />
+      <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Perfil' }} />
       {isAdmin && <Tab.Screen name="Debug" component={DebugScreen} options={{ title: '⚙️ Admin' }} />}
     </Tab.Navigator>
   );

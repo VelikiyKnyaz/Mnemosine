@@ -15,25 +15,40 @@ export default function TimelineScreen() {
   const [editingMemory, setEditingMemory] = useState<any>(null);
   const [editStartDate, setEditStartDate] = useState('');
   const [editEndDate, setEditEndDate] = useState('');
+  const [isExactDate, setIsExactDate] = useState(false);
 
   const handleEditDate = (memory: any) => {
     setEditingMemory(memory);
     setEditStartDate(memory.start_date || '');
-    setEditEndDate(memory.end_date || '');
+    
+    if (!memory.end_date || memory.start_date === memory.end_date) {
+      setIsExactDate(true);
+      setEditEndDate('');
+    } else {
+      setIsExactDate(false);
+      setEditEndDate(memory.end_date || '');
+    }
   };
 
   const handleSaveDate = async () => {
     try {
       const db = await getDb();
+      const finalEnd = isExactDate ? editStartDate : editEndDate;
       await db.runAsync(
         'UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?',
-        editStartDate, editEndDate, editingMemory.id
+        editStartDate, finalEnd, editingMemory.id
       );
       setEditingMemory(null);
       loadMemories();
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const renderDate = (start: string | null, end: string | null) => {
+    if (!start && !end) return '';
+    if (start && end && start !== end) return `${start} a ${end}`;
+    return start || end;
   };
 
   const handleLogout = async () => {
@@ -81,7 +96,11 @@ export default function TimelineScreen() {
             <View style={styles.cardHeader}>
               <Text variant="titleMedium" style={styles.titleText}>{item.title || 'Recuerdo'}</Text>
               <View style={styles.dateContainer}>
-                {item.start_date && <Text variant="labelSmall" style={styles.dateText}>{item.start_date}</Text>}
+                {(item.start_date || item.end_date) && (
+                  <Text variant="labelSmall" style={styles.dateText}>
+                    {renderDate(item.start_date, item.end_date)}
+                  </Text>
+                )}
                 <IconButton icon="pencil" size={16} onPress={() => handleEditDate(item)} style={{margin: 0}} />
               </View>
             </View>
@@ -119,18 +138,40 @@ export default function TimelineScreen() {
         <View style={styles.editModalContainer}>
           <View style={styles.editModal}>
             <Text variant="titleMedium">Editar Fecha (YYYY-MM-DD)</Text>
+            
+            <View style={styles.exactDateToggle}>
+              <Button 
+                mode={isExactDate ? "contained" : "outlined"} 
+                onPress={() => setIsExactDate(true)}
+                style={{flex: 1, marginRight: 5}}
+                compact
+              >Fecha Exacta</Button>
+              <Button 
+                mode={!isExactDate ? "contained" : "outlined"} 
+                onPress={() => setIsExactDate(false)}
+                style={{flex: 1, marginLeft: 5}}
+                compact
+              >Rango</Button>
+            </View>
+
             <TextInput
-              label="Fecha de Inicio"
+              label={isExactDate ? "Fecha" : "Fecha de Inicio"}
               value={editStartDate}
               onChangeText={setEditStartDate}
               style={{marginTop: 10}}
+              mode="outlined"
             />
-            <TextInput
-              label="Fecha de Fin"
-              value={editEndDate}
-              onChangeText={setEditEndDate}
-              style={{marginTop: 10}}
-            />
+            
+            {!isExactDate && (
+              <TextInput
+                label="Fecha de Fin"
+                value={editEndDate}
+                onChangeText={setEditEndDate}
+                style={{marginTop: 10}}
+                mode="outlined"
+              />
+            )}
+            
             <View style={{flexDirection: 'row', justifyContent: 'flex-end', marginTop: 15}}>
               <Button onPress={() => setEditingMemory(null)}>Cancelar</Button>
               <Button mode="contained" onPress={handleSaveDate}>Guardar</Button>
@@ -217,6 +258,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     padding: 20,
     borderRadius: 8,
-    width: '80%',
+    width: '85%',
+  },
+  exactDateToggle: {
+    flexDirection: 'row',
+    marginTop: 15,
+    marginBottom: 5
   }
 });
