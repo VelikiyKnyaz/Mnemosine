@@ -33,7 +33,8 @@
     "zustand": "^5.0.12",
     "@types/react": "~19.1.0",
     "immer": "^9.0.6",
-    "use-sync-external-store": "^1.2.0"
+    "use-sync-external-store": "^1.2.0",
+    "text-encoding": "^0.7.0"
   },
   "devDependencies": {
     "typescript": "~5.9.2"
