@@ -65,7 +65,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       `;
       const locatedRows = await db.getAllAsync<any>(query);
 
-      // Compute tree depth and parent-child relationships
+      // Compute tree height (distance from bottom) and parent-child relationships
       const entityMap = new Map();
       locatedRows.forEach(r => {
         entityMap.set(r.id, { ...r, children: [] });
@@ -76,18 +76,23 @@ export default function AtlasScreen({ route, navigation }: any) {
         }
       });
       
-      const computeDepth = (id: string, depth: number) => {
+      const computeHeight = (id: string): number => {
         const node = entityMap.get(id);
-        if (!node) return;
-        node.depth = depth;
-        node.hasChildren = node.children.length > 0;
-        node.children.forEach((childId: string) => computeDepth(childId, depth + 1));
+        if (!node) return 0;
+        if (node.height !== undefined) return node.height; // already computed
+        if (node.children.length === 0) {
+          node.height = 0;
+          return 0;
+        }
+        const maxChildHeight = Math.max(...node.children.map((cid: string) => computeHeight(cid)));
+        node.height = maxChildHeight + 1;
+        return node.height;
       };
       
       // Find roots
       locatedRows.forEach(r => {
         if (!r.parent_id || !entityMap.has(r.parent_id)) {
-          computeDepth(r.id, 0);
+          computeHeight(r.id);
         }
       });
 
@@ -96,8 +101,8 @@ export default function AtlasScreen({ route, navigation }: any) {
         title: node.title,
         is_confirmed: node.is_confirmed,
         parent_id: node.parent_id,
-        depth: node.depth || 0,
-        hasChildren: node.hasChildren || false,
+        height: node.height || 0,
+        hasChildren: node.children.length > 0,
         mem_count: node.mem_count,
         coordinate: { latitude: node.latitude, longitude: node.longitude }
       }));
@@ -318,34 +323,45 @@ export default function AtlasScreen({ route, navigation }: any) {
   const visibleMarkers = React.useMemo(() => {
     const delta = currentRegion?.latitudeDelta || 100;
     
-    // Determine the visible depth threshold based on zoom level
-    // Tweaked to divide 20%+ earlier and support infinite depths at max zoom
-    let visibleDepth = 0;
-    if (delta <= 0.05) visibleDepth = Infinity; // Zoom máximo: ver TODOS los lugares finales, ocultar todos los clústeres
-    else if (delta <= 0.3) visibleDepth = 4;    // Calles/barrios
-    else if (delta <= 1.5) visibleDepth = 3;    // Zonas urbanas
-    else if (delta <= 5) visibleDepth = 2;      // Ciudades (antes era 2, ahora es 5 para dividirse antes)
-    else if (delta <= 20) visibleDepth = 1;     // Estados/Departamentos
-    else visibleDepth = 0;                      // Países/Continentes
+    // Determine the visible HEIGHT threshold based on zoom level
+    // Instead of depth (which varies wildly), height is consistent (0 = leaf).
+    // A node "splits" (hides itself and shows its children) when delta drops below its threshold.
+    let visibleHeight = 0;
+    if (delta <= 0.1) visibleHeight = 0;         // Max zoom, leaf nodes only
+    else if (delta <= 0.8) visibleHeight = 1;    // Neighborhood clusters
+    else if (delta <= 5) visibleHeight = 2;      // City clusters
+    else if (delta <= 20) visibleHeight = 3;     // State clusters
+    else if (delta <= 60) visibleHeight = 4;     // Country clusters
+    else visibleHeight = 5;                      // Continent clusters
 
     return markers.filter(m => {
       // 1. Always show the marker being acted upon
       if (editingEntity && editingEntity.id === m.id) return true;
       if (actionEntity && actionEntity.id === m.id) return true;
       
-      // 2. Hide markers without coordinates (just in case)
+      // 2. Hide markers without coordinates
       if (!m.coordinate) return false;
 
-      // 3. Cluster logic:
-      // If a node has no children (leaf), it's visible if its natural depth is reached.
-      if (!m.hasChildren) {
-        return m.depth <= visibleDepth;
-      } else {
-        // If it's a parent (cluster), it should only be visible at its EXACT depth level.
-        // E.g., Colombia (depth 0) is visible at visibleDepth 0. 
-        // When we zoom to visibleDepth 1 (States), Colombia DISAPPEARS, and its states appear.
-        return m.depth === visibleDepth;
-      }
+      // 3. Bottom-up cluster logic:
+      // A node is visible if its height matches the current visibleHeight.
+      // Exception: If a node is a leaf (height=0) but we are at a higher zoom level (e.g. visibleHeight=2),
+      // it should be visible ONLY if it doesn't have a parent that is currently acting as its cluster.
+      // To simplify: if a node's height is >= visibleHeight, we show it (it acts as the cluster for its children).
+      // Wait, if height >= visibleHeight, then BOTH height 2 and height 3 would show? No, we only want the TOPMOST visible node.
+      // Correct rule: A node is visible if it is exactly the visibleHeight, OR if it's a leaf node and visibleHeight < its height.
+      // Actually: A node is visible if `m.height === visibleHeight`.
+      // What if `visibleHeight === 3` but the max height in a branch is 1? Then nothing shows!
+      // Better rule: A node shows if its height is the MAX(m.height, visibleHeight) for its branch.
+      // Simplest rule: A node is visible if:
+      // a) It is a cluster and its height == visibleHeight
+      // b) It is a leaf (height == 0) and visibleHeight <= 0 (wait, if visibleHeight is 1, a standalone leaf should show!)
+      // Let's do: A node shows if its height <= visibleHeight AND it has no parent, OR its parent's height > visibleHeight.
+      
+      const parent = m.parent_id ? markers.find(p => p.id === m.parent_id) : null;
+      const parentHeight = parent ? parent.height : Infinity;
+
+      // It is visible if the current map zoom allows its height, BUT the map zoom does NOT allow its parent's height.
+      return m.height <= visibleHeight && parentHeight > visibleHeight;
     });
   }, [markers, currentRegion, editingEntity, actionEntity]);
 
@@ -396,6 +412,12 @@ export default function AtlasScreen({ route, navigation }: any) {
               </Marker>
             ))}
           </MapView>
+
+          {/* Debug HUD for Zoom tweaks */}
+          <View pointerEvents="none" style={styles.debugHud}>
+            <Text style={styles.debugText}>Zoom (Delta): {currentRegion?.latitudeDelta?.toFixed(4)}</Text>
+            <Text style={styles.debugText}>Marcadores Visibles: {visibleMarkers.length}</Text>
+          </View>
 
           {editingEntity && (
             <View style={styles.staticPinContainer} pointerEvents="none">
@@ -519,6 +541,15 @@ const styles = StyleSheet.create({
   listTitle: { fontSize: 15, fontWeight: 'bold', color: '#333' },
   listSub: { fontSize: 12, color: '#666' },
   emptyText: { textAlign: 'center', color: '#999', marginTop: 20, fontStyle: 'italic' },
+  debugHud: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    padding: 8,
+    borderRadius: 8,
+  },
+  debugText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
   clusterMarker: {
     justifyContent: 'center',
     alignItems: 'center',
