@@ -17,17 +17,15 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [destacados, setDestacados] = useState<any[]>([]);
   const [porConfirmar, setPorConfirmar] = useState<any[]>([]);
   const [sinUbicar, setSinUbicar] = useState<any[]>([]);
-  const [recuerdos, setRecuerdos] = useState<any[]>([]);
   const [allLocations, setAllLocations] = useState<any[]>([]); // For dropdown
   
-  const [activeTab, setActiveTab] = useState<'destacados' | 'confirmar' | 'sin_ubicar' | 'recuerdos'>('destacados');
+  const [activeTab, setActiveTab] = useState<'destacados' | 'confirmar' | 'sin_ubicar'>('destacados');
   
   // Interaction States
   const [editingEntity, setEditingEntity] = useState<any | null>(null);
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
 
   const [actionEntity, setActionEntity] = useState<any | null>(null);
-  const [actionMemory, setActionMemory] = useState<any | null>(null);
   const [resolveParentId, setResolveParentId] = useState<string | null>(null);
 
   const isFocused = useIsFocused();
@@ -38,7 +36,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       const db = await getDb();
       
       // All Locations for Dropdown
-      const allRows = await db.getAllAsync<any>("SELECT id, name as title FROM entities WHERE type = 'LOCATION'");
+      const allRows = await db.getAllAsync<any>("SELECT id, name FROM entities WHERE type = 'LOCATION'");
       setAllLocations(allRows);
 
       // Markers (Only with coords)
@@ -73,17 +71,6 @@ export default function AtlasScreen({ route, navigation }: any) {
         "SELECT id, name as title FROM entities WHERE type = 'LOCATION' AND latitude IS NULL"
       );
       setSinUbicar(unlocRows);
-
-      // 4. Recuerdos sin lugar
-      const orphanMemories = await db.getAllAsync<any>(`
-        SELECT m.id, m.raw_text 
-        FROM memories m
-        LEFT JOIN memory_entities me ON m.id = me.memory_id AND me.relationship_type = 'MENTIONED'
-        LEFT JOIN entities e ON me.entity_id = e.id AND e.type = 'LOCATION'
-        WHERE e.id IS NULL AND m.sync_status = 'PROCESSED_LOCAL'
-        GROUP BY m.id
-      `);
-      setRecuerdos(orphanMemories);
 
       // Auto-start editing if requested from route
       if (route.params?.placingEntityId) {
@@ -213,24 +200,6 @@ export default function AtlasScreen({ route, navigation }: any) {
     loadLocations();
   };
 
-  const assignMemoryLocation = async () => {
-    if (!actionMemory || !resolveParentId) return;
-    try {
-      const db = await getDb();
-      const pivotId = uuidv4();
-      await db.runAsync(
-        "INSERT INTO memory_entities (id, memory_id, entity_id, relationship_type) VALUES (?, ?, ?, ?)",
-        pivotId, actionMemory.id, resolveParentId, 'MENTIONED'
-      );
-      Alert.alert('Asignado', 'Lugar asignado al recuerdo.');
-      setResolveParentId(null);
-      setActionMemory(null);
-      loadLocations();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
   const jumpTo = (coordinate: any) => {
     if (!coordinate) return;
     mapRef.current?.animateToRegion({
@@ -326,22 +295,6 @@ export default function AtlasScreen({ route, navigation }: any) {
           
           <Button onPress={() => setActionEntity(null)} style={{marginTop: 10}}>Cancelar</Button>
         </View>
-      ) : actionMemory ? (
-        <View style={styles.actionPanel}>
-          <Title style={styles.actionTitle}>Recuerdo sin lugar</Title>
-          <Text style={{fontStyle: 'italic', marginBottom: 10}}>"{actionMemory.raw_text}"</Text>
-          
-          <SmartDropdown
-            label="¿Dónde ocurrió?"
-            value=""
-            items={allLocations}
-            onSelect={(item) => setResolveParentId(item?.id || null)}
-            onCreateNew={createAndGeocodeParent}
-            placeholder="Buscar o crear lugar..."
-          />
-          <Button mode="contained" onPress={assignMemoryLocation} style={{marginTop: 8}}>Asignar a este Recuerdo</Button>
-          <Button onPress={() => setActionMemory(null)} style={{marginTop: 10}}>Cancelar</Button>
-        </View>
       ) : (
         <View style={styles.bottomSection}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroll}>
@@ -351,9 +304,6 @@ export default function AtlasScreen({ route, navigation }: any) {
             </Chip>
             <Chip selected={activeTab === 'sin_ubicar'} onPress={() => setActiveTab('sin_ubicar')} style={styles.tabChip}>
               📍 Sin Ubicar ({sinUbicar.length})
-            </Chip>
-            <Chip selected={activeTab === 'recuerdos'} onPress={() => setActiveTab('recuerdos')} style={styles.tabChip}>
-              🗺️ Recuerdos ({recuerdos.length})
             </Chip>
           </ScrollView>
 
@@ -392,19 +342,6 @@ export default function AtlasScreen({ route, navigation }: any) {
                   <View style={{flex:1}}>
                     <Text style={styles.listTitle}>{item.title}</Text>
                     <Text style={styles.listSub}>Toca para ubicar o asignar padre</Text>
-                  </View>
-                </TouchableOpacity>
-              ))
-            )}
-
-            {activeTab === 'recuerdos' && (
-              recuerdos.length === 0 ? <Text style={styles.emptyText}>Todos los recuerdos tienen ubicación.</Text> :
-              recuerdos.map(item => (
-                <TouchableOpacity key={item.id} onPress={() => setActionMemory(item)} style={styles.listItem}>
-                  <Text style={styles.listIcon}>🗺️</Text>
-                  <View style={{flex:1}}>
-                    <Text style={styles.listTitle} numberOfLines={1}>{item.raw_text}</Text>
-                    <Text style={styles.listSub}>Toca para asignar lugar</Text>
                   </View>
                 </TouchableOpacity>
               ))
