@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
 
 export function useAudioRecorder() {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
@@ -42,18 +41,12 @@ export function useAudioRecorder() {
       setIsRecording(false);
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
-      
+
       if (uri) {
-        // Move to a permanent directory if needed, for now just use the temp uri
-        const newUri = `${FileSystem.documentDirectory}recordings/`;
-        await FileSystem.makeDirectoryAsync(newUri, { intermediates: true }).catch(() => {});
-        const fileName = `rec_${Date.now()}.m4a`;
-        const finalUri = newUri + fileName;
-        await FileSystem.moveAsync({
-          from: uri,
-          to: finalUri,
-        });
-        setRecordUri(finalUri);
+        // En Snack usamos directamente la URI temporal que genera expo-av.
+        // La grabación permanece accesible mientras la app esté abierta.
+        // En producción se puede mover con expo-file-system.
+        setRecordUri(uri);
       }
       setRecording(null);
     } catch (err) {

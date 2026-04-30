@@ -1,6 +1,6 @@
-import * as FileSystem from 'expo-file-system';
+// AI Service - Sin dependencia de expo-file-system para compatibilidad con Snack
 
-const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY || '';
+const OPENAI_API_KEY = ''; // Pegar clave real aquí para probar
 
 export interface AICategorization {
   title: string;
@@ -13,9 +13,6 @@ export const transcribeAudio = async (audioUri: string): Promise<string> => {
   if (!OPENAI_API_KEY) throw new Error('API Key missing');
 
   try {
-    const fileInfo = await FileSystem.getInfoAsync(audioUri);
-    if (!fileInfo.exists) throw new Error('Audio file not found');
-
     const formData = new FormData();
     formData.append('file', {
       uri: audioUri,
@@ -28,7 +25,6 @@ export const transcribeAudio = async (audioUri: string): Promise<string> => {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'multipart/form-data',
       },
       body: formData,
     });
