@@ -121,7 +121,7 @@ export default function AtlasScreen() {
   return (
     <View style={styles.container}>
       <Appbar.Header>
-        <Appbar.Content title={editingEntity ? \`Moviendo: \${editingEntity.title}\` : "Atlas de Vida"} />
+        <Appbar.Content title={editingEntity ? `Moviendo: ${editingEntity.title}` : "Atlas de Vida"} />
         {editingEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
       </Appbar.Header>
       
