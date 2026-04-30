@@ -136,10 +136,17 @@ export const processPendingMemories = async () => {
 
                 // Generar Jerarquía Territorial
                 if (coords.address) {
-                  const { city, town, village, municipality, state, country } = coords.address;
-                  const cityName = city || town || village || municipality;
-                  const stateName = state;
-                  const countryName = country;
+                  const addr = coords.address;
+                  // Prefer city, fallback to town/village/municipality. Clean up common prefixes.
+                  let rawCity = addr.city || addr.town || addr.village || addr.municipality || '';
+                  rawCity = rawCity.replace(/^(Perímetro Urbano|Municipio de|Ciudad de)\s*/i, '').trim();
+                  const cityName = rawCity || null;
+                  
+                  let rawState = addr.state || '';
+                  rawState = rawState.replace(/^(Departamento de|Provincia de|Estado de)\s*/i, '').trim();
+                  const stateName = rawState || null;
+                  
+                  const countryName = addr.country || null;
 
                   let currentChildId = entityId;
                   let currentChildName = entity.name.toLowerCase();

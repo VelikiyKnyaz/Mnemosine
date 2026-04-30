@@ -138,6 +138,22 @@ export default function AtlasScreen({ route, navigation }: any) {
         'UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 1 WHERE id = ?',
         currentRegion.latitude, currentRegion.longitude, editingEntity.id
       );
+      
+      // Propagate to unconfirmed children: if this entity is a parent, 
+      // move its unconfirmed children near the new position
+      const unconfirmedChildren = await db.getAllAsync<{id: string}>(
+        "SELECT id FROM entities WHERE parent_id = ? AND is_confirmed = 0",
+        editingEntity.id
+      );
+      for (const child of unconfirmedChildren) {
+        const jitterLat = (Math.random() - 0.5) * 0.0004;
+        const jitterLon = (Math.random() - 0.5) * 0.0004;
+        await db.runAsync(
+          'UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?',
+          currentRegion.latitude + jitterLat, currentRegion.longitude + jitterLon, child.id
+        );
+      }
+      
       Alert.alert('Guardado', `Ubicación de "${editingEntity.title}" guardada.`);
       setEditingEntity(null);
       loadLocations();
@@ -162,9 +178,34 @@ export default function AtlasScreen({ route, navigation }: any) {
     if (!actionEntity || !parentId) return;
     try {
       const db = await getDb();
-      await db.runAsync("UPDATE entities SET parent_id = ?, is_confirmed = 1 WHERE id = ?", parentId, actionEntity.id);
-      await inheritCoordinatesFromParent(actionEntity.id, parentId);
-      Alert.alert('Asignado', 'Lugar padre asignado con éxito.');
+      
+      // Get the parent's name to use as geocoding context
+      const parent = await db.getFirstAsync<{name: string, latitude: number|null, longitude: number|null}>(
+        "SELECT name, latitude, longitude FROM entities WHERE id = ?", parentId
+      );
+      
+      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", parentId, actionEntity.id);
+      
+      // Try to re-geocode the child using the parent name as context
+      // e.g. "Colegio, Medellín" instead of just "Colegio"
+      if (parent?.name) {
+        const betterCoords = await geocodeLocation(actionEntity.title, `, ${parent.name}`);
+        if (betterCoords) {
+          await db.runAsync(
+            "UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 0 WHERE id = ?",
+            betterCoords.lat, betterCoords.lon, actionEntity.id
+          );
+          Alert.alert('Reubicado', `"${actionEntity.title}" se reubicó cerca de "${parent.name}". Confírmalo en el mapa.`);
+        } else {
+          // Fallback: inherit parent coordinates with jitter
+          await inheritCoordinatesFromParent(actionEntity.id, parentId);
+          Alert.alert('Asignado', `Padre asignado. No se encontró ubicación específica, se colocó cerca del padre.`);
+        }
+      } else {
+        await inheritCoordinatesFromParent(actionEntity.id, parentId);
+        Alert.alert('Asignado', 'Lugar padre asignado con éxito.');
+      }
+      
       setResolveParentId(null);
       setActionEntity(null);
       loadLocations();
