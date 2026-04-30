@@ -1,42 +1,52 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, FlatList } from 'react-native';
-import { Text, FAB, Appbar, IconButton, Button, TextInput } from 'react-native-paper';
+import { View, StyleSheet, FlatList, Platform } from 'react-native';
+import { Text, FAB, Appbar, IconButton, Button } from 'react-native-paper';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
 import BiographerCard from '../biographer/BiographerCard';
 import CaptureModal from '../capture/CaptureModal';
 import { getDb } from '../../core/database';
 
+const toDateStr = (d: Date) => d.toISOString().split('T')[0];
+const parseDate = (s: string | null) => s ? new Date(s + 'T12:00:00') : new Date();
+
 export default function TimelineScreen() {
   const setSession = useAuthStore((state) => state.setSession);
   const [modalVisible, setModalVisible] = useState(false);
   const [initialQuestion, setInitialQuestion] = useState<string | undefined>(undefined);
   const [memories, setMemories] = useState<any[]>([]);
+
+  // Date editing state
   const [editingMemory, setEditingMemory] = useState<any>(null);
-  const [editStartDate, setEditStartDate] = useState('');
-  const [editEndDate, setEditEndDate] = useState('');
-  const [isExactDate, setIsExactDate] = useState(false);
+  const [isExactDate, setIsExactDate] = useState(true);
+  const [startDate, setStartDate] = useState(new Date());
+  const [endDate, setEndDate] = useState(new Date());
+  const [pickingField, setPickingField] = useState<'start' | 'end' | null>(null);
 
   const handleEditDate = (memory: any) => {
     setEditingMemory(memory);
-    setEditStartDate(memory.start_date || '');
-    
+    const sd = parseDate(memory.start_date);
+    setStartDate(sd);
+
     if (!memory.end_date || memory.start_date === memory.end_date) {
       setIsExactDate(true);
-      setEditEndDate('');
+      setEndDate(sd);
     } else {
       setIsExactDate(false);
-      setEditEndDate(memory.end_date || '');
+      setEndDate(parseDate(memory.end_date));
     }
+    setPickingField(null);
   };
 
   const handleSaveDate = async () => {
     try {
       const db = await getDb();
-      const finalEnd = isExactDate ? editStartDate : editEndDate;
+      const sStr = toDateStr(startDate);
+      const eStr = isExactDate ? sStr : toDateStr(endDate);
       await db.runAsync(
         'UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?',
-        editStartDate, finalEnd, editingMemory.id
+        sStr, eStr, editingMemory.id
       );
       setEditingMemory(null);
       loadMemories();
@@ -68,7 +78,7 @@ export default function TimelineScreen() {
 
   useEffect(() => {
     loadMemories();
-  }, [modalVisible]); // reload when modal closes
+  }, [modalVisible]);
 
   const handleQuestionPress = (q: string) => {
     setInitialQuestion(q);
@@ -122,11 +132,7 @@ export default function TimelineScreen() {
         }
       />
 
-      <FAB
-        icon="plus"
-        style={styles.fab}
-        onPress={handleFabPress}
-      />
+      <FAB icon="plus" style={styles.fab} onPress={handleFabPress} />
 
       <CaptureModal 
         visible={modalVisible} 
@@ -137,7 +143,7 @@ export default function TimelineScreen() {
       {editingMemory && (
         <View style={styles.editModalContainer}>
           <View style={styles.editModal}>
-            <Text variant="titleMedium">Editar Fecha (YYYY-MM-DD)</Text>
+            <Text variant="titleMedium" style={{marginBottom: 5}}>Editar Fecha</Text>
             
             <View style={styles.exactDateToggle}>
               <Button 
@@ -154,21 +160,48 @@ export default function TimelineScreen() {
               >Rango</Button>
             </View>
 
-            <TextInput
-              label={isExactDate ? "Fecha" : "Fecha de Inicio"}
-              value={editStartDate}
-              onChangeText={setEditStartDate}
-              style={{marginTop: 10}}
-              mode="outlined"
-            />
-            
+            <Button 
+              mode="outlined" 
+              onPress={() => setPickingField('start')} 
+              style={styles.dateBtn}
+              icon="calendar"
+            >
+              {isExactDate ? 'Fecha' : 'Inicio'}: {toDateStr(startDate)}
+            </Button>
+
             {!isExactDate && (
-              <TextInput
-                label="Fecha de Fin"
-                value={editEndDate}
-                onChangeText={setEditEndDate}
-                style={{marginTop: 10}}
-                mode="outlined"
+              <Button 
+                mode="outlined" 
+                onPress={() => setPickingField('end')} 
+                style={styles.dateBtn}
+                icon="calendar-range"
+              >
+                Fin: {toDateStr(endDate)}
+              </Button>
+            )}
+
+            {pickingField && (
+              <DateTimePicker
+                value={pickingField === 'start' ? startDate : endDate}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                minimumDate={pickingField === 'end' ? startDate : undefined}
+                onChange={(event, selectedDate) => {
+                  if (event.type === 'dismissed') {
+                    setPickingField(null);
+                    return;
+                  }
+                  if (selectedDate) {
+                    if (pickingField === 'start') {
+                      setStartDate(selectedDate);
+                      // If end date is before new start, auto-adjust
+                      if (endDate < selectedDate) setEndDate(selectedDate);
+                    } else {
+                      setEndDate(selectedDate);
+                    }
+                  }
+                  if (Platform.OS === 'android') setPickingField(null);
+                }}
               />
             )}
             
@@ -184,85 +217,38 @@ export default function TimelineScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  fab: {
-    position: 'absolute',
-    margin: 16,
-    right: 0,
-    bottom: 0,
-  },
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  fab: { position: 'absolute', margin: 16, right: 0, bottom: 0 },
   memoryCard: {
-    marginHorizontal: 16,
-    marginVertical: 8,
-    padding: 16,
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    elevation: 1,
+    marginHorizontal: 16, marginVertical: 8, padding: 16,
+    backgroundColor: '#fff', borderRadius: 8, elevation: 1,
   },
   cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: 8,
   },
-  titleText: {
-    fontWeight: 'bold',
-    flex: 1,
-  },
-  dateText: {
-    color: '#8b5cf6',
-    fontWeight: 'bold',
-    marginLeft: 8,
-  },
-  bodyText: {
-    color: '#333',
-    lineHeight: 20,
-  },
+  titleText: { fontWeight: 'bold', flex: 1 },
+  dateText: { color: '#8b5cf6', fontWeight: 'bold', marginLeft: 8 },
+  bodyText: { color: '#333', lineHeight: 20 },
   cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-    paddingTop: 8,
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginTop: 12, borderTopWidth: 1,
+    borderTopColor: '#f0f0f0', paddingTop: 8,
   },
-  audioHint: {
-    color: '#0284c7',
-    fontWeight: 'bold',
-    fontSize: 12,
-  },
-  statusHint: {
-    fontSize: 12,
-    color: '#888',
-  },
-  empty: {
-    padding: 20,
-    alignItems: 'center',
-  },
-  dateContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  audioHint: { color: '#0284c7', fontWeight: 'bold', fontSize: 12 },
+  statusHint: { fontSize: 12, color: '#888' },
+  empty: { padding: 20, alignItems: 'center' },
+  dateContainer: { flexDirection: 'row', alignItems: 'center' },
   editModalContainer: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
+    justifyContent: 'center', alignItems: 'center', zIndex: 10,
   },
   editModal: {
-    backgroundColor: 'white',
-    padding: 20,
-    borderRadius: 8,
-    width: '85%',
+    backgroundColor: 'white', padding: 20,
+    borderRadius: 8, width: '85%',
   },
-  exactDateToggle: {
-    flexDirection: 'row',
-    marginTop: 15,
-    marginBottom: 5
-  }
+  exactDateToggle: { flexDirection: 'row', marginTop: 10, marginBottom: 10 },
+  dateBtn: { marginTop: 8 },
 });
+
