@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, Alert } from 'react-native';
-import { Appbar, Text, Button, IconButton } from 'react-native-paper';
+import { View, StyleSheet, Alert, FlatList, TouchableOpacity } from 'react-native';
+import { Appbar, Text, Button, IconButton, Chip } from 'react-native-paper';
 import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { getDb } from '../../core/database';
@@ -8,6 +8,7 @@ import { useIsFocused } from '@react-navigation/native';
 
 export default function AtlasScreen() {
   const [markers, setMarkers] = useState<any[]>([]);
+  const [unlocated, setUnlocated] = useState<any[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
   
   // Edit Mode State
@@ -20,25 +21,27 @@ export default function AtlasScreen() {
   const loadLocations = async () => {
     try {
       const db = await getDb();
-      // Get all entities that are locations, even if they don't have lat/lon yet
-      const rows = await db.getAllAsync(`
-        SELECT DISTINCT e.id, e.name, e.latitude, e.longitude
-        FROM entities e
-        WHERE e.type = 'LOCATION'
-      `);
+      const rows = await db.getAllAsync<any>(
+        "SELECT id, name, latitude, longitude FROM entities WHERE type = 'LOCATION'"
+      );
       
-      const newMarkers = rows.map((row: any) => ({
-        id: row.id,
-        title: row.name,
-        // Fallback to 0,0 if not geocoded yet (will be fixed by user or future geocoding)
-        coordinate: {
-          latitude: row.latitude || 0,
-          longitude: row.longitude || 0,
-        },
-        hasLocation: row.latitude !== null && row.longitude !== null
-      })).filter((m: any) => m.hasLocation); // Only show those with location in view mode
+      const located: any[] = [];
+      const notLocated: any[] = [];
 
-      setMarkers(newMarkers);
+      for (const row of rows) {
+        if (row.latitude !== null && row.longitude !== null) {
+          located.push({
+            id: row.id,
+            title: row.name,
+            coordinate: { latitude: row.latitude, longitude: row.longitude },
+          });
+        } else {
+          notLocated.push({ id: row.id, title: row.name });
+        }
+      }
+
+      setMarkers(located);
+      setUnlocated(notLocated);
     } catch (err) {
       console.error(err);
     }
@@ -49,12 +52,9 @@ export default function AtlasScreen() {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permiso denegado', 'No se puede acceder a la ubicación.');
-        // Default to a generic location
         setInitialRegion({
-          latitude: 40.4168,
-          longitude: -3.7038,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
+          latitude: 40.4168, longitude: -3.7038,
+          latitudeDelta: 0.05, longitudeDelta: 0.05,
         });
         return;
       }
@@ -63,17 +63,13 @@ export default function AtlasScreen() {
       setInitialRegion({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
-        latitudeDelta: 0.05,
-        longitudeDelta: 0.05,
+        latitudeDelta: 0.05, longitudeDelta: 0.05,
       });
     } catch (error) {
       console.error('Error getting location:', error);
-      // Default to Madrid
       setInitialRegion({
-        latitude: 40.4168,
-        longitude: -3.7038,
-        latitudeDelta: 0.05,
-        longitudeDelta: 0.05,
+        latitude: 40.4168, longitude: -3.7038,
+        latitudeDelta: 0.05, longitudeDelta: 0.05,
       });
     }
   };
@@ -81,22 +77,24 @@ export default function AtlasScreen() {
   useEffect(() => {
     if (isFocused) {
       loadLocations();
-      if (!initialRegion) {
-        getUserLocation();
-      }
+      if (!initialRegion) getUserLocation();
     }
   }, [isFocused]);
 
-  const startEditing = (marker: any) => {
-    setEditingEntity(marker);
-    const targetRegion = {
-      latitude: marker.coordinate.latitude,
-      longitude: marker.coordinate.longitude,
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    };
-    setCurrentRegion(targetRegion);
-    mapRef.current?.animateToRegion(targetRegion);
+  const startEditing = (entity: any) => {
+    setEditingEntity(entity);
+    if (entity.coordinate) {
+      const targetRegion = {
+        latitude: entity.coordinate.latitude,
+        longitude: entity.coordinate.longitude,
+        latitudeDelta: 0.01, longitudeDelta: 0.01,
+      };
+      setCurrentRegion(targetRegion);
+      mapRef.current?.animateToRegion(targetRegion);
+    } else {
+      // Para las sin ubicar, usar la región actual del mapa
+      setCurrentRegion(currentRegion || initialRegion);
+    }
   };
 
   const confirmLocation = async () => {
@@ -109,7 +107,7 @@ export default function AtlasScreen() {
         currentRegion.latitude, currentRegion.longitude, editingEntity.id
       );
       
-      Alert.alert('Guardado', 'Ubicación actualizada correctamente.');
+      Alert.alert('Guardado', `Ubicación de "${editingEntity.title}" actualizada.`);
       setEditingEntity(null);
       loadLocations();
     } catch (e) {
@@ -121,7 +119,7 @@ export default function AtlasScreen() {
   return (
     <View style={styles.container}>
       <Appbar.Header>
-        <Appbar.Content title={editingEntity ? `Moviendo: ${editingEntity.title}` : "Atlas de Vida"} />
+        <Appbar.Content title={editingEntity ? `Ubicar: ${editingEntity.title}` : "Atlas de Vida"} />
         {editingEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
       </Appbar.Header>
       
@@ -132,7 +130,7 @@ export default function AtlasScreen() {
             style={styles.map}
             initialRegion={initialRegion}
             onRegionChangeComplete={(region) => {
-              if (editingEntity) setCurrentRegion(region);
+              setCurrentRegion(region);
             }}
             showsUserLocation={!editingEntity}
           >
@@ -161,48 +159,54 @@ export default function AtlasScreen() {
 
       {editingEntity ? (
         <View style={styles.editFooter}>
-          <Text style={styles.editHint}>Arrastra el mapa para centrar el marcador.</Text>
+          <Text style={styles.editHint}>Arrastra el mapa para centrar el marcador en "{editingEntity.title}".</Text>
           <Button mode="contained" onPress={confirmLocation} style={styles.confirmBtn}>
             Confirmar Ubicación
           </Button>
         </View>
       ) : (
-        markers.length === 0 && initialRegion && (
-          <View style={styles.overlay}>
-            <Text style={styles.overlayText}>
-              No hay ubicaciones registradas aún. Las IA extraerá lugares de tus memorias.
-            </Text>
-          </View>
-        )
+        <View>
+          {unlocated.length > 0 && (
+            <View style={styles.unlocatedSection}>
+              <Text style={styles.unlocatedTitle}>📍 Lugares sin ubicar ({unlocated.length})</Text>
+              <FlatList
+                data={unlocated}
+                horizontal
+                keyExtractor={(item) => item.id}
+                renderItem={({item}) => (
+                  <TouchableOpacity onPress={() => startEditing(item)}>
+                    <Chip style={styles.chip} icon="map-marker-question">{item.title}</Chip>
+                  </TouchableOpacity>
+                )}
+                showsHorizontalScrollIndicator={false}
+                style={styles.chipList}
+              />
+            </View>
+          )}
+          {markers.length === 0 && unlocated.length === 0 && initialRegion && (
+            <View style={styles.overlay}>
+              <Text style={styles.overlayText}>
+                No hay ubicaciones registradas aún. La IA extraerá lugares de tus memorias.
+              </Text>
+            </View>
+          )}
+        </View>
       )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  mapContainer: {
-    flex: 1,
-    position: 'relative',
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  container: { flex: 1 },
+  mapContainer: { flex: 1, position: 'relative' },
+  map: { ...StyleSheet.absoluteFillObject },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   staticPinContainer: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  staticPin: {
-    marginBottom: 50, // Offset to point the tail at the exact center
-  },
+  staticPin: { marginBottom: 50 },
   editFooter: {
     padding: 15,
     backgroundColor: 'white',
@@ -213,22 +217,34 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     color: '#666',
   },
-  confirmBtn: {
-    paddingVertical: 5,
+  confirmBtn: { paddingVertical: 5 },
+  unlocatedSection: {
+    padding: 10,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  unlocatedTitle: {
+    fontWeight: 'bold',
+    fontSize: 13,
+    marginBottom: 8,
+    color: '#333',
+  },
+  chipList: { paddingBottom: 5 },
+  chip: {
+    marginRight: 8,
+    backgroundColor: '#fff3e0',
   },
   overlay: {
     position: 'absolute',
     bottom: 40,
-    left: 20,
-    right: 20,
+    left: 20, right: 20,
     backgroundColor: 'rgba(255,255,255,0.95)',
     padding: 15,
     borderRadius: 8,
     alignItems: 'center',
     elevation: 5,
   },
-  overlayText: {
-    textAlign: 'center',
-    color: '#444',
-  }
+  overlayText: { textAlign: 'center', color: '#444' },
 });
+

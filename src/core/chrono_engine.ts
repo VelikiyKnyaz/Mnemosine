@@ -18,47 +18,81 @@ export const calculateDatesFromMarkers = async (timeMarkers: string[]): Promise<
   const birthYear = profile?.birth_date ? parseInt(profile.birth_date.split('-')[0]) : null;
   const currentYear = new Date().getFullYear();
 
-  let startYear = currentYear;
-  let endYear = currentYear;
-
   if (!timeMarkers || timeMarkers.length === 0) {
     return { start_date: null, end_date: null };
   }
 
-  // Motor algorítmico simple (Token-optimized)
+  let startDate: string | null = null;
+  let endDate: string | null = null;
+
   for (const marker of timeMarkers) {
     const parts = marker.split(':');
     if (parts.length < 2) continue;
     
-    const type = parts[0];
+    const type = parts[0].trim().toLowerCase();
     const value = parts.slice(1).join(':').trim().toLowerCase();
 
     if (type === 'exact_year') {
-      startYear = parseInt(value);
-      endYear = startYear;
+      const y = parseInt(value);
+      startDate = `${y}-01-01`;
+      endDate = `${y}-12-31`;
+
+    } else if (type === 'exact_date') {
+      // Formato: exact_date:2015-06-20
+      startDate = value;
+      endDate = value;
+
     } else if (type === 'relative_years') {
       const offset = parseInt(value);
-      startYear = currentYear + offset;
-      endYear = startYear;
+      const y = currentYear + offset;
+      startDate = `${y}-01-01`;
+      endDate = `${y}-12-31`;
+
+    } else if (type === 'exact_age' || type === 'relative_age' || type === 'age') {
+      // "cuando tenía 12 años" → exact_age:12
+      if (birthYear) {
+        const age = parseInt(value);
+        const y = birthYear + age;
+        startDate = `${y}-01-01`;
+        endDate = `${y}-12-31`;
+      }
+
+    } else if (type === 'age_range') {
+      // age_range:10-15
+      if (birthYear) {
+        const rangeParts = value.split('-');
+        if (rangeParts.length === 2) {
+          startDate = `${birthYear + parseInt(rangeParts[0])}-01-01`;
+          endDate = `${birthYear + parseInt(rangeParts[1])}-12-31`;
+        }
+      }
+
     } else if (type === 'life_stage') {
       if (birthYear) {
         if (value === 'childhood' || value === 'niñez' || value === 'infancia') {
-          startYear = birthYear + 3;
-          endYear = birthYear + 12;
+          startDate = `${birthYear + 3}-01-01`;
+          endDate = `${birthYear + 12}-12-31`;
         } else if (value === 'teenage' || value === 'adolescencia') {
-          startYear = birthYear + 13;
-          endYear = birthYear + 19;
+          startDate = `${birthYear + 13}-01-01`;
+          endDate = `${birthYear + 19}-12-31`;
         } else if (value === 'adulthood' || value === 'adultez') {
-          startYear = birthYear + 20;
-          endYear = currentYear;
+          startDate = `${birthYear + 20}-01-01`;
+          endDate = `${currentYear}-12-31`;
         }
       }
+
+    } else if (type === 'fuzzy') {
+      // Intentar extraer año de texto libre como "el verano pasado", "hace 2 meses"
+      const yearMatch = value.match(/\d{4}/);
+      if (yearMatch) {
+        const y = parseInt(yearMatch[0]);
+        startDate = `${y}-01-01`;
+        endDate = `${y}-12-31`;
+      }
+      // Si no se puede extraer fecha de un fuzzy, dejamos null para que se genere inbox task
     }
   }
 
-  // Devolver fechas ISO aproximadas
-  return {
-    start_date: `${startYear}-01-01`,
-    end_date: `${endYear}-12-31`
-  };
+  return { start_date: startDate, end_date: endDate };
 };
+
