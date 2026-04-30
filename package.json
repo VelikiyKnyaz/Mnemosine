@@ -1,4 +1,6 @@
 {
+  "name": "mnemosine",
+  "version": "1.0.0",
   "license": "0BSD",
   "main": "index.ts",
   "scripts": {
