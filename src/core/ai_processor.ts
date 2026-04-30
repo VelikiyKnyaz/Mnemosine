@@ -1,5 +1,6 @@
 import { getDb } from './database';
 import { transcribeAudio, extractMemoryData } from './ai_service';
+import { calculateDatesFromMarkers } from './chrono_engine';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -33,15 +34,20 @@ export const processPendingMemories = async () => {
         console.log(`Extracting data for memory ${memory.id}`);
         const aiData = await extractMemoryData(textToProcess);
 
-        // 4. Update Memory table
+        // 4. Calcular Fechas Algorítmicas
+        const dates = await calculateDatesFromMarkers(aiData.time_markers || []);
+
+        // 5. Update Memory table
         await db.runAsync(
-          "UPDATE memories SET raw_text = ?, fuzzy_date = ?, sentiment_score = ?, sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
-          textToProcess.trim(), aiData.fuzzy_date, aiData.sentiment, memory.id
+          "UPDATE memories SET raw_text = ?, start_date = ?, end_date = ?, sentiment_score = ?, sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
+          textToProcess.trim(), dates.start_date, dates.end_date, aiData.sentiment, memory.id
         );
 
-        // 5. Hydrate Entities
+        // 6. Hydrate Entities with Hierarchies
+        const entityIdMap: Record<string, string> = {}; 
+        
+        // Fase 6A: Crear/Encontrar entidades
         for (const entity of aiData.entities) {
-          // Check if entity already exists by name and type
           const existingEntity = await db.getFirstAsync<{id: string}>(
             "SELECT id FROM entities WHERE name = ? AND type = ?",
             entity.name, entity.type
@@ -56,6 +62,8 @@ export const processPendingMemories = async () => {
               entityId, entity.type, entity.name
             );
           }
+          
+          entityIdMap[entity.name] = entityId;
 
           // Link entity to memory
           const pivotId = uuidv4();
@@ -63,6 +71,30 @@ export const processPendingMemories = async () => {
             "INSERT INTO memory_entities (id, memory_id, entity_id, relationship_type) VALUES (?, ?, ?, ?)",
             pivotId, memory.id, entityId, 'MENTIONED'
           );
+        }
+
+        // Fase 6B: Establecer relaciones Padre-Hijo (Top-Down Global Hierarchy)
+        for (const entity of aiData.entities) {
+          if (entity.parent_name && entityIdMap[entity.parent_name] && entityIdMap[entity.name]) {
+            await db.runAsync(
+              "UPDATE entities SET parent_id = ? WHERE id = ?",
+              entityIdMap[entity.parent_name], entityIdMap[entity.name]
+            );
+          }
+        }
+
+        // 7. Generar Inbox Tasks para Ambigüedades
+        if (aiData.ambiguities && aiData.ambiguities.length > 0) {
+          for (const amb of aiData.ambiguities) {
+            let question = 'Por favor aclara este detalle.';
+            if (amb === 'DATE_UNCLEAR') question = '¿Cuándo ocurrió exactamente esto?';
+            if (amb === 'LOCATION_UNCLEAR') question = 'Mencionaste un lugar, pero no estoy seguro de dónde es. ¿Puedes ubicarlo en el mapa?';
+            
+            await db.runAsync(
+              "INSERT INTO inbox_tasks (id, memory_id, ambiguity_type, question) VALUES (?, ?, ?, ?)",
+              uuidv4(), memory.id, amb, question
+            );
+          }
         }
 
         console.log(`Memory ${memory.id} processed successfully.`);

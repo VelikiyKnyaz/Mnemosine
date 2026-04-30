@@ -1,12 +1,13 @@
 // AI Service - Sin dependencia de expo-file-system para compatibilidad con Snack
 
-const OPENAI_API_KEY = ''; // Pegar clave real aquí para probar
+const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY || ''; // Configurar en .env
 
 export interface AICategorization {
   title: string;
-  fuzzy_date: string;
   sentiment: number;
-  entities: { name: string; type: 'PERSON' | 'LOCATION' | 'EMOTION' | 'EVENT' }[];
+  time_markers: string[];
+  entities: { name: string; type: 'PERSON' | 'LOCATION' | 'EMOTION' | 'EVENT'; parent_name?: string }[];
+  ambiguities: string[];
 }
 
 export const transcribeAudio = async (audioUri: string): Promise<string> => {
@@ -46,19 +47,24 @@ export const extractMemoryData = async (text: string): Promise<AICategorization>
   if (!OPENAI_API_KEY) throw new Error('API Key missing');
 
   const systemPrompt = `
-Eres el motor cognitivo de Mnemósine. Recibes fragmentos de memoria diarios. Tu única tarea es devolver un JSON estructurado. Reglas:
-1. Infiere la fecha real o difusa del relato (ej. 'Navidad 1999', 'Hace 5 años', o 'Hoy').
-2. Extrae 'Entidades' importantes. Los tipos válidos son PERSON, LOCATION, EMOTION, EVENT.
-3. Evalúa el sentimiento del recuerdo en una escala de -1.0 (Muy Negativo) a 1.0 (Muy Positivo).
-4. Genera un título poético de máximo 5 palabras.
-5. Nunca devuelvas texto conversacional, solo JSON válido que cumpla estrictamente con esta estructura:
+Eres el motor cognitivo de Mnemósine. Recibes fragmentos de memoria diarios. Tu tarea es extraer metadatos para nuestro motor local.
+REGLAS ESTRICTAS:
+1. Extrae marcadores de tiempo relativos exactos como strings en 'time_markers'. Ejemplos: "relative_years:-5", "exact_year:2015", "life_stage:childhood", "fuzzy:el verano pasado". No intentes calcular la fecha exacta, solo extrae la pista textual.
+2. Extrae 'entities' importantes (PERSON, LOCATION, EMOTION, EVENT).
+3. Si una entidad pertenece a otra de manera obvia (Ej. 'Mi cuarto' en 'Mi casa'), usa 'parent_name' para establecer la jerarquía. 
+4. Evalúa el sentimiento del recuerdo de -1.0 (Muy Negativo) a 1.0 (Muy Positivo).
+5. Genera un 'title' poético de máximo 5 palabras.
+6. Si la fecha o el lugar principal son demasiado ambiguos y crees que la app debería preguntar al usuario, añade "DATE_UNCLEAR" o "LOCATION_UNCLEAR" en el array 'ambiguities'.
+7. Responde SÓLO en JSON con esta estructura exacta:
 {
   "title": "Título corto",
-  "fuzzy_date": "Fecha difusa",
   "sentiment": 0.5,
+  "time_markers": ["relative_years:-5"],
   "entities": [
-    { "name": "Nombre Entidad", "type": "PERSON" }
-  ]
+    { "name": "Mi cuarto", "type": "LOCATION", "parent_name": "Mi casa" },
+    { "name": "Mi casa", "type": "LOCATION" }
+  ],
+  "ambiguities": ["LOCATION_UNCLEAR"]
 }
   `.trim();
 

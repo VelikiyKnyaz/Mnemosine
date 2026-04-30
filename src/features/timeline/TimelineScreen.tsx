@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, FlatList } from 'react-native';
-import { Text, FAB, Appbar } from 'react-native-paper';
+import { Text, FAB, Appbar, IconButton, Button, TextInput } from 'react-native-paper';
 import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
 import BiographerCard from '../biographer/BiographerCard';
@@ -12,6 +12,29 @@ export default function TimelineScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [initialQuestion, setInitialQuestion] = useState<string | undefined>(undefined);
   const [memories, setMemories] = useState<any[]>([]);
+  const [editingMemory, setEditingMemory] = useState<any>(null);
+  const [editStartDate, setEditStartDate] = useState('');
+  const [editEndDate, setEditEndDate] = useState('');
+
+  const handleEditDate = (memory: any) => {
+    setEditingMemory(memory);
+    setEditStartDate(memory.start_date || '');
+    setEditEndDate(memory.end_date || '');
+  };
+
+  const handleSaveDate = async () => {
+    try {
+      const db = await getDb();
+      await db.runAsync(
+        'UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?',
+        editStartDate, editEndDate, editingMemory.id
+      );
+      setEditingMemory(null);
+      loadMemories();
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -57,7 +80,10 @@ export default function TimelineScreen() {
           <View style={styles.memoryCard}>
             <View style={styles.cardHeader}>
               <Text variant="titleMedium" style={styles.titleText}>{item.title || 'Recuerdo'}</Text>
-              {item.fuzzy_date && <Text variant="labelSmall" style={styles.dateText}>{item.fuzzy_date}</Text>}
+              <View style={styles.dateContainer}>
+                {item.start_date && <Text variant="labelSmall" style={styles.dateText}>{item.start_date}</Text>}
+                <IconButton icon="pencil" size={16} onPress={() => handleEditDate(item)} style={{margin: 0}} />
+              </View>
             </View>
             {item.raw_text ? <Text style={styles.bodyText}>{item.raw_text}</Text> : null}
             
@@ -88,6 +114,30 @@ export default function TimelineScreen() {
         onDismiss={() => setModalVisible(false)} 
         initialQuestion={initialQuestion}
       />
+
+      {editingMemory && (
+        <View style={styles.editModalContainer}>
+          <View style={styles.editModal}>
+            <Text variant="titleMedium">Editar Fecha (YYYY-MM-DD)</Text>
+            <TextInput
+              label="Fecha de Inicio"
+              value={editStartDate}
+              onChangeText={setEditStartDate}
+              style={{marginTop: 10}}
+            />
+            <TextInput
+              label="Fecha de Fin"
+              value={editEndDate}
+              onChangeText={setEditEndDate}
+              style={{marginTop: 10}}
+            />
+            <View style={{flexDirection: 'row', justifyContent: 'flex-end', marginTop: 15}}>
+              <Button onPress={() => setEditingMemory(null)}>Cancelar</Button>
+              <Button mode="contained" onPress={handleSaveDate}>Guardar</Button>
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -151,5 +201,22 @@ const styles = StyleSheet.create({
   empty: {
     padding: 20,
     alignItems: 'center',
+  },
+  dateContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  editModalContainer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  editModal: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 8,
+    width: '80%',
   }
 });
