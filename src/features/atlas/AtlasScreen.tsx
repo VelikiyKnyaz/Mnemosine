@@ -38,31 +38,73 @@ export default function AtlasScreen({ route, navigation }: any) {
       const allRows = await db.getAllAsync<any>("SELECT id, name FROM entities WHERE type = 'LOCATION'");
       setAllLocations(allRows);
 
-      // Markers (Only with coords)
-      const locatedRows = await db.getAllAsync<any>(
-        "SELECT id, name, latitude, longitude, is_confirmed FROM entities WHERE type = 'LOCATION' AND latitude IS NOT NULL"
-      );
-      setMarkers(locatedRows.map(r => ({
-        id: r.id, title: r.name, is_confirmed: r.is_confirmed,
-        coordinate: { latitude: r.latitude, longitude: r.longitude }
-      })));
-
-      // 1. Todos los lugares, ordenados por cantidad de recuerdos
-      const topRows = await db.getAllAsync<any>(`
-        SELECT e.id, e.name as title, e.latitude, e.longitude, COUNT(me.memory_id) as mem_count
+      // Unified Hierarchical Query (Markers + Top + Por Confirmar)
+      const query = `
+        WITH RECURSIVE hierarchy AS (
+          SELECT id as root_id, id as descendant_id 
+          FROM entities WHERE type = 'LOCATION'
+          UNION ALL
+          SELECT h.root_id, e.id
+          FROM hierarchy h
+          JOIN entities e ON e.parent_id = h.descendant_id
+        )
+        SELECT 
+          e.id, 
+          e.name as title, 
+          e.latitude, 
+          e.longitude, 
+          e.is_confirmed,
+          e.parent_id,
+          COUNT(me.memory_id) as mem_count
         FROM entities e
-        LEFT JOIN memory_entities me ON e.id = me.entity_id
-        WHERE e.type = 'LOCATION' AND e.latitude IS NOT NULL
+        JOIN hierarchy h ON e.id = h.root_id
+        LEFT JOIN memory_entities me ON me.entity_id = h.descendant_id
+        WHERE e.latitude IS NOT NULL AND e.type = 'LOCATION'
         GROUP BY e.id
         ORDER BY mem_count DESC
-      `);
-      setDestacados(topRows.map(r => ({ ...r, coordinate: { latitude: r.latitude, longitude: r.longitude } })));
+      `;
+      const locatedRows = await db.getAllAsync<any>(query);
 
-      // 2. Por Confirmar
-      const confRows = await db.getAllAsync<any>(
-        "SELECT id, name as title, latitude, longitude FROM entities WHERE type = 'LOCATION' AND latitude IS NOT NULL AND is_confirmed = 0"
-      );
-      setPorConfirmar(confRows.map(r => ({ ...r, coordinate: { latitude: r.latitude, longitude: r.longitude }, is_confirmed: 0 })));
+      // Compute tree depth and parent-child relationships
+      const entityMap = new Map();
+      locatedRows.forEach(r => {
+        entityMap.set(r.id, { ...r, children: [] });
+      });
+      locatedRows.forEach(r => {
+        if (r.parent_id && entityMap.has(r.parent_id)) {
+          entityMap.get(r.parent_id).children.push(r.id);
+        }
+      });
+      
+      const computeDepth = (id: string, depth: number) => {
+        const node = entityMap.get(id);
+        if (!node) return;
+        node.depth = depth;
+        node.hasChildren = node.children.length > 0;
+        node.children.forEach((childId: string) => computeDepth(childId, depth + 1));
+      };
+      
+      // Find roots
+      locatedRows.forEach(r => {
+        if (!r.parent_id || !entityMap.has(r.parent_id)) {
+          computeDepth(r.id, 0);
+        }
+      });
+
+      const processedMarkers = Array.from(entityMap.values()).map(node => ({
+        id: node.id,
+        title: node.title,
+        is_confirmed: node.is_confirmed,
+        parent_id: node.parent_id,
+        depth: node.depth || 0,
+        hasChildren: node.hasChildren || false,
+        mem_count: node.mem_count,
+        coordinate: { latitude: node.latitude, longitude: node.longitude }
+      }));
+
+      setMarkers(processedMarkers);
+      setDestacados(processedMarkers);
+      setPorConfirmar(processedMarkers.filter(m => m.is_confirmed === 0));
 
       // Auto-start editing if requested from route
       if (route.params?.placingEntityId) {
@@ -271,7 +313,39 @@ export default function AtlasScreen({ route, navigation }: any) {
       longitude: coordinate.longitude,
       latitudeDelta: 0.01, longitudeDelta: 0.01,
     });
+    });
   };
+
+  const visibleMarkers = React.useMemo(() => {
+    const delta = currentRegion?.latitudeDelta || 100;
+    
+    // Determine the visible depth threshold based on zoom level
+    let visibleDepth = 0;
+    if (delta <= 0.1) visibleDepth = 3;       // Zoom de calle: ver todo
+    else if (delta <= 2) visibleDepth = 2;    // Zoom de ciudad
+    else if (delta <= 15) visibleDepth = 1;   // Zoom de estado/nación
+    else visibleDepth = 0;                    // Zoom global: continentes/países
+
+    return markers.filter(m => {
+      // 1. Always show the marker being acted upon
+      if (editingEntity && editingEntity.id === m.id) return true;
+      if (actionEntity && actionEntity.id === m.id) return true;
+      
+      // 2. Hide markers without coordinates (just in case)
+      if (!m.coordinate) return false;
+
+      // 3. Cluster logic:
+      // If a node has no children (leaf), it's visible if its natural depth is reached.
+      if (!m.hasChildren) {
+        return m.depth <= visibleDepth;
+      } else {
+        // If it's a parent (cluster), it should only be visible at its EXACT depth level.
+        // E.g., Colombia (depth 0) is visible at visibleDepth 0. 
+        // When we zoom to visibleDepth 1 (States), Colombia DISAPPEARS, and its states appear.
+        return m.depth === visibleDepth;
+      }
+    });
+  }, [markers, currentRegion, editingEntity, actionEntity]);
 
   return (
     <View style={styles.container}>
@@ -291,12 +365,12 @@ export default function AtlasScreen({ route, navigation }: any) {
             }}
             showsUserLocation={!editingEntity}
           >
-            {!editingEntity && markers.map(marker => (
+            {!editingEntity && visibleMarkers.map(marker => (
               <Marker
                 key={marker.id}
                 coordinate={marker.coordinate}
                 title={marker.title}
-                description={marker.is_confirmed === 0 ? "⚠️ Por confirmar (Toca para opciones)" : "Toca para reubicar"}
+                description={marker.is_confirmed === 0 ? "⚠️ Por confirmar" : `${marker.mem_count || 0} recuerdos`}
                 pinColor={marker.is_confirmed === 0 ? 'orange' : 'red'}
                 onCalloutPress={() => {
                   if (marker.is_confirmed === 0) {
@@ -305,7 +379,19 @@ export default function AtlasScreen({ route, navigation }: any) {
                     startEditing(marker);
                   }
                 }}
-              />
+              >
+                {/* Custom Marker View for Clusters */}
+                {marker.hasChildren || marker.mem_count > 0 ? (
+                  <View style={[styles.clusterMarker, { 
+                    backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
+                    width: marker.hasChildren ? 40 : 30,
+                    height: marker.hasChildren ? 40 : 30,
+                    borderRadius: marker.hasChildren ? 20 : 15,
+                  }]}>
+                    <Text style={styles.clusterText}>{marker.mem_count}</Text>
+                  </View>
+                ) : null}
+              </Marker>
             ))}
           </MapView>
 
@@ -431,4 +517,20 @@ const styles = StyleSheet.create({
   listTitle: { fontSize: 15, fontWeight: 'bold', color: '#333' },
   listSub: { fontSize: 12, color: '#666' },
   emptyText: { textAlign: 'center', color: '#999', marginTop: 20, fontStyle: 'italic' },
+  clusterMarker: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+    elevation: 4,
+  },
+  clusterText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
 });
