@@ -85,7 +85,6 @@ export const processPendingMemories = async () => {
               if (coords) {
                 geocodedLocations++;
                 if (entityId) {
-                  // Actualizar entidad existente sin coords
                   await db.runAsync(
                     "UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?",
                     coords.lat, coords.lon, entityId
@@ -98,7 +97,6 @@ export const processPendingMemories = async () => {
                   );
                 }
               } else if (!entityId) {
-                // Nominatim no encontró nada, crear sin coords
                 entityId = uuidv4();
                 await db.runAsync(
                   "INSERT INTO entities (id, type, name) VALUES (?, ?, ?)",
@@ -107,7 +105,7 @@ export const processPendingMemories = async () => {
               }
             }
           } else if (!entityId) {
-            // PERSON o EVENT: crear sin coords
+            // PERSON, EVENT, OBJECT: crear sin coords
             entityId = uuidv4();
             await db.runAsync(
               "INSERT INTO entities (id, type, name) VALUES (?, ?, ?)",
@@ -143,6 +141,14 @@ export const processPendingMemories = async () => {
           ambiguities.push('DATE_UNCLEAR');
         }
 
+        // Detección proactiva: entidades OBJECT o LOCATION sin parent_name
+        const orphanEntities = aiData.entities.filter(
+          e => (e.type === 'OBJECT' || e.type === 'LOCATION') && !e.parent_name
+        );
+        if (orphanEntities.length > 0 && !ambiguities.includes('ENTITY_AMBIGUOUS')) {
+          ambiguities.push('ENTITY_AMBIGUOUS');
+        }
+
         if (ambiguities.length > 0) {
           for (const amb of ambiguities) {
             // Si Nominatim ya resolvió ubicaciones, descartar LOCATION_UNCLEAR
@@ -153,6 +159,10 @@ export const processPendingMemories = async () => {
             let question = 'Por favor aclara este detalle.';
             if (amb === 'DATE_UNCLEAR') question = '¿Cuándo ocurrió esto? Puedes indicar un año, una edad o una fecha aproximada.';
             if (amb === 'LOCATION_UNCLEAR') question = 'Mencionaste un lugar, pero no logré encontrarlo. ¿Puedes ubicarlo en el mapa?';
+            if (amb === 'ENTITY_AMBIGUOUS') {
+              const names = orphanEntities.map(e => `"${e.name}"`).join(', ');
+              question = `¿Dónde estaba ${names}? Selecciona o crea el lugar al que pertenece.`;
+            }
             
             await db.runAsync(
               "INSERT INTO inbox_tasks (id, memory_id, ambiguity_type, question) VALUES (?, ?, ?, ?)",

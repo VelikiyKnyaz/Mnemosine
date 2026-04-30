@@ -1,13 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Alert } from 'react-native';
-import { Appbar, Card, Text, Button, TextInput, Menu, Divider, Chip, IconButton } from 'react-native-paper';
+import { Appbar, Card, Text, Button, TextInput, Menu, Chip, IconButton } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import SmartDropdown from '../../components/SmartDropdown';
 import { useIsFocused } from '@react-navigation/native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
-type EntityType = 'PERSON' | 'LOCATION' | 'EVENT';
+const TYPES = ['PERSON', 'LOCATION', 'EVENT', 'OBJECT'] as const;
+type EntityType = typeof TYPES[number];
+
+const typeEmoji: Record<string, string> = {
+  PERSON: '👤', LOCATION: '📍', EVENT: '🎯', OBJECT: '📦',
+};
 
 export default function EntitiesScreen() {
   const [entities, setEntities] = useState<any[]>([]);
@@ -41,7 +46,7 @@ export default function EntitiesScreen() {
   const startEdit = (entity: any) => {
     setEditingId(entity.id);
     setEditName(entity.name);
-    setEditType(entity.type);
+    setEditType(entity.type as EntityType);
     setEditParentId(entity.parent_id || null);
   };
 
@@ -61,9 +66,9 @@ export default function EntitiesScreen() {
       );
       cancelEdit();
       loadEntities();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      Alert.alert('Error', 'No se pudo actualizar.');
+      Alert.alert('Error', e?.message || 'No se pudo actualizar.');
     }
   };
 
@@ -86,19 +91,17 @@ export default function EntitiesScreen() {
     ]);
   };
 
-  // Build parent dropdown options with smart scoring
   const getParentOptions = (excludeId?: string) => {
     return entities
-      .filter(e => e.id !== excludeId && e.type === 'LOCATION')
+      .filter(e => e.id !== excludeId)
       .map(e => ({
         id: e.id,
-        name: e.name,
-        score: e.parent_id ? 0 : 1, // Root locations score higher as parents
+        name: `${typeEmoji[e.type] || ''} ${e.name}`,
+        score: e.parent_id ? 0 : 1,
       }));
   };
 
   const filtered = filterType === 'ALL' ? entities : entities.filter(e => e.type === filterType);
-  const typeLabel = (t: string) => t === 'PERSON' ? '👤' : t === 'LOCATION' ? '📍' : '🎯';
 
   return (
     <View style={styles.container}>
@@ -107,15 +110,14 @@ export default function EntitiesScreen() {
       </Appbar.Header>
 
       <View style={styles.filterRow}>
-        {['ALL', 'LOCATION', 'PERSON', 'EVENT'].map(t => (
+        {['ALL', ...TYPES].map(t => (
           <Chip 
             key={t} 
             selected={filterType === t}
             onPress={() => setFilterType(t)}
             style={styles.filterChip}
-            compact
           >
-            {t === 'ALL' ? 'Todos' : t === 'LOCATION' ? '📍 Lugares' : t === 'PERSON' ? '👤 Personas' : '🎯 Eventos'}
+            {t === 'ALL' ? 'Todos' : `${typeEmoji[t] || ''} ${t}`}
           </Chip>
         ))}
       </View>
@@ -138,14 +140,18 @@ export default function EntitiesScreen() {
                   visible={typeMenuVisible}
                   onDismiss={() => setTypeMenuVisible(false)}
                   anchor={
-                    <Button mode="outlined" onPress={() => setTypeMenuVisible(true)} compact style={{marginBottom: 8}}>
-                      Tipo: {editType}
+                    <Button mode="outlined" onPress={() => setTypeMenuVisible(true)} style={{marginBottom: 8}}>
+                      Tipo: {typeEmoji[editType]} {editType}
                     </Button>
                   }
                 >
-                  <Menu.Item onPress={() => { setEditType('LOCATION'); setTypeMenuVisible(false); }} title="📍 LOCATION" />
-                  <Menu.Item onPress={() => { setEditType('PERSON'); setTypeMenuVisible(false); }} title="👤 PERSON" />
-                  <Menu.Item onPress={() => { setEditType('EVENT'); setTypeMenuVisible(false); }} title="🎯 EVENT" />
+                  {TYPES.map(t => (
+                    <Menu.Item 
+                      key={t}
+                      onPress={() => { setEditType(t); setTypeMenuVisible(false); }} 
+                      title={`${typeEmoji[t]} ${t}`} 
+                    />
+                  ))}
                 </Menu>
 
                 <SmartDropdown
@@ -154,24 +160,28 @@ export default function EntitiesScreen() {
                   items={getParentOptions(entity.id)}
                   onSelect={(item) => setEditParentId(item?.id || null)}
                   onCreateNew={async (name) => {
-                    const db = await getDb();
-                    const newId = uuidv4();
-                    await db.runAsync("INSERT INTO entities (id, type, name) VALUES (?, 'LOCATION', ?)", newId, name);
-                    setEditParentId(newId);
-                    loadEntities();
+                    try {
+                      const db = await getDb();
+                      const newId = uuidv4();
+                      await db.runAsync("INSERT INTO entities (id, type, name) VALUES (?, 'LOCATION', ?)", newId, name);
+                      setEditParentId(newId);
+                      loadEntities();
+                    } catch (e) {
+                      console.error(e);
+                    }
                   }}
                   placeholder="Buscar o crear lugar padre..."
                 />
 
                 <View style={styles.editActions}>
-                  <Button onPress={cancelEdit}>Cancelar</Button>
+                  <Button onPress={cancelEdit} style={{marginRight: 8}}>Cancelar</Button>
                   <Button mode="contained" onPress={saveEdit}>Guardar</Button>
                 </View>
               </Card.Content>
             ) : (
               <Card.Content style={styles.entityRow}>
                 <View style={{flex: 1}}>
-                  <Text variant="titleSmall">{typeLabel(entity.type)} {entity.name}</Text>
+                  <Text style={{fontWeight: 'bold'}}>{typeEmoji[entity.type] || '?'} {entity.name}</Text>
                   {entity.parent_name && (
                     <Text style={styles.parentHint}>↳ parte de: {entity.parent_name}</Text>
                   )}
@@ -199,10 +209,10 @@ export default function EntitiesScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   filterRow: {
-    flexDirection: 'row', padding: 10, gap: 6,
+    flexDirection: 'row', padding: 10,
     flexWrap: 'wrap',
   },
-  filterChip: { marginBottom: 4 },
+  filterChip: { marginBottom: 4, marginRight: 6 },
   list: { flex: 1, padding: 10 },
   card: { marginBottom: 8, backgroundColor: '#fff' },
   entityRow: {
@@ -213,7 +223,8 @@ const styles = StyleSheet.create({
   rowActions: { flexDirection: 'row' },
   editActions: {
     flexDirection: 'row', justifyContent: 'flex-end',
-    marginTop: 10, gap: 8,
+    marginTop: 10,
   },
   empty: { padding: 20, alignItems: 'center' },
 });
+

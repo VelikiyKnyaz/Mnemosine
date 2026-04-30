@@ -5,7 +5,7 @@ export interface AICategorization {
   title: string;
   sentiment: number;
   time_markers: string[];
-  entities: { name: string; type: 'PERSON' | 'LOCATION' | 'EVENT'; parent_name?: string }[];
+  entities: { name: string; type: 'PERSON' | 'LOCATION' | 'EVENT' | 'OBJECT'; parent_name?: string }[];
   ambiguities: string[];
 }
 
@@ -59,26 +59,25 @@ REGLAS ESTRICTAS:
    - "life_stage:childhood" → solo si dice algo muy genérico como "de niño" sin dar edad.
    - "fuzzy:el verano pasado" → texto temporal que no encaja en los anteriores.
    PRIORIZA exact_age sobre life_stage. "Cuando tenía 12 años" DEBE ser "exact_age:12", NO "life_stage:childhood".
-2. Extrae 'entities' de alto valor (PERSON, LOCATION, EVENT). 
-   - PERSON: Solo personas significativas mencionadas por nombre o relación directa.
-   - LOCATION: Solo lugares geográficos reales y específicos.
+   Si NO hay NINGUNA pista temporal en el texto (ni edad, ni año, ni referencia relativa como "ayer" o "hace X"), deja time_markers vacío [] y añade "DATE_UNCLEAR" a ambiguities. SIEMPRE.
+2. Extrae 'entities' de alto valor:
+   - PERSON: Personas significativas mencionadas por nombre o relación directa.
+   - LOCATION: Lugares geográficos reales y específicos.
    - EVENT: Solo eventos de GRAN magnitud biográfica (boda, graduación, mudanza, terremoto).
-   ¡PROHIBIDO extraer objetos físicos, emociones como entidad, o acciones cotidianas!
-3. Si una entidad pertenece a otra de manera obvia (Ej. 'Mi cuarto' en 'Mi casa'), usa 'parent_name' para establecer la jerarquía. 
+   - OBJECT: Objetos físicos significativos para el recuerdo (un juguete especial, un arenero, un columpio, un instrumento musical).
+3. Si una entidad pertenece a otra de manera obvia (Ej. 'Mi cuarto' en 'Mi casa', 'arenero' en un parque o colegio), usa 'parent_name'. Si NO sabes a qué lugar pertenece un OBJECT o LOCATION genérico (como "arenero", "piscina", "cancha"), añade "ENTITY_AMBIGUOUS" en ambiguities.
 4. Evalúa el sentimiento del recuerdo de -1.0 (Muy Negativo) a 1.0 (Muy Positivo).
 5. Genera un 'title' poético de máximo 5 palabras.
-6. OBLIGATORIO: Si el texto NO contiene NINGUNA pista temporal (ni edad, ni año, ni referencia relativa), DEBES añadir "DATE_UNCLEAR" en 'ambiguities'. Si un lugar es muy genérico o inventado, añade "LOCATION_UNCLEAR".
-7. Responde SÓLO en JSON con esta estructura exacta:
+6. Responde SÓLO en JSON con esta estructura exacta:
 {
   "title": "Título corto",
   "sentiment": 0.5,
   "time_markers": ["exact_age:12"],
   "entities": [
-    { "name": "Mi cuarto", "type": "LOCATION", "parent_name": "Mi casa" },
-    { "name": "Mi casa", "type": "LOCATION" },
+    { "name": "Arenero", "type": "OBJECT", "parent_name": null },
     { "name": "Mamá", "type": "PERSON" }
   ],
-  "ambiguities": []
+  "ambiguities": ["DATE_UNCLEAR", "ENTITY_AMBIGUOUS"]
 }
   `.trim();
 

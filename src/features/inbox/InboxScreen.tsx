@@ -128,7 +128,9 @@ export default function InboxScreen() {
             <Card key={task.id} style={styles.card}>
               <Card.Content>
                 <Title style={{fontSize: 15}}>
-                  {task.ambiguity_type === 'DATE_UNCLEAR' ? '📅 ¿Cuándo fue?' : '📍 ¿Dónde fue?'}
+                  {task.ambiguity_type === 'DATE_UNCLEAR' ? '📅 ¿Cuándo fue?' 
+                    : task.ambiguity_type === 'ENTITY_AMBIGUOUS' ? '🧩 ¿Dónde pertenece?'
+                    : '📍 ¿Dónde fue?'}
                 </Title>
                 <Paragraph>{task.question}</Paragraph>
                 <View style={styles.contextBox}>
