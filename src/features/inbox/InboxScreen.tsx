@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Alert, Platform } from 'react-native';
 import { Appbar, Card, Title, Paragraph, Button, Text, TextInput } from 'react-native-paper';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { getDb } from '../../core/database';
+import { getDb, inheritCoordinatesFromParent } from '../../core/database';
 import SmartDropdown from '../../components/SmartDropdown';
 import { useIsFocused } from '@react-navigation/native';
 import 'react-native-get-random-values';
@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 const toDateStr = (d: Date) => d.toISOString().split('T')[0];
 
-export default function InboxScreen() {
+export default function InboxScreen({ navigation }: any) {
   const [tasks, setTasks] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
   const [resolvingTask, setResolvingTask] = useState<any>(null);
@@ -81,15 +81,19 @@ export default function InboxScreen() {
     }
     try {
       const db = await getDb();
-      // Find entities linked to this memory that are LOCATIONs without parents
-      const memEntities = await db.getAllAsync<any>(`
-        SELECT e.id FROM entities e
-        JOIN memory_entities me ON me.entity_id = e.id
-        WHERE me.memory_id = ? AND e.type = 'LOCATION' AND e.parent_id IS NULL
-      `, resolvingTask.memory_id);
-
-      for (const ent of memEntities) {
-        await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", resolveParentId, ent.id);
+      // resolvingTask for LOCATION_UNCLEAR has entity_id
+      if (resolvingTask.entity_id) {
+        await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", resolveParentId, resolvingTask.entity_id);
+        await inheritCoordinatesFromParent(resolvingTask.entity_id, resolveParentId);
+      } else if (resolvingTask.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR') {
+        // If it's a memory location unclear, and user selects a parent? 
+        // No, for memory location unclear, they are selecting a general location for the memory.
+        // So we link the selected 'parent' (which is just a location) to the memory.
+        const pivotId = uuidv4();
+        await db.runAsync(
+          "INSERT INTO memory_entities (id, memory_id, entity_id, relationship_type) VALUES (?, ?, ?, ?)",
+          pivotId, resolvingTask.memory_id, resolveParentId, 'MENTIONED'
+        );
       }
 
       await db.runAsync("UPDATE inbox_tasks SET status = 'RESOLVED' WHERE id = ?", resolvingTask.id);
@@ -129,8 +133,8 @@ export default function InboxScreen() {
               <Card.Content>
                 <Title style={{fontSize: 15}}>
                   {task.ambiguity_type === 'DATE_UNCLEAR' ? '📅 ¿Cuándo fue?' 
-                    : task.ambiguity_type === 'ENTITY_AMBIGUOUS' ? '🧩 ¿Dónde pertenece?'
-                    : '📍 ¿Dónde fue?'}
+                    : task.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR' ? '🗺️ ¿Dónde ocurrió?'
+                    : '📍 Lugar sin ubicar'}
                 </Title>
                 <Paragraph>{task.question}</Paragraph>
                 <View style={styles.contextBox}>
@@ -167,10 +171,12 @@ export default function InboxScreen() {
                   ) : (
                     <View>
                       <Text style={{marginBottom: 8, color: '#666'}}>
-                        ¿A qué lugar pertenece? Selecciona el lugar padre o crea uno nuevo.
+                        {task.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR' 
+                          ? 'Selecciona el lugar donde ocurrió este recuerdo, o crea uno nuevo.'
+                          : '¿A qué lugar mayor pertenece? (Ej: "Arenero" pertenece a "Colegio")'}
                       </Text>
                       <SmartDropdown
-                        label="Lugar padre (ej: Colegio, Casa...)"
+                        label={task.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR' ? "Lugar del recuerdo" : "Lugar padre (ej: Colegio, Casa...)"}
                         value=""
                         items={locations}
                         onSelect={(item) => setResolveParentId(item?.id || null)}
@@ -184,8 +190,22 @@ export default function InboxScreen() {
                         placeholder="Buscar lugar existente..."
                       />
                       <Button mode="contained" onPress={resolveLocation_task} style={{marginTop: 8}}>
-                        Asignar Lugar Padre
+                        {task.ambiguity_type === 'MEMORY_LOCATION_UNCLEAR' ? 'Asignar Lugar' : 'Asignar Lugar Padre'}
                       </Button>
+                      
+                      {task.ambiguity_type === 'LOCATION_UNCLEAR' && (
+                        <Button 
+                          mode="outlined" 
+                          icon="map"
+                          onPress={() => {
+                            setResolvingTask(null);
+                            navigation.navigate('Atlas');
+                          }} 
+                          style={{marginTop: 8}}
+                        >
+                          Ubicar en el Mapa directamente
+                        </Button>
+                      )}
                     </View>
                   )}
                   <Button onPress={() => setResolvingTask(null)} style={{marginTop: 5}}>Cancelar</Button>

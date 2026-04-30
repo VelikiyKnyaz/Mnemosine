@@ -1,4 +1,4 @@
-import { getDb } from './database';
+import { getDb, inheritCoordinatesFromParent } from './database';
 import { transcribeAudio, extractMemoryData } from './ai_service';
 import { calculateDatesFromMarkers } from './chrono_engine';
 import 'react-native-get-random-values';
@@ -25,11 +25,8 @@ const geocodeLocation = async (name: string, hometownContext: string): Promise<{
         return null;
       }
       
-      // Filtro de confianza: si Nominatim tiene mucha duda, mejor preguntar al usuario
-      if (importance < 0.25) {
-        console.log(`Geocoding rejected: importancia ${importance} es muy baja`);
-        return null;
-      }
+      // Filtro de confianza eliminado: Nominatim le da importancia muy baja a lugares locales (ej. Unicentro).
+      // Nos basamos únicamente en el filtro de ciudad (hometownStr).
 
       return { lat: parseFloat(result.lat), lon: parseFloat(result.lon) };
     }
@@ -144,10 +141,16 @@ export const processPendingMemories = async () => {
         // 6B: Establecer relaciones Padre-Hijo
         for (const entity of aiData.entities) {
           if (entity.parent_name && entityIdMap[entity.parent_name] && entityIdMap[entity.name]) {
+            const parentId = entityIdMap[entity.parent_name];
+            const childId = entityIdMap[entity.name];
             await db.runAsync(
               "UPDATE entities SET parent_id = ? WHERE id = ?",
-              entityIdMap[entity.parent_name], entityIdMap[entity.name]
+              parentId, childId
             );
+            // Heredar coordenadas con jitter si es LOCATION
+            if (entity.type === 'LOCATION') {
+              await inheritCoordinatesFromParent(childId, parentId);
+            }
           }
         }
 
@@ -159,28 +162,49 @@ export const processPendingMemories = async () => {
           ambiguities.push('DATE_UNCLEAR');
         }
 
-        // Detección proactiva: entidades OBJECT o LOCATION sin parent_name
-        const orphanEntities = aiData.entities.filter(
-          e => (e.type === 'OBJECT' || e.type === 'LOCATION') && !e.parent_name
+        // Detección proactiva de ubicaciones del recuerdo
+        const hasLocation = aiData.entities.some(e => e.type === 'LOCATION');
+        if (!hasLocation && !ambiguities.includes('MEMORY_LOCATION_UNCLEAR')) {
+          ambiguities.push('MEMORY_LOCATION_UNCLEAR');
+        }
+
+        // Detección proactiva: lugares sin coordenadas y sin padre
+        const orphanLocations = aiData.entities.filter(
+          e => e.type === 'LOCATION' && !e.parent_name && !entityIdMap[e.name] // Wait, entityIdMap has the id, not coords
         );
-        if (orphanEntities.length > 0 && !ambiguities.includes('ENTITY_AMBIGUOUS')) {
-          ambiguities.push('ENTITY_AMBIGUOUS');
+        // Let's refine: we check if they were NOT geocoded in step 6.
+        // Actually, it's easier to just push LOCATION_UNCLEAR for any LOCATION that failed geocoding.
+        const unmappedLocations = aiData.entities.filter(e => {
+          if (e.type !== 'LOCATION') return false;
+          // Si tiene padre, no pedimos ubicar, porque heredará del padre
+          if (e.parent_name) return false;
+          // Si NO incrementó geocodedLocations para este memory...
+          // We can't easily check per entity here. But we can query the DB.
+          return true;
+        });
+        
+        // Wait, better approach:
+        for (const loc of unmappedLocations) {
+           const entityId = entityIdMap[loc.name];
+           const dbLoc = await db.getFirstAsync<{latitude: number | null}>("SELECT latitude FROM entities WHERE id = ?", entityId);
+           if (dbLoc && dbLoc.latitude === null) {
+             const question = `El lugar "${loc.name}" no se pudo ubicar. ¿A qué lugar mayor pertenece, o dónde está en el mapa?`;
+             await db.runAsync(
+               "INSERT INTO inbox_tasks (id, memory_id, entity_id, ambiguity_type, question) VALUES (?, ?, ?, ?, ?)",
+               uuidv4(), memory.id, entityId, 'LOCATION_UNCLEAR', question
+             );
+           }
         }
 
         if (ambiguities.length > 0) {
-          for (const amb of ambiguities) {
-            // Si Nominatim ya resolvió ubicaciones, descartar LOCATION_UNCLEAR
-            if (amb === 'LOCATION_UNCLEAR' && geocodedLocations > 0) {
-              continue;
-            }
+          // Remover duplicados si AI devolvió multiples o para evitar los que ya manejamos
+          const uniqueAmbs = Array.from(new Set(ambiguities));
+          for (const amb of uniqueAmbs) {
+            if (amb === 'ENTITY_AMBIGUOUS' || amb === 'LOCATION_UNCLEAR') continue;
 
             let question = 'Por favor aclara este detalle.';
             if (amb === 'DATE_UNCLEAR') question = '¿Cuándo ocurrió esto? Puedes indicar un año, una edad o una fecha aproximada.';
-            if (amb === 'LOCATION_UNCLEAR') question = 'Mencionaste un lugar, pero no logré encontrarlo. ¿Puedes ubicarlo en el mapa?';
-            if (amb === 'ENTITY_AMBIGUOUS') {
-              const names = orphanEntities.map(e => `"${e.name}"`).join(', ');
-              question = `¿Dónde estaba ${names}? Selecciona o crea el lugar al que pertenece.`;
-            }
+            if (amb === 'MEMORY_LOCATION_UNCLEAR') question = 'No mencionaste dónde ocurrió este recuerdo. ¿Dónde estabas?';
             
             await db.runAsync(
               "INSERT INTO inbox_tasks (id, memory_id, ambiguity_type, question) VALUES (?, ?, ?, ?)",

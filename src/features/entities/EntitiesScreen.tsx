@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
 import { Appbar, Card, Text, Button, TextInput, Chip, IconButton } from 'react-native-paper';
-import { getDb } from '../../core/database';
+import { getDb, inheritCoordinatesFromParent } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
@@ -68,6 +68,11 @@ export default function EntitiesScreen() {
         'UPDATE entities SET name = ?, type = ?, parent_id = ? WHERE id = ?',
         editName.trim(), editType, editParentId, editingId
       );
+      
+      if (editParentId && editType === 'LOCATION' && editingId) {
+        await inheritCoordinatesFromParent(editingId, editParentId);
+      }
+      
       cancelEdit();
       loadEntities();
     } catch (e: any) {

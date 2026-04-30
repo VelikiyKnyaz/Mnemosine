@@ -84,3 +84,26 @@ export const initDatabase = async () => {
     }
   }
 };
+
+export const inheritCoordinatesFromParent = async (childId: string, parentId: string) => {
+  try {
+    const database = await getDb();
+    const parent = await database.getFirstAsync<{latitude: number | null, longitude: number | null}>(
+      'SELECT latitude, longitude FROM entities WHERE id = ?', parentId
+    );
+    
+    if (parent && parent.latitude !== null && parent.longitude !== null) {
+      // Jitter aleatorio de +/- 0.0001 a 0.0003 (aprox 10-30 metros) para que no se superpongan
+      const jitterLat = (Math.random() - 0.5) * 0.0004;
+      const jitterLon = (Math.random() - 0.5) * 0.0004;
+      
+      await database.runAsync(
+        'UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?',
+        parent.latitude + jitterLat, parent.longitude + jitterLon, childId
+      );
+      console.log(`Inherited coordinates for ${childId} from ${parentId} with jitter.`);
+    }
+  } catch (e) {
+    console.error('Failed to inherit coordinates:', e);
+  }
+};
