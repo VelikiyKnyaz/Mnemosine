@@ -47,7 +47,7 @@ export default function RootNavigator() {
     supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
-  }, []);
+  }, [setIsLoading, setSession]);
 
   if (isLoading) {
     return (
