@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
-import { Appbar, Card, Text, Button, TextInput, Menu, Chip, IconButton } from 'react-native-paper';
+import React, { useState, useEffect, useMemo } from 'react';
+import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
+import { Appbar, Card, Text, Button, TextInput, Chip, IconButton } from 'react-native-paper';
 import { getDb } from '../../core/database';
-import SmartDropdown from '../../components/SmartDropdown';
 import { useIsFocused } from '@react-navigation/native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
@@ -20,7 +19,8 @@ export default function EntitiesScreen() {
   const [editName, setEditName] = useState('');
   const [editType, setEditType] = useState<EntityType>('LOCATION');
   const [editParentId, setEditParentId] = useState<string | null>(null);
-  const [typeMenuVisible, setTypeMenuVisible] = useState(false);
+  const [parentSearch, setParentSearch] = useState('');
+  const [showParentList, setShowParentList] = useState(false);
   const [filterType, setFilterType] = useState<string>('ALL');
   const isFocused = useIsFocused();
 
@@ -48,12 +48,16 @@ export default function EntitiesScreen() {
     setEditName(entity.name);
     setEditType(entity.type as EntityType);
     setEditParentId(entity.parent_id || null);
+    setParentSearch(entity.parent_name || '');
+    setShowParentList(false);
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setEditName('');
     setEditParentId(null);
+    setParentSearch('');
+    setShowParentList(false);
   };
 
   const saveEdit = async () => {
@@ -82,6 +86,7 @@ export default function EntitiesScreen() {
             await db.runAsync('DELETE FROM memory_entities WHERE entity_id = ?', id);
             await db.runAsync('UPDATE entities SET parent_id = NULL WHERE parent_id = ?', id);
             await db.runAsync('DELETE FROM entities WHERE id = ?', id);
+            if (editingId === id) cancelEdit();
             loadEntities();
           } catch (e) {
             console.error(e);
@@ -91,14 +96,23 @@ export default function EntitiesScreen() {
     ]);
   };
 
-  const getParentOptions = (excludeId?: string) => {
+  const parentOptions = useMemo(() => {
+    const q = parentSearch.toLowerCase();
     return entities
-      .filter(e => e.id !== excludeId)
-      .map(e => ({
-        id: e.id,
-        name: `${typeEmoji[e.type] || ''} ${e.name}`,
-        score: e.parent_id ? 0 : 1,
-      }));
+      .filter(e => e.id !== editingId)
+      .filter(e => !q || e.name.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [entities, editingId, parentSearch]);
+
+  const selectParent = (entity: any) => {
+    setEditParentId(entity.id);
+    setParentSearch(entity.name);
+    setShowParentList(false);
+  };
+
+  const clearParent = () => {
+    setEditParentId(null);
+    setParentSearch('');
   };
 
   const filtered = filterType === 'ALL' ? entities : entities.filter(e => e.type === filterType);
@@ -117,12 +131,12 @@ export default function EntitiesScreen() {
             onPress={() => setFilterType(t)}
             style={styles.filterChip}
           >
-            {t === 'ALL' ? 'Todos' : `${typeEmoji[t] || ''} ${t}`}
+            {t === 'ALL' ? 'Todos' : `${typeEmoji[t]} ${t}`}
           </Chip>
         ))}
       </View>
 
-      <ScrollView style={styles.list}>
+      <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
         {filtered.map(entity => (
           <Card key={entity.id} style={styles.card}>
             {editingId === entity.id ? (
@@ -133,45 +147,56 @@ export default function EntitiesScreen() {
                   onChangeText={setEditName}
                   mode="outlined"
                   dense
-                  style={{marginBottom: 8}}
+                  style={{marginBottom: 10}}
                 />
 
-                <Menu
-                  visible={typeMenuVisible}
-                  onDismiss={() => setTypeMenuVisible(false)}
-                  anchor={
-                    <Button mode="outlined" onPress={() => setTypeMenuVisible(true)} style={{marginBottom: 8}}>
-                      Tipo: {typeEmoji[editType]} {editType}
-                    </Button>
-                  }
-                >
+                <Text style={{fontSize: 12, color: '#666', marginBottom: 6}}>Tipo:</Text>
+                <View style={styles.typeRow}>
                   {TYPES.map(t => (
-                    <Menu.Item 
+                    <Chip
                       key={t}
-                      onPress={() => { setEditType(t); setTypeMenuVisible(false); }} 
-                      title={`${typeEmoji[t]} ${t}`} 
-                    />
+                      selected={editType === t}
+                      onPress={() => setEditType(t)}
+                      style={styles.typeChip}
+                    >
+                      {typeEmoji[t]} {t}
+                    </Chip>
                   ))}
-                </Menu>
+                </View>
 
-                <SmartDropdown
-                  label="Es parte de (padre)"
-                  value={entities.find(e => e.id === editParentId)?.name || ''}
-                  items={getParentOptions(entity.id)}
-                  onSelect={(item) => setEditParentId(item?.id || null)}
-                  onCreateNew={async (name) => {
-                    try {
-                      const db = await getDb();
-                      const newId = uuidv4();
-                      await db.runAsync("INSERT INTO entities (id, type, name) VALUES (?, 'LOCATION', ?)", newId, name);
-                      setEditParentId(newId);
-                      loadEntities();
-                    } catch (e) {
-                      console.error(e);
-                    }
-                  }}
-                  placeholder="Buscar o crear lugar padre..."
-                />
+                <Text style={{fontSize: 12, color: '#666', marginTop: 10, marginBottom: 6}}>Es parte de:</Text>
+                <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                  <TextInput
+                    value={parentSearch}
+                    onChangeText={(text) => {
+                      setParentSearch(text);
+                      setShowParentList(true);
+                      if (!text.trim()) setEditParentId(null);
+                    }}
+                    onFocus={() => setShowParentList(true)}
+                    placeholder="Buscar lugar padre..."
+                    mode="outlined"
+                    dense
+                    style={{flex: 1}}
+                  />
+                  {parentSearch.trim() !== '' && (
+                    <IconButton icon="close" size={18} onPress={clearParent} />
+                  )}
+                </View>
+
+                {showParentList && parentOptions.length > 0 && (
+                  <View style={styles.suggestionBox}>
+                    {parentOptions.map(opt => (
+                      <TouchableOpacity 
+                        key={opt.id} 
+                        style={styles.suggestionItem}
+                        onPress={() => selectParent(opt)}
+                      >
+                        <Text>{typeEmoji[opt.type] || ''} {opt.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
 
                 <View style={styles.editActions}>
                   <Button onPress={cancelEdit} style={{marginRight: 8}}>Cancelar</Button>
@@ -221,10 +246,24 @@ const styles = StyleSheet.create({
   },
   parentHint: { fontSize: 12, color: '#666', marginTop: 2 },
   rowActions: { flexDirection: 'row' },
+  typeRow: { flexDirection: 'row', flexWrap: 'wrap' },
+  typeChip: { marginRight: 6, marginBottom: 4 },
+  suggestionBox: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 4,
+    marginTop: 4,
+    maxHeight: 180,
+  },
+  suggestionItem: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
   editActions: {
     flexDirection: 'row', justifyContent: 'flex-end',
-    marginTop: 10,
+    marginTop: 15,
   },
   empty: { padding: 20, alignItems: 'center' },
 });
-

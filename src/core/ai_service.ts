@@ -62,10 +62,11 @@ REGLAS ESTRICTAS:
    Si NO hay NINGUNA pista temporal en el texto (ni edad, ni año, ni referencia relativa como "ayer" o "hace X"), deja time_markers vacío [] y añade "DATE_UNCLEAR" a ambiguities. SIEMPRE.
 2. Extrae 'entities' de alto valor:
    - PERSON: Personas significativas mencionadas por nombre o relación directa.
-   - LOCATION: Lugares geográficos reales y específicos.
+   - LOCATION: Lugares donde ocurren cosas. Si el usuario dice "jugaba en el arenero" o "estaba en la piscina", es LOCATION porque es DONDE sucedió algo.
    - EVENT: Solo eventos de GRAN magnitud biográfica (boda, graduación, mudanza, terremoto).
-   - OBJECT: Objetos físicos significativos para el recuerdo (un juguete especial, un arenero, un columpio, un instrumento musical).
-3. Si una entidad pertenece a otra de manera obvia (Ej. 'Mi cuarto' en 'Mi casa', 'arenero' en un parque o colegio), usa 'parent_name'. Si NO sabes a qué lugar pertenece un OBJECT o LOCATION genérico (como "arenero", "piscina", "cancha"), añade "ENTITY_AMBIGUOUS" en ambiguities.
+   - OBJECT: Solo objetos que el usuario posee o manipula directamente (un juguete, un instrumento, un libro).
+   REGLA CLAVE: Si algo se describe como el LUGAR donde ocurre la acción ("en el X", "al X", "del X"), siempre es LOCATION, nunca OBJECT.
+3. Si una entidad pertenece a otra de manera obvia (Ej. 'Mi cuarto' en 'Mi casa'), usa 'parent_name'. Si NO sabes a qué lugar pertenece un LOCATION genérico (como "arenero", "piscina", "cancha"), añade "ENTITY_AMBIGUOUS" en ambiguities.
 4. Evalúa el sentimiento del recuerdo de -1.0 (Muy Negativo) a 1.0 (Muy Positivo).
 5. Genera un 'title' poético de máximo 5 palabras.
 6. Responde SÓLO en JSON con esta estructura exacta:
