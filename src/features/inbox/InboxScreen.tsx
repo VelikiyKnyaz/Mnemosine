@@ -28,7 +28,7 @@ export default function InboxScreen() {
     try {
       const db = await getDb();
       const rows = await db.getAllAsync<any>(`
-        SELECT it.*, m.raw_text, m.title as memory_title
+        SELECT it.*, m.raw_text
         FROM inbox_tasks it
         LEFT JOIN memories m ON it.memory_id = m.id
         WHERE it.status = 'PENDING'
@@ -134,7 +134,7 @@ export default function InboxScreen() {
                 </Title>
                 <Paragraph>{task.question}</Paragraph>
                 <View style={styles.contextBox}>
-                  <Text style={styles.contextLabel}>{task.memory_title || 'Recuerdo'}</Text>
+                  <Text style={styles.contextLabel}>Fragmento del Recuerdo:</Text>
                   <Text style={styles.contextText}>"{task.raw_text}"</Text>
                 </View>
               </Card.Content>

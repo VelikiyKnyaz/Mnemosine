@@ -13,7 +13,25 @@ const geocodeLocation = async (name: string, hometownContext: string): Promise<{
     });
     const data = await res.json();
     if (data && data.length > 0) {
-      return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+      const result = data[0];
+      const importance = parseFloat(result.importance || '0');
+      const resultName = result.display_name.toLowerCase();
+      const hometownStr = hometownContext.replace(', ', '').trim().toLowerCase();
+      
+      // Si usamos contexto de ciudad, verificar que Nominatim no nos haya mandado
+      // a otro país o ciudad por ser un término muy genérico.
+      if (hometownStr && !resultName.includes(hometownStr)) {
+        console.log(`Geocoding rejected: "${resultName}" no está en "${hometownStr}"`);
+        return null;
+      }
+      
+      // Filtro de confianza: si Nominatim tiene mucha duda, mejor preguntar al usuario
+      if (importance < 0.25) {
+        console.log(`Geocoding rejected: importancia ${importance} es muy baja`);
+        return null;
+      }
+
+      return { lat: parseFloat(result.lat), lon: parseFloat(result.lon) };
     }
   } catch (e) {
     console.log('Geocoding failed for:', name);
