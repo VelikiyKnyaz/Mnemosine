@@ -1,8 +1,4 @@
 import React, { useEffect } from 'react';
-import { TextEncoder, TextDecoder } from 'text-encoding';
-global.TextEncoder = TextEncoder;
-global.TextDecoder = TextDecoder as any;
-
 import { PaperProvider } from 'react-native-paper';
 import { initDatabase } from './src/core/database';
 import RootNavigator from './src/navigation/RootNavigator';
