@@ -5,7 +5,7 @@ import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { getDb, inheritCoordinatesFromParent } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
-import SmartDropdown from '../../components/SmartDropdown';
+import SmartDropdown, { NominatimSuggestion } from '../../components/SmartDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { geocodeLocation } from '../../core/ai_processor';
 
@@ -232,6 +232,30 @@ export default function AtlasScreen({ route, navigation }: any) {
     await assignParent_Action(newId);
   };
 
+  const createParentFromNominatim = async (suggestion: NominatimSuggestion) => {
+    if (!actionEntity) return;
+    const db = await getDb();
+    const name = suggestion.display_name.split(',')[0].trim();
+    const lat = parseFloat(suggestion.lat);
+    const lon = parseFloat(suggestion.lon);
+    
+    // Check if a location with this exact name already exists
+    const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'LOCATION' AND name = ? COLLATE NOCASE", name);
+    if (existing) {
+      // Update its coordinates if needed
+      await db.runAsync("UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 0 WHERE id = ?", lat, lon, existing.id);
+      await assignParent_Action(existing.id);
+      return;
+    }
+    
+    const newId = uuidv4();
+    await db.runAsync(
+      "INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 0)",
+      newId, name, lat, lon
+    );
+    await assignParent_Action(newId);
+  };
+
   const jumpTo = (coordinate: any) => {
     if (!coordinate) return;
     mapRef.current?.animateToRegion({
@@ -320,11 +344,13 @@ export default function AtlasScreen({ route, navigation }: any) {
               label="Lugar padre (ej: Colegio)"
               value=""
               items={allLocations}
+              enableNominatim={true}
               onSelect={(item) => {
                  if (item) assignParent_Action(item.id);
               }}
               onCreateNew={createAndGeocodeParent}
-              placeholder="Escribe y presiona Enter..."
+              onSelectNominatim={createParentFromNominatim}
+              placeholder="Escribe para buscar..."
             />
             
             <Button onPress={() => setActionEntity(null)} style={{marginTop: 10}}>Cancelar</Button>
