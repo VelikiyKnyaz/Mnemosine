@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { PaperProvider } from 'react-native-paper';
+import { Provider as PaperProvider } from 'react-native-paper';
 import { initDatabase } from './src/core/database';
 import RootNavigator from './src/navigation/RootNavigator';
 
