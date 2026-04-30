@@ -1,15 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Alert } from 'react-native';
-import { Button, Text, Card, Title, Paragraph, Divider } from 'react-native-paper';
+import { Button, Text, Card, Title, Paragraph, Divider, TextInput } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { processPendingMemories } from '../../core/ai_processor';
 import { useAuthStore } from '../../core/store';
+import { getAllConfig, setConfig } from '../../core/config';
 
 export default function DebugScreen() {
   const [memories, setMemories] = useState<any[]>([]);
   const [entities, setEntities] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const setSession = useAuthStore(state => state.setSession);
+
+  // Config keys state
+  const [openaiKey, setOpenaiKey] = useState('');
+  const [supabaseUrl, setSupabaseUrl] = useState('');
+  const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
+  const [configSaved, setConfigSaved] = useState(false);
 
   const loadData = async () => {
     try {
@@ -23,9 +30,26 @@ export default function DebugScreen() {
     }
   };
 
+  const loadConfig = async () => {
+    const cfg = await getAllConfig();
+    setOpenaiKey(cfg.OPENAI_API_KEY || '');
+    setSupabaseUrl(cfg.SUPABASE_URL || '');
+    setSupabaseAnonKey(cfg.SUPABASE_ANON_KEY || '');
+    setConfigSaved(!!(cfg.OPENAI_API_KEY));
+  };
+
   useEffect(() => {
     loadData();
+    loadConfig();
   }, []);
+
+  const handleSaveConfig = async () => {
+    await setConfig('OPENAI_API_KEY', openaiKey.trim());
+    await setConfig('SUPABASE_URL', supabaseUrl.trim());
+    await setConfig('SUPABASE_ANON_KEY', supabaseAnonKey.trim());
+    setConfigSaved(true);
+    Alert.alert('Guardado', 'Claves guardadas en el dispositivo. No se suben a internet.');
+  };
 
   const handleClearDb = async () => {
     try {
@@ -34,6 +58,7 @@ export default function DebugScreen() {
         DELETE FROM memory_entities;
         DELETE FROM entities;
         DELETE FROM memories;
+        DELETE FROM inbox_tasks;
       `);
       Alert.alert('Éxito', 'Base de datos borrada exitosamente.');
       loadData();
@@ -49,9 +74,9 @@ export default function DebugScreen() {
       await processPendingMemories();
       Alert.alert('IA Procesada', 'Se procesaron las memorias pendientes con éxito.');
       loadData();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      Alert.alert('Error', 'Fallo al procesar IA.');
+      Alert.alert('Error', e.message || 'Fallo al procesar IA.');
     } finally {
       setLoading(false);
     }
@@ -61,10 +86,65 @@ export default function DebugScreen() {
     setSession(null);
   };
 
+  const maskKey = (key: string) => key ? key.slice(0, 8) + '...' + key.slice(-4) : '(vacía)';
+
   return (
     <ScrollView style={styles.container}>
       <Title style={styles.title}>Panel Técnico (Admin)</Title>
-      
+
+      {/* ── SECCIÓN: CONFIGURACIÓN DE CLAVES ── */}
+      <Card style={styles.configCard}>
+        <Card.Content>
+          <Title style={{fontSize: 16}}>🔑 Configuración de Claves</Title>
+          <Text style={styles.configHint}>
+            Las claves se guardan SOLO en tu teléfono. Nunca se suben al código.
+          </Text>
+
+          {configSaved ? (
+            <View>
+              <Text style={styles.savedKey}>OpenAI: {maskKey(openaiKey)}</Text>
+              <Text style={styles.savedKey}>Supabase URL: {maskKey(supabaseUrl)}</Text>
+              <Text style={styles.savedKey}>Supabase Key: {maskKey(supabaseAnonKey)}</Text>
+              <Button mode="text" onPress={() => setConfigSaved(false)} style={{marginTop: 5}}>
+                Editar Claves
+              </Button>
+            </View>
+          ) : (
+            <View>
+              <TextInput
+                label="OpenAI API Key (sk-proj-...)"
+                value={openaiKey}
+                onChangeText={setOpenaiKey}
+                style={styles.input}
+                secureTextEntry
+                dense
+              />
+              <TextInput
+                label="Supabase URL"
+                value={supabaseUrl}
+                onChangeText={setSupabaseUrl}
+                style={styles.input}
+                dense
+              />
+              <TextInput
+                label="Supabase Anon Key"
+                value={supabaseAnonKey}
+                onChangeText={setSupabaseAnonKey}
+                style={styles.input}
+                secureTextEntry
+                dense
+              />
+              <Button mode="contained" onPress={handleSaveConfig} style={{marginTop: 10}} buttonColor="#2e7d32">
+                Guardar Claves en Dispositivo
+              </Button>
+            </View>
+          )}
+        </Card.Content>
+      </Card>
+
+      <Divider style={styles.divider} />
+
+      {/* ── SECCIÓN: ACCIONES ── */}
       <View style={styles.buttonRow}>
         <Button mode="contained" onPress={loadData} disabled={loading} style={styles.actionBtn}>
           Refrescar
@@ -74,7 +154,7 @@ export default function DebugScreen() {
         </Button>
       </View>
       <View style={styles.buttonRow}>
-        <Button mode="outlined" onPress={handleClearDb} disabled={loading} style={styles.actionBtn} textColor="#B00020" style={{borderColor: '#B00020'}}>
+        <Button mode="outlined" onPress={handleClearDb} disabled={loading} style={[styles.actionBtn, {borderColor: '#B00020'}]} textColor="#B00020">
           Borrar BD
         </Button>
         <Button mode="text" onPress={handleLogout} disabled={loading} style={styles.actionBtn}>
@@ -91,7 +171,8 @@ export default function DebugScreen() {
             <Paragraph><Text style={{fontWeight: 'bold'}}>ID:</Text> {m.id}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Texto (Raw):</Text> {m.raw_text}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Estado de Sync:</Text> {m.sync_status}</Paragraph>
-            <Paragraph><Text style={{fontWeight: 'bold'}}>Fecha Difusa:</Text> {m.fuzzy_date || 'N/A'}</Paragraph>
+            <Paragraph><Text style={{fontWeight: 'bold'}}>Inicio:</Text> {m.start_date || 'N/A'}</Paragraph>
+            <Paragraph><Text style={{fontWeight: 'bold'}}>Fin:</Text> {m.end_date || 'N/A'}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Sentimiento (IA):</Text> {m.sentiment_score}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Audio URI:</Text> {m.audio_uri || 'Ninguno'}</Paragraph>
           </Card.Content>
@@ -106,6 +187,8 @@ export default function DebugScreen() {
           <Card.Content>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Nombre:</Text> {e.name}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Tipo:</Text> {e.type}</Paragraph>
+            <Paragraph><Text style={{fontWeight: 'bold'}}>Padre:</Text> {e.parent_id || 'Raíz'}</Paragraph>
+            <Paragraph><Text style={{fontWeight: 'bold'}}>Coords:</Text> {e.latitude ? `${e.latitude}, ${e.longitude}` : 'Sin ubicar'}</Paragraph>
           </Card.Content>
         </Card>
       ))}
@@ -126,6 +209,26 @@ const styles = StyleSheet.create({
     marginVertical: 15,
     fontWeight: 'bold',
   },
+  configCard: {
+    backgroundColor: '#fff',
+    marginBottom: 10,
+    elevation: 2,
+  },
+  configHint: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 10,
+    fontStyle: 'italic',
+  },
+  savedKey: {
+    fontSize: 13,
+    color: '#333',
+    marginVertical: 2,
+  },
+  input: {
+    marginBottom: 8,
+    backgroundColor: '#fafafa',
+  },
   buttonRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -144,3 +247,4 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
   }
 });
+

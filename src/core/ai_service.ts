@@ -1,6 +1,5 @@
-// AI Service - Sin dependencia de expo-file-system para compatibilidad con Snack
-
-const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY || ''; // Configurar en .env
+// AI Service - Lee la API Key de AsyncStorage (configurada desde el Panel Admin)
+import { getConfig } from './config';
 
 export interface AICategorization {
   title: string;
@@ -11,7 +10,8 @@ export interface AICategorization {
 }
 
 export const transcribeAudio = async (audioUri: string): Promise<string> => {
-  if (!OPENAI_API_KEY) throw new Error('API Key missing');
+  const apiKey = await getConfig('OPENAI_API_KEY');
+  if (!apiKey) throw new Error('API Key no configurada. Ve al Panel Admin para ingresarla.');
 
   try {
     const formData = new FormData();
@@ -25,7 +25,7 @@ export const transcribeAudio = async (audioUri: string): Promise<string> => {
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: formData,
     });
@@ -44,7 +44,8 @@ export const transcribeAudio = async (audioUri: string): Promise<string> => {
 };
 
 export const extractMemoryData = async (text: string): Promise<AICategorization> => {
-  if (!OPENAI_API_KEY) throw new Error('API Key missing');
+  const apiKey = await getConfig('OPENAI_API_KEY');
+  if (!apiKey) throw new Error('API Key no configurada. Ve al Panel Admin para ingresarla.');
 
   const systemPrompt = `
 Eres el motor cognitivo de Mnemósine. Recibes fragmentos de memoria diarios. Tu tarea es extraer metadatos para nuestro motor local.
@@ -73,7 +74,7 @@ REGLAS ESTRICTAS:
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
