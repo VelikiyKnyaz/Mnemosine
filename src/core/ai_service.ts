@@ -69,7 +69,10 @@ REGLAS ESTRICTAS:
    - LOCATION: Lugares donde ocurren cosas. Si el usuario dice "jugaba en el arenero" o "estaba en la piscina", es LOCATION porque es DONDE sucedió algo.
    - EVENT: Solo eventos de GRAN magnitud biográfica (boda, graduación, mudanza, terremoto).
    - OBJECT: Solo objetos que el usuario posee o manipula directamente (un juguete, un instrumento, un libro).
-   REGLA CLAVE Y VITAL DE CONTEXTO: Si el usuario menciona un lugar o persona genérica (ej. "colegio", "casa de la abuela", "Marta") y hay una coincidencia lógica en el CATÁLOGO DE ELEMENTOS EXISTENTES proporcionado arriba (ej. "Colegio Calasanz", "Marta Gómez"), DEBES usar el nombre EXACTO del catálogo en lugar de crear uno genérico.
+   REGLA DE RESOLUCIÓN DE ENTIDADES (¡CRÍTICO!): El usuario usa términos genéricos, alias cortos o acrónimos (ej. "la universidad", "el colegio", "la finca", "el parque"). TU OBLIGACIÓN ES DEDUCIR a qué se refiere basándote en el CATÁLOGO.
+   - Si menciona "la universidad" y en el catálogo hay una universidad (ej. "UPB", "Nacional", etc), DEBES retornar el nombre EXACTO del catálogo ("UPB").
+   - ¡NUNCA crees entidades genéricas (como "Universidad", "Colegio", "Casa") si existe un candidato lógico en el catálogo!
+   - Usa toda tu capacidad deductiva: relaciona sinónimos con elementos del catálogo antes de crear entidades nuevas.
 3. Si una entidad pertenece a otra de manera obvia (Ej. 'Mi cuarto' en 'Mi casa'), usa 'parent_name'. Si NO sabes a qué lugar pertenece un LOCATION genérico (como "arenero", "piscina", "cancha") y no está en el catálogo, añade "ENTITY_AMBIGUOUS" en ambiguities.
 4. Evalúa el sentimiento del recuerdo de -1.0 (Muy Negativo) a 1.0 (Muy Positivo).
 5. Genera un 'title' poético de máximo 5 palabras.
