@@ -492,7 +492,22 @@ export default function AtlasScreen({ route, navigation }: any) {
                 panelType === 'action' ? actionEntity?.title :
                 panelType === 'memories' ? 'Explorador de Recuerdos' : ''}
              </Text>
-             <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
+             <View style={{flexDirection: 'row'}}>
+               {panelType === 'memories' && memoryEntityId && (
+                 <IconButton 
+                   icon="map-marker-edit" 
+                   iconColor="#6200ee"
+                   onPress={() => {
+                     const m = destacados.find(x => x.id === memoryEntityId);
+                     if (m) {
+                       closePanel();
+                       startEditing(m);
+                     }
+                   }} 
+                 />
+               )}
+               <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
+             </View>
           </View>
           
           <View style={{ flex: 1 }}>

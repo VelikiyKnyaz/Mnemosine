@@ -43,12 +43,16 @@ export const transcribeAudio = async (audioUri: string): Promise<string> => {
   }
 };
 
-export const extractMemoryData = async (text: string): Promise<AICategorization> => {
+export const extractMemoryData = async (text: string, existingEntitiesContext: string = ''): Promise<AICategorization> => {
   const apiKey = await getConfig('OPENAI_API_KEY');
   if (!apiKey) throw new Error('API Key no configurada. Ve al Panel Admin para ingresarla.');
 
   const systemPrompt = `
 Eres el motor cognitivo de Mnemósine. Recibes fragmentos de memoria diarios. Tu tarea es extraer metadatos para nuestro motor local.
+
+CATÁLOGO DE ELEMENTOS EXISTENTES:
+[${existingEntitiesContext}]
+
 REGLAS ESTRICTAS:
 1. Extrae marcadores de tiempo como strings en 'time_markers'. Usa EXACTAMENTE estos formatos:
    - "exact_year:2015" → año exacto mencionado.
@@ -58,15 +62,15 @@ REGLAS ESTRICTAS:
    - "relative_years:-5" → "hace 5 años".
    - "life_stage:childhood" → solo si dice algo muy genérico como "de niño" sin dar edad.
    - "fuzzy:el verano pasado" → texto temporal que no encaja en los anteriores.
-   PRIORIZA exact_age sobre life_stage. "Cuando tenía 12 años" DEBE ser "exact_age:12", NO "life_stage:childhood".
-   Si NO hay NINGUNA pista temporal en el texto (ni edad, ni año, ni referencia relativa como "ayer" o "hace X"), deja time_markers vacío [] y añade "DATE_UNCLEAR" a ambiguities. SIEMPRE.
+   PRIORIZA exact_age sobre life_stage.
+   Si NO hay NINGUNA pista temporal en el texto, deja time_markers vacío [] y añade "DATE_UNCLEAR" a ambiguities. SIEMPRE.
 2. Extrae 'entities' de alto valor:
    - PERSON: Personas significativas mencionadas por nombre o relación directa.
    - LOCATION: Lugares donde ocurren cosas. Si el usuario dice "jugaba en el arenero" o "estaba en la piscina", es LOCATION porque es DONDE sucedió algo.
    - EVENT: Solo eventos de GRAN magnitud biográfica (boda, graduación, mudanza, terremoto).
    - OBJECT: Solo objetos que el usuario posee o manipula directamente (un juguete, un instrumento, un libro).
-   REGLA CLAVE: Si algo se describe como el LUGAR donde ocurre la acción ("en el X", "al X", "del X"), siempre es LOCATION, nunca OBJECT.
-3. Si una entidad pertenece a otra de manera obvia (Ej. 'Mi cuarto' en 'Mi casa'), usa 'parent_name'. Si NO sabes a qué lugar pertenece un LOCATION genérico (como "arenero", "piscina", "cancha"), añade "ENTITY_AMBIGUOUS" en ambiguities.
+   REGLA CLAVE Y VITAL DE CONTEXTO: Si el usuario menciona un lugar o persona genérica (ej. "colegio", "casa de la abuela", "Marta") y hay una coincidencia lógica en el CATÁLOGO DE ELEMENTOS EXISTENTES proporcionado arriba (ej. "Colegio Calasanz", "Marta Gómez"), DEBES usar el nombre EXACTO del catálogo en lugar de crear uno genérico.
+3. Si una entidad pertenece a otra de manera obvia (Ej. 'Mi cuarto' en 'Mi casa'), usa 'parent_name'. Si NO sabes a qué lugar pertenece un LOCATION genérico (como "arenero", "piscina", "cancha") y no está en el catálogo, añade "ENTITY_AMBIGUOUS" en ambiguities.
 4. Evalúa el sentimiento del recuerdo de -1.0 (Muy Negativo) a 1.0 (Muy Positivo).
 5. Genera un 'title' poético de máximo 5 palabras.
 6. Responde SÓLO en JSON con esta estructura exacta:
@@ -75,7 +79,7 @@ REGLAS ESTRICTAS:
   "sentiment": 0.5,
   "time_markers": ["exact_age:12"],
   "entities": [
-    { "name": "Arenero", "type": "OBJECT", "parent_name": null },
+    { "name": "Colegio Calasanz", "type": "LOCATION", "parent_name": null },
     { "name": "Mamá", "type": "PERSON" }
   ],
   "ambiguities": ["DATE_UNCLEAR", "ENTITY_AMBIGUOUS"]

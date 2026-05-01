@@ -3,6 +3,7 @@ import { View, StyleSheet, SectionList, KeyboardAvoidingView, Platform, Modal } 
 import { Text, Card, TextInput, Button, IconButton } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { Audio } from 'expo-av';
+import MemoryEditModal from '../../components/MemoryEditModal';
 
 interface EntityMemoriesViewProps {
   entityId: string;
@@ -20,7 +21,6 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
 
   // Edit state
   const [editingMemory, setEditingMemory] = useState<any>(null);
-  const [editText, setEditText] = useState('');
 
   const loadMemories = async () => {
     try {
@@ -113,19 +113,6 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
 
   const openEdit = (memory: any) => {
     setEditingMemory(memory);
-    setEditText(memory.raw_text || '');
-  };
-
-  const saveEdit = async () => {
-    if (!editingMemory) return;
-    try {
-      const db = await getDb();
-      await db.runAsync("UPDATE memories SET raw_text = ? WHERE id = ?", editText, editingMemory.memory_id);
-      setEditingMemory(null);
-      loadMemories();
-    } catch (e) {
-      console.error(e);
-    }
   };
 
   const renderMemory = ({ item }: { item: any }) => (
@@ -168,24 +155,12 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
         contentContainerStyle={{ padding: 15 }}
       />
 
-      <Modal visible={!!editingMemory} animationType="slide" transparent>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBg}>
-          <View style={styles.modalContent}>
-            <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
-              <Text style={{fontSize: 18, fontWeight: 'bold'}}>Editar Recuerdo</Text>
-              <IconButton icon="close" onPress={() => setEditingMemory(null)} />
-            </View>
-            <TextInput
-              mode="outlined"
-              multiline
-              value={editText}
-              onChangeText={setEditText}
-              style={{maxHeight: 200, marginBottom: 15}}
-            />
-            <Button mode="contained" onPress={saveEdit}>Guardar Cambios</Button>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <MemoryEditModal
+        visible={!!editingMemory}
+        memory={editingMemory}
+        onClose={() => setEditingMemory(null)}
+        onSaved={loadMemories}
+      />
     </View>
   );
 }

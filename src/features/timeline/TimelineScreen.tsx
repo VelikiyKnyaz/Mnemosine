@@ -6,6 +6,7 @@ import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
 import BiographerCard from '../biographer/BiographerCard';
 import CaptureModal from '../capture/CaptureModal';
+import MemoryEditModal from '../../components/MemoryEditModal';
 import { getDb } from '../../core/database';
 
 const toDateStr = (d: Date) => d.toISOString().split('T')[0];
@@ -26,7 +27,6 @@ export default function TimelineScreen() {
 
   // Text editing state
   const [editingTextMemory, setEditingTextMemory] = useState<any>(null);
-  const [editText, setEditText] = useState('');
 
   const handleEditDate = (memory: any) => {
     setEditingMemory(memory);
@@ -61,19 +61,6 @@ export default function TimelineScreen() {
 
   const handleEditText = (memory: any) => {
     setEditingTextMemory(memory);
-    setEditText(memory.raw_text || '');
-  };
-
-  const handleSaveText = async () => {
-    if (!editingTextMemory) return;
-    try {
-      const db = await getDb();
-      await db.runAsync('UPDATE memories SET raw_text = ? WHERE id = ?', editText, editingTextMemory.id);
-      setEditingTextMemory(null);
-      loadMemories();
-    } catch (e) {
-      console.error(e);
-    }
   };
 
   const renderDate = (start: string | null, end: string | null) => {
@@ -165,24 +152,12 @@ export default function TimelineScreen() {
         initialQuestion={initialQuestion}
       />
 
-      <Modal visible={!!editingTextMemory} animationType="slide" transparent>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBg}>
-          <View style={styles.modalContent}>
-            <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
-              <Text style={{fontSize: 18, fontWeight: 'bold'}}>Editar Recuerdo</Text>
-              <IconButton icon="close" onPress={() => setEditingTextMemory(null)} />
-            </View>
-            <TextInput
-              mode="outlined"
-              multiline
-              value={editText}
-              onChangeText={setEditText}
-              style={{maxHeight: 200, marginBottom: 15}}
-            />
-            <Button mode="contained" onPress={handleSaveText}>Guardar Cambios</Button>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <MemoryEditModal
+        visible={!!editingTextMemory}
+        memory={editingTextMemory}
+        onClose={() => setEditingTextMemory(null)}
+        onSaved={loadMemories}
+      />
 
       {editingMemory && (
         <View style={styles.editModalContainer}>
