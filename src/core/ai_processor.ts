@@ -126,8 +126,15 @@ export const processPendingMemories = async () => {
         }
 
         console.log(`Extracting data for memory ${memory.id}`);
-        // Fetch existing entity names for context
-        const existingEntities = await db.getAllAsync<{name: string}>("SELECT name FROM entities");
+        // Fetch top 50 existing entity names for context to prevent LLM token explosion
+        const existingEntities = await db.getAllAsync<{name: string}>(`
+          SELECT e.name 
+          FROM entities e 
+          LEFT JOIN memory_entities me ON e.id = me.entity_id 
+          GROUP BY e.id 
+          ORDER BY COUNT(me.memory_id) DESC 
+          LIMIT 50
+        `);
         const existingNamesStr = existingEntities.map(e => e.name).join(', ');
 
         const aiData = await extractMemoryData(textToProcess, existingNamesStr);
