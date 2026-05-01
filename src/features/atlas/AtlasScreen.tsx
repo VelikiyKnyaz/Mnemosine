@@ -470,13 +470,11 @@ export default function AtlasScreen({ route, navigation }: any) {
 
       {/* Editing Overlay */}
       {editingEntity && (
-        <View style={styles.panelPeek}>
-          <View style={styles.editFooter}>
-            <Text style={styles.editHint}>Arrastra el mapa para centrar el marcador en "{editingEntity.title}".</Text>
-            <Button mode="contained" onPress={confirmLocation} style={styles.confirmBtn}>
-              Confirmar Ubicación
-            </Button>
-          </View>
+        <View style={styles.panelEditOverlay}>
+          <Text style={styles.editHint}>Arrastra el mapa para centrar el marcador en "{editingEntity.title}".</Text>
+          <Button mode="contained" onPress={confirmLocation} style={styles.confirmBtn}>
+            Confirmar Ubicación
+          </Button>
         </View>
       )}
 
@@ -614,6 +612,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0, left: 0, right: 0,
     height: '45%',
+    backgroundColor: 'white',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    elevation: 20,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.2, shadowRadius: 5,
+  },
+  panelEditOverlay: {
+    position: 'absolute',
+    bottom: 0, left: 0, right: 0,
+    padding: 20,
+    paddingBottom: 40,
     backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,

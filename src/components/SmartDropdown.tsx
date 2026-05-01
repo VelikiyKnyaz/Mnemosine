@@ -88,8 +88,8 @@ export default function SmartDropdown({
       return;
     }
 
-    if (enableNominatim && nominatimResults.length > 0 && onSelectNominatim) {
-      onSelectNominatim(nominatimResults[0]);
+    if (onCreateNew) {
+      onCreateNew(trimmed);
       setModalVisible(false);
       return;
     }
@@ -97,12 +97,6 @@ export default function SmartDropdown({
     if (filtered.length > 0 && filtered[0].matchScore > 0) {
       setQuery(filtered[0].name);
       onSelect(filtered[0]);
-      setModalVisible(false);
-      return;
-    }
-
-    if (onCreateNew) {
-      onCreateNew(trimmed);
       setModalVisible(false);
     }
   };
@@ -134,7 +128,8 @@ export default function SmartDropdown({
         <SafeAreaView style={styles.modalContainer}>
           <Appbar.Header style={{ backgroundColor: 'white', elevation: 0 }}>
             <Appbar.BackAction onPress={() => setModalVisible(false)} />
-            <Appbar.Content title="Asignar Lugar Padre" titleStyle={{fontSize: 16}} />
+            <Appbar.Content title={label} titleStyle={{fontSize: 16}} />
+            <Appbar.Action icon="check" onPress={handleSubmit} />
           </Appbar.Header>
 
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
@@ -160,6 +155,7 @@ export default function SmartDropdown({
 
             <FlatList
               data={[
+                ...(query.trim() && !exactMatch && onCreateNew ? [{ _type: 'create' as const, id: '__create__', name: query.trim() }] : []),
                 ...filtered.map(item => ({ ...item, _type: 'local' as const })),
                 ...(filtered.length > 0 && nominatimResults.length > 0 ? [{ _type: 'separator' as const, id: '__sep__', name: '' }] : []),
                 ...nominatimResults.map((nr, i) => ({ 
@@ -173,6 +169,19 @@ export default function SmartDropdown({
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={{ paddingBottom: 20 }}
               renderItem={({ item }: { item: any }) => {
+                if (item._type === 'create') {
+                  return (
+                    <TouchableOpacity 
+                      style={[styles.option, { backgroundColor: '#f0f4ff' }]}
+                      onPress={() => {
+                        if (onCreateNew) onCreateNew(item.name);
+                        setModalVisible(false);
+                      }}
+                    >
+                      <Text style={{color: '#6200ee', fontWeight: 'bold'}}>+ Crear nuevo "{item.name}"</Text>
+                    </TouchableOpacity>
+                  );
+                }
                 if (item._type === 'separator') {
                   return (
                     <View style={styles.separatorRow}>
@@ -215,14 +224,9 @@ export default function SmartDropdown({
                 );
               }}
               ListEmptyComponent={
-                query.trim().length > 2 && !searching ? (
+                query.trim().length > 2 && !searching && !onCreateNew ? (
                   <View style={styles.emptyContainer}>
                     <Text style={{color: '#888', marginBottom: 10}}>No se encontraron resultados.</Text>
-                    {onCreateNew && (
-                      <TouchableOpacity onPress={() => { onCreateNew(query.trim()); setModalVisible(false); }} style={styles.createBtn}>
-                        <Text style={styles.createBtnText}>+ Crear manualmente "{query.trim()}"</Text>
-                      </TouchableOpacity>
-                    )}
                   </View>
                 ) : null
               }
