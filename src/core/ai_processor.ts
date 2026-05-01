@@ -138,6 +138,7 @@ export const processPendingMemories = async () => {
         const existingNamesStr = existingEntities.map(e => e.name).join(', ');
 
         const aiData = await extractMemoryData(textToProcess, existingNamesStr);
+        console.log(`AI response for ${memory.id}:`, JSON.stringify({ time_markers: aiData.time_markers, entities: aiData.entities?.map(e => e.name), ambiguities: aiData.ambiguities }));
 
         // 4. Calcular Fechas Algorítmicas
         const dates = await calculateDatesFromMarkers(aiData.time_markers || []);
