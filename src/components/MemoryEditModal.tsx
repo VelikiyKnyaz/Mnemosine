@@ -103,7 +103,8 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
       // Check if already exists
       const existing = await db.getFirstAsync("SELECT 1 FROM memory_entities WHERE memory_id = ? AND entity_id = ?", memId, entityId);
       if (!existing) {
-        await db.runAsync("INSERT INTO memory_entities (memory_id, entity_id) VALUES (?, ?)", memId, entityId);
+        const pivotId = uuidv4();
+        await db.runAsync("INSERT INTO memory_entities (id, memory_id, entity_id) VALUES (?, ?, ?)", pivotId, memId, entityId);
       }
       setShowDropdown(false);
       loadEntities();
