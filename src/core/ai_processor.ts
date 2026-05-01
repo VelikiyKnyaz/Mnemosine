@@ -153,10 +153,20 @@ export const processPendingMemories = async () => {
         let geocodedLocations = 0;
         
         for (const entity of aiData.entities) {
-          const existingEntity = await db.getFirstAsync<{id: string, latitude: number | null}>(
-            "SELECT id, latitude FROM entities WHERE name = ? AND type = ?",
-            entity.name, entity.type
+          // Resolve via alias first (deterministic local resolution)
+          const aliasMatch = await db.getFirstAsync<{entity_id: string}>(
+            "SELECT entity_id FROM entity_aliases WHERE alias = ? COLLATE NOCASE",
+            entity.name
           );
+
+          const existingEntity = aliasMatch
+            ? await db.getFirstAsync<{id: string, latitude: number | null}>(
+                "SELECT id, latitude FROM entities WHERE id = ?", aliasMatch.entity_id
+              )
+            : await db.getFirstAsync<{id: string, latitude: number | null}>(
+                "SELECT id, latitude FROM entities WHERE name = ? AND type = ?",
+                entity.name, entity.type
+              );
 
           let entityId = existingEntity?.id;
 

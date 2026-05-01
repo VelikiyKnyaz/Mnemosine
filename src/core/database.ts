@@ -67,6 +67,13 @@ export const initDatabase = async () => {
       FOREIGN KEY (memory_id) REFERENCES memories (id) ON DELETE CASCADE,
       FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS entity_aliases (
+      id TEXT PRIMARY KEY NOT NULL,
+      alias TEXT NOT NULL COLLATE NOCASE,
+      entity_id TEXT NOT NULL,
+      FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
+    );
   `);
 
   // Migraciones seguras para bases de datos existentes en desarrollo
@@ -76,7 +83,14 @@ export const initDatabase = async () => {
     'ALTER TABLE entities ADD COLUMN parent_id TEXT;',
     'ALTER TABLE entities ADD COLUMN latitude REAL;',
     'ALTER TABLE entities ADD COLUMN longitude REAL;',
-    'ALTER TABLE entities ADD COLUMN is_confirmed INTEGER DEFAULT 1;'
+    'ALTER TABLE entities ADD COLUMN is_confirmed INTEGER DEFAULT 1;',
+    `CREATE TABLE IF NOT EXISTS entity_aliases (
+      id TEXT PRIMARY KEY NOT NULL,
+      alias TEXT NOT NULL COLLATE NOCASE,
+      entity_id TEXT NOT NULL,
+      FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
+    );`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_unique ON entity_aliases(alias);'
   ];
 
   for (const query of migrations) {

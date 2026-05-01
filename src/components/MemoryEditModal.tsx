@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Modal, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, StyleSheet, Modal, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
 import { Text, TextInput, Button, IconButton, Chip } from 'react-native-paper';
 import { getDb } from '../core/database';
 import SmartDropdown, { NominatimSuggestion } from './SmartDropdown';
@@ -62,6 +62,24 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handleDelete = () => {
+    Alert.alert('Eliminar Recuerdo', '¿Eliminar este recuerdo permanentemente? Se perderán todas sus asociaciones.', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: async () => {
+        const memId = memory.id || memory.memory_id;
+        try {
+          const db = await getDb();
+          await db.runAsync("DELETE FROM memory_entities WHERE memory_id = ?", memId);
+          await db.runAsync("DELETE FROM memories WHERE id = ?", memId);
+          onSaved();
+          onClose();
+        } catch (e) {
+          console.error(e);
+        }
+      }},
+    ]);
   };
 
   const removeEntity = async (entityId: string) => {
@@ -189,9 +207,10 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             )}
           </ScrollView>
 
-          <Button mode="contained" onPress={handleSaveText} style={{marginTop: 15}}>
-            Guardar Texto
-          </Button>
+          <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 15}}>
+            <Button mode="text" onPress={handleDelete} textColor="#B00020" icon="delete">Eliminar</Button>
+            <Button mode="contained" onPress={handleSaveText}>Guardar Texto</Button>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </Modal>
