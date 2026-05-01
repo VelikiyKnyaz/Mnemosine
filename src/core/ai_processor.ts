@@ -98,9 +98,9 @@ export const processPendingMemories = async () => {
   try {
     const db = await getDb();
     
-    // Fetch hometown context once
-    const userProfile = await db.getFirstAsync<{hometown: string | null}>('SELECT hometown FROM user_profile LIMIT 1');
-    const hometownContext = userProfile?.hometown ? `, ${userProfile.hometown}` : '';
+    // Fetch hometown and country context once
+    const userProfile = await db.getFirstAsync<{hometown: string | null, country: string | null}>('SELECT hometown, country FROM user_profile LIMIT 1');
+    const hometownContext = [userProfile?.hometown, userProfile?.country].filter(Boolean).join(', ') ? `, ${[userProfile?.hometown, userProfile?.country].filter(Boolean).join(', ')}` : '';
 
     // 1. Fetch pending memories
     const pendingMemories = await db.getAllAsync<{id: string, raw_text: string | null, audio_uri: string | null}>(

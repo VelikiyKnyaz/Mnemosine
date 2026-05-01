@@ -8,13 +8,13 @@ interface UserProfile {
 export const calculateDatesFromMarkers = async (timeMarkers: string[]): Promise<{ start_date: string | null, end_date: string | null }> => {
   const db = await getDb();
   let profile: UserProfile | null = null;
-  
+
   try {
     profile = await db.getFirstAsync<UserProfile>('SELECT * FROM user_profile LIMIT 1');
   } catch (e) {
     console.warn("User profile not found or table doesn't exist yet");
   }
-  
+
   const birthYear = profile?.birth_date ? parseInt(profile.birth_date.split('-')[0]) : null;
   const currentYear = new Date().getFullYear();
 
@@ -42,7 +42,7 @@ export const calculateDatesFromMarkers = async (timeMarkers: string[]): Promise<
   for (const marker of safeMarkers) {
     const parts = marker.split(':');
     if (parts.length < 2) continue;
-    
+
     const type = parts[0].trim().toLowerCase();
     const value = parts.slice(1).join(':').trim().toLowerCase();
 

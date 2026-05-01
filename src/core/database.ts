@@ -19,6 +19,7 @@ export const initDatabase = async () => {
       id TEXT PRIMARY KEY NOT NULL,
       birth_date TEXT,
       hometown TEXT,
+      country TEXT,
       life_events TEXT
     );
     
@@ -78,6 +79,7 @@ export const initDatabase = async () => {
 
   // Migraciones seguras para bases de datos existentes en desarrollo
   const migrations = [
+    'ALTER TABLE user_profile ADD COLUMN country TEXT;',
     'ALTER TABLE memories ADD COLUMN start_date TEXT;',
     'ALTER TABLE memories ADD COLUMN end_date TEXT;',
     'ALTER TABLE entities ADD COLUMN parent_id TEXT;',
