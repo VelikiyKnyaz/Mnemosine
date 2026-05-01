@@ -22,10 +22,17 @@ export const calculateDatesFromMarkers = async (timeMarkers: string[]): Promise<
     return { start_date: null, end_date: null };
   }
 
+  // Sanitize: AI may return non-string markers (objects, numbers, etc.)
+  const safeMarkers = timeMarkers
+    .filter(m => m != null && typeof m !== 'object')
+    .map(m => String(m))
+    .filter(m => m.includes(':'));
+
+
   let startDate: string | null = null;
   let endDate: string | null = null;
 
-  for (const marker of timeMarkers) {
+  for (const marker of safeMarkers) {
     const parts = marker.split(':');
     if (parts.length < 2) continue;
     
