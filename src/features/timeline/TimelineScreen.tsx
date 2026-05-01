@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, FlatList, Platform } from 'react-native';
-import { Text, FAB, Appbar, IconButton, Button } from 'react-native-paper';
+import { View, StyleSheet, FlatList, Platform, Modal, KeyboardAvoidingView } from 'react-native';
+import { Text, FAB, Appbar, IconButton, Button, TextInput } from 'react-native-paper';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
@@ -23,6 +23,10 @@ export default function TimelineScreen() {
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(new Date());
   const [pickingField, setPickingField] = useState<'start' | 'end' | null>(null);
+
+  // Text editing state
+  const [editingTextMemory, setEditingTextMemory] = useState<any>(null);
+  const [editText, setEditText] = useState('');
 
   const handleEditDate = (memory: any) => {
     setEditingMemory(memory);
@@ -49,6 +53,23 @@ export default function TimelineScreen() {
         sStr, eStr, editingMemory.id
       );
       setEditingMemory(null);
+      loadMemories();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleEditText = (memory: any) => {
+    setEditingTextMemory(memory);
+    setEditText(memory.raw_text || '');
+  };
+
+  const handleSaveText = async () => {
+    if (!editingTextMemory) return;
+    try {
+      const db = await getDb();
+      await db.runAsync('UPDATE memories SET raw_text = ? WHERE id = ?', editText, editingTextMemory.id);
+      setEditingTextMemory(null);
       loadMemories();
     } catch (e) {
       console.error(e);
@@ -114,7 +135,11 @@ export default function TimelineScreen() {
                 <IconButton icon="pencil" size={16} onPress={() => handleEditDate(item)} style={{margin: 0}} />
               </View>
             </View>
-            {item.raw_text ? <Text style={styles.bodyText}>{item.raw_text}</Text> : null}
+            {item.raw_text ? (
+              <Text style={styles.bodyText} onPress={() => handleEditText(item)}>
+                {item.raw_text}
+              </Text>
+            ) : null}
             
             <View style={styles.cardFooter}>
               {item.audio_uri ? <Text style={styles.audioHint}>🎤 Audio</Text> : <View />}
@@ -139,6 +164,25 @@ export default function TimelineScreen() {
         onDismiss={() => setModalVisible(false)} 
         initialQuestion={initialQuestion}
       />
+
+      <Modal visible={!!editingTextMemory} animationType="slide" transparent>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBg}>
+          <View style={styles.modalContent}>
+            <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
+              <Text style={{fontSize: 18, fontWeight: 'bold'}}>Editar Recuerdo</Text>
+              <IconButton icon="close" onPress={() => setEditingTextMemory(null)} />
+            </View>
+            <TextInput
+              mode="outlined"
+              multiline
+              value={editText}
+              onChangeText={setEditText}
+              style={{maxHeight: 200, marginBottom: 15}}
+            />
+            <Button mode="contained" onPress={handleSaveText}>Guardar Cambios</Button>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {editingMemory && (
         <View style={styles.editModalContainer}>
@@ -250,5 +294,7 @@ const styles = StyleSheet.create({
   },
   exactDateToggle: { flexDirection: 'row', marginTop: 10, marginBottom: 10 },
   dateBtn: { marginTop: 8 },
+  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: 'white', padding: 20, borderTopLeftRadius: 15, borderTopRightRadius: 15 },
 });
 

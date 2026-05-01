@@ -30,6 +30,8 @@ function AuthStack() {
   );
 }
 
+import FamilyTreeScreen from '../features/familyTree/FamilyTreeScreen';
+
 function MainTabs() {
   const session = useAuthStore(state => state.session);
   const isAdmin = session?.user?.role === 'admin';
@@ -38,6 +40,7 @@ function MainTabs() {
     <Tab.Navigator>
       <Tab.Screen name="Timeline" component={TimelineScreen} options={{ title: 'Línea de Tiempo' }} />
       <Tab.Screen name="Atlas" component={AtlasScreen} options={{ title: 'Atlas' }} />
+      <Tab.Screen name="FamilyTree" component={FamilyTreeScreen} options={{ title: 'Red Social' }} />
       <Tab.Screen name="Entities" component={EntitiesScreen} options={{ title: 'Elementos' }} />
       <Tab.Screen name="Inbox" component={InboxScreen} options={{ title: 'Buzón' }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Perfil' }} />
