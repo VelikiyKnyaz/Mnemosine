@@ -47,45 +47,26 @@ export const extractMemoryData = async (text: string, existingEntitiesContext: s
   const apiKey = await getConfig('OPENAI_API_KEY');
   if (!apiKey) throw new Error('API Key no configurada. Ve al Panel Admin para ingresarla.');
 
-  const systemPrompt = `
-Eres el motor cognitivo de Mnemósine. Recibes fragmentos de memoria diarios. Tu tarea es extraer metadatos para nuestro motor local.
+  const systemPrompt = `Extract memory metadata into JSON.
 
-CATÁLOGO DE ELEMENTOS EXISTENTES:
-[${existingEntitiesContext}]
+KNOWN ENTITIES: [${existingEntitiesContext}]
 
-REGLAS ESTRICTAS:
-1. Extrae marcadores de tiempo como strings en 'time_markers'. Usa EXACTAMENTE estos formatos:
-   - "exact_year:2015" → año exacto mencionado.
-   - "exact_date:2015-06-20" → fecha exacta mencionada.
-   - "exact_age:12" → si dice "cuando tenía 12 años" o "a los 12".
-   - "age_range:10-15" → si indica un rango de edad.
-   - "relative_years:-5" → "hace 5 años".
-   - "life_stage:childhood" → solo si dice algo muy genérico como "de niño" sin dar edad.
-   - "fuzzy:el verano pasado" → texto temporal que no encaja en los anteriores.
-   PRIORIZA exact_age sobre life_stage.
-   Si NO hay NINGUNA pista temporal en el texto, deja time_markers vacío [] y añade "DATE_UNCLEAR" a ambiguities. SIEMPRE.
-2. Extrae 'entities' de alto valor:
-   - PERSON: Personas significativas mencionadas por nombre o relación directa.
-   - LOCATION: Lugares donde ocurren cosas. Si el usuario dice "jugaba en el arenero" o "estaba en la piscina", es LOCATION porque es DONDE sucedió algo.
-   - EVENT: Solo eventos de GRAN magnitud biográfica (boda, graduación, mudanza, terremoto).
-   - OBJECT: Solo objetos que el usuario posee o manipula directamente (un juguete, un instrumento, un libro).
-   REGLA DE RESOLUCIÓN DE ENTIDADES (¡CRÍTICO!): 
-   - REGLA DE ORO: ¡PROHIBIDO inventar o inyectar entidades del catálogo que NO están mencionadas o directamente implicadas en el texto! Extrae SOLO lo que el usuario menciona.
-   - El catálogo existe ÚNICAMENTE para estandarizar nombres. Si el texto menciona "la universidad", "el instituto" o "el parque", busca en el catálogo si hay un candidato lógico que encaje con ese término genérico y usa el nombre EXACTO del catálogo.
-   - Si no hay coincidencias claras en el catálogo para lo que el usuario dijo, crea la entidad con el nombre que el usuario usó. No fuerces asociaciones sin sentido.
-3. Si una entidad pertenece a otra de manera obvia (Ej. 'Mi cuarto' en 'Mi casa'), usa 'parent_name'. Si NO sabes a qué lugar pertenece un LOCATION genérico (como "arenero", "piscina", "cancha") y no está en el catálogo, añade "ENTITY_AMBIGUOUS" en ambiguities.
-4. Evalúa el sentimiento del recuerdo de -1.0 (Muy Negativo) a 1.0 (Muy Positivo).
-5. Genera un 'title' poético de máximo 5 palabras.
-6. Responde SÓLO en JSON con esta estructura exacta:
+RULES:
+1. time_markers: array of strings. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:STAGE", "fuzzy:TEXT". If none, output [] and add "DATE_UNCLEAR" to ambiguities.
+2. entities: Extract ONLY explicitly mentioned PERSON, LOCATION, EVENT, OBJECT.
+   - MUST STANDARDIZE: If text uses a generic term (e.g. "university") that clearly refers to a KNOWN ENTITY, output the exact KNOWN ENTITY name.
+   - FATAL ERROR: NEVER extract or inject entities that are not explicitly mentioned in the text.
+3. parent_name: If a LOCATION explicitly belongs to another in text, specify it. If ambiguous, add "ENTITY_AMBIGUOUS" to ambiguities.
+4. sentiment: Float -1.0 to 1.0.
+5. title: Max 5 words.
+
+JSON FORMAT:
 {
-  "title": "Título corto",
-  "sentiment": 0.5,
-  "time_markers": ["exact_age:12"],
-  "entities": [
-    { "name": "Nombre Exacto 1", "type": "LOCATION", "parent_name": null },
-    { "name": "Nombre Exacto 2", "type": "PERSON" }
-  ],
-  "ambiguities": ["DATE_UNCLEAR", "ENTITY_AMBIGUOUS"]
+  "title": "",
+  "sentiment": 0.0,
+  "time_markers": [],
+  "entities": [{ "name": "Name", "type": "LOCATION", "parent_name": null }],
+  "ambiguities": []
 }
   `.trim();
 
