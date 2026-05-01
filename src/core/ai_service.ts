@@ -52,9 +52,11 @@ export const extractMemoryData = async (text: string, existingEntitiesContext: s
 KNOWN: [${existingEntitiesContext}]
 
 OUTPUT SPEC:
-- time_markers: ["exact_year:YYYY","exact_date:YYYY-MM-DD","exact_age:N","age_range:N-M","relative_years:-N","life_stage:STAGE","fuzzy:TEXT"]. No clues → [] + "DATE_UNCLEAR" in ambiguities.
-- entities: All mentioned PERSON, LOCATION, EVENT, OBJECT. If a mentioned term matches a KNOWN entity, use the KNOWN name. Do not add KNOWN entities that the text does not reference.
-- parent_name: Set when the text states one location is inside another. Unknown parent → "ENTITY_AMBIGUOUS" in ambiguities.
+- time_markers: Be aggressive. Any temporal hint counts. Formats:
+  "exact_year:YYYY" | "exact_date:YYYY-MM-DD" | "exact_age:N" (e.g. "tenía 12 años" → exact_age:12) | "age_range:N-M" | "relative_years:-N" (e.g. "hace 3 años") | "life_stage:childhood/teenage/adulthood" | "fuzzy:TEXT" (e.g. "fuzzy:el verano pasado").
+  Prefer exact_age over life_stage. ONLY add "DATE_UNCLEAR" to ambiguities if there is truly zero temporal information.
+- entities: All mentioned PERSON, LOCATION, EVENT, OBJECT. If a term matches a KNOWN entity, use the KNOWN name. Do not inject KNOWN entities the text does not reference.
+- parent_name: Set when text states one location is inside another. Unknown parent → "ENTITY_AMBIGUOUS" in ambiguities.
 - sentiment: -1.0 to 1.0.
 - title: ≤5 words.
 

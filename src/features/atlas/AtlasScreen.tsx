@@ -123,7 +123,19 @@ export default function AtlasScreen({ route, navigation }: any) {
 
       setMarkers(processedMarkers);
       setDestacados(processedMarkers);
-      setPorConfirmar(processedMarkers.filter(m => m.is_confirmed === 0));
+      
+      // Por Confirmar: unconfirmed with coords + ALL locations without coords
+      const noCoordRows = await db.getAllAsync<any>(
+        `SELECT id, name as title, is_confirmed, parent_id, 0 as mem_count 
+         FROM entities WHERE type = 'LOCATION' AND latitude IS NULL`
+      );
+      const unconfirmedWithCoords = processedMarkers.filter(m => m.is_confirmed === 0);
+      const noCoordFormatted = noCoordRows.map(r => ({
+        id: r.id, title: r.title, is_confirmed: 0, parent_id: r.parent_id,
+        height: 0, hasChildren: false, mem_count: r.mem_count,
+        coordinate: null,
+      }));
+      setPorConfirmar([...unconfirmedWithCoords, ...noCoordFormatted]);
 
       // Auto-start editing if requested from route
       if (route.params?.placingEntityId) {
