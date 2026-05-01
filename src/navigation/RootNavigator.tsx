@@ -30,7 +30,6 @@ function AuthStack() {
   );
 }
 
-import FamilyTreeScreen from '../features/familyTree/FamilyTreeScreen';
 
 function MainTabs() {
   const session = useAuthStore(state => state.session);
