@@ -47,18 +47,16 @@ export const extractMemoryData = async (text: string, existingEntitiesContext: s
   const apiKey = await getConfig('OPENAI_API_KEY');
   if (!apiKey) throw new Error('API Key no configurada. Ve al Panel Admin para ingresarla.');
 
-  const systemPrompt = `Extract metadata from a personal memory into JSON. Extract all people, places, events and objects the user mentions.
+  const systemPrompt = `Extract metadata from a personal memory into JSON.
 
 KNOWN: [${existingEntitiesContext}]
 
-OUTPUT SPEC:
-- time_markers: Be aggressive. Any temporal hint counts. Formats:
-  "exact_year:YYYY" | "exact_date:YYYY-MM-DD" | "exact_age:N" (e.g. "tenía 12 años" → exact_age:12) | "age_range:N-M" | "relative_years:-N" (e.g. "hace 3 años") | "life_stage:childhood/teenage/adulthood" | "fuzzy:TEXT" (e.g. "fuzzy:el verano pasado").
-  Prefer exact_age over life_stage. ONLY add "DATE_UNCLEAR" to ambiguities if there is truly zero temporal information.
-- entities: All mentioned PERSON, LOCATION, EVENT, OBJECT. If a term matches a KNOWN entity, use the KNOWN name. Do not inject KNOWN entities the text does not reference.
-- parent_name: Set when text states one location is inside another. Unknown parent → "ENTITY_AMBIGUOUS" in ambiguities.
-- sentiment: -1.0 to 1.0.
-- title: ≤5 words.
+OUTPUT:
+- time_markers: Extract all temporal references. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:childhood|teenage|adulthood", "fuzzy:TEXT". Prefer exact_age over life_stage. Add "DATE_UNCLEAR" to ambiguities only if no temporal information exists.
+- entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT. If a reference matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
+- parent_name: Set when text indicates containment. If uncertain, add "ENTITY_AMBIGUOUS" to ambiguities.
+- sentiment: Float from -1.0 to 1.0.
+- title: Max 5 words.
 
 {"title":"","sentiment":0,"time_markers":[],"entities":[{"name":"","type":"","parent_name":null}],"ambiguities":[]}
   `.trim();
