@@ -22,10 +22,17 @@ export const calculateDatesFromMarkers = async (timeMarkers: string[]): Promise<
     return { start_date: null, end_date: null };
   }
 
-  // Sanitize: AI may return non-string markers (objects, numbers, etc.)
+  // Normalize: AI may return strings ("exact_age:12") or objects ({exact_age: 12})
   const safeMarkers = timeMarkers
-    .filter(m => m != null && typeof m !== 'object')
-    .map(m => String(m))
+    .filter(m => m != null)
+    .map(m => {
+      if (typeof m === 'string') return m;
+      if (typeof m === 'object') {
+        const keys = Object.keys(m);
+        if (keys.length > 0) return `${keys[0]}:${(m as any)[keys[0]]}`;
+      }
+      return String(m);
+    })
     .filter(m => m.includes(':'));
 
 
