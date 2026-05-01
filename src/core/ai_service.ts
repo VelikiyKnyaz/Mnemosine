@@ -47,27 +47,18 @@ export const extractMemoryData = async (text: string, existingEntitiesContext: s
   const apiKey = await getConfig('OPENAI_API_KEY');
   if (!apiKey) throw new Error('API Key no configurada. Ve al Panel Admin para ingresarla.');
 
-  const systemPrompt = `Extract memory metadata into JSON.
+  const systemPrompt = `Extract metadata from a personal memory into JSON. Extract all people, places, events and objects the user mentions.
 
-KNOWN ENTITIES: [${existingEntitiesContext}]
+KNOWN: [${existingEntitiesContext}]
 
-RULES:
-1. time_markers: array of strings. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:STAGE", "fuzzy:TEXT". If none, output [] and add "DATE_UNCLEAR" to ambiguities.
-2. entities: Extract ONLY explicitly mentioned PERSON, LOCATION, EVENT, OBJECT.
-   - MUST STANDARDIZE: If text uses a generic term (e.g. "university") that clearly refers to a KNOWN ENTITY, output the exact KNOWN ENTITY name.
-   - FATAL ERROR: NEVER extract or inject entities that are not explicitly mentioned in the text.
-3. parent_name: If a LOCATION explicitly belongs to another in text, specify it. If ambiguous, add "ENTITY_AMBIGUOUS" to ambiguities.
-4. sentiment: Float -1.0 to 1.0.
-5. title: Max 5 words.
+OUTPUT SPEC:
+- time_markers: ["exact_year:YYYY","exact_date:YYYY-MM-DD","exact_age:N","age_range:N-M","relative_years:-N","life_stage:STAGE","fuzzy:TEXT"]. No clues → [] + "DATE_UNCLEAR" in ambiguities.
+- entities: All mentioned PERSON, LOCATION, EVENT, OBJECT. If a mentioned term matches a KNOWN entity, use the KNOWN name. Do not add KNOWN entities that the text does not reference.
+- parent_name: Set when the text states one location is inside another. Unknown parent → "ENTITY_AMBIGUOUS" in ambiguities.
+- sentiment: -1.0 to 1.0.
+- title: ≤5 words.
 
-JSON FORMAT:
-{
-  "title": "",
-  "sentiment": 0.0,
-  "time_markers": [],
-  "entities": [{ "name": "Name", "type": "LOCATION", "parent_name": null }],
-  "ambiguities": []
-}
+{"title":"","sentiment":0,"time_markers":[],"entities":[{"name":"","type":"","parent_name":null}],"ambiguities":[]}
   `.trim();
 
   try {
