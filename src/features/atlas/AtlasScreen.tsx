@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
-import { Appbar, Text, Button, IconButton, Chip, Title } from 'react-native-paper';
+import { Appbar, Text, Button, IconButton, Chip, Title, FAB } from 'react-native-paper';
 import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { getDb, inheritCoordinatesFromParent } from '../../core/database';
@@ -8,6 +8,7 @@ import { useIsFocused } from '@react-navigation/native';
 import SmartDropdown, { NominatimSuggestion } from '../../components/SmartDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { geocodeLocation, generateTerritorialHierarchy } from '../../core/ai_processor';
+import EntityMemoriesView from '../memories/EntityMemoriesView';
 
 export default function AtlasScreen({ route, navigation }: any) {
   const [markers, setMarkers] = useState<any[]>([]);
@@ -18,7 +19,10 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [porConfirmar, setPorConfirmar] = useState<any[]>([]);
   const [allLocations, setAllLocations] = useState<any[]>([]); // For dropdown
   
-  const [activeTab, setActiveTab] = useState<'destacados' | 'confirmar'>('destacados');
+  // Panel State
+  const [panelMode, setPanelMode] = useState<'hidden'|'peek'|'full'>('hidden');
+  const [panelType, setPanelType] = useState<'destacados'|'confirmar'|'action'|'memories'>('destacados');
+  const [memoryEntityId, setMemoryEntityId] = useState<string | null>(null);
   
   // Interaction States
   const [editingEntity, setEditingEntity] = useState<any | null>(null);
@@ -29,6 +33,16 @@ export default function AtlasScreen({ route, navigation }: any) {
 
   const isFocused = useIsFocused();
   const mapRef = useRef<MapView>(null);
+
+  const closePanel = () => {
+    setPanelMode('hidden');
+    setActionEntity(null);
+    setMemoryEntityId(null);
+  };
+
+  const toggleExpand = () => {
+    setPanelMode(prev => prev === 'peek' ? 'full' : 'peek');
+  };
 
   const loadLocations = async () => {
     try {
@@ -214,7 +228,7 @@ export default function AtlasScreen({ route, navigation }: any) {
     try {
       const db = await getDb();
       await db.runAsync("UPDATE entities SET is_confirmed = 1 WHERE id = ?", entityId);
-      setActionEntity(null);
+      closePanel();
       loadLocations();
     } catch (e) {
       console.error(e);
@@ -254,7 +268,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       }
       
       setResolveParentId(null);
-      setActionEntity(null);
+      closePanel();
       loadLocations();
     } catch (e) {
       console.error(e);
@@ -390,11 +404,15 @@ export default function AtlasScreen({ route, navigation }: any) {
                 title={marker.title}
                 description={marker.is_confirmed === 0 ? "⚠️ Por confirmar" : `${marker.mem_count || 0} recuerdos`}
                 pinColor={marker.is_confirmed === 0 ? 'orange' : 'red'}
-                onCalloutPress={() => {
+                onPress={() => {
                   if (marker.is_confirmed === 0) {
                     setActionEntity(marker);
+                    setPanelType('action');
+                    setPanelMode('peek');
                   } else {
-                    startEditing(marker);
+                    setMemoryEntityId(marker.id);
+                    setPanelType('memories');
+                    setPanelMode('peek');
                   }
                 }}
               >
@@ -431,86 +449,123 @@ export default function AtlasScreen({ route, navigation }: any) {
         </View>
       )}
 
-      {editingEntity ? (
-        <View style={styles.editFooter}>
-          <Text style={styles.editHint}>Arrastra el mapa para centrar el marcador en "{editingEntity.title}".</Text>
-          <Button mode="contained" onPress={confirmLocation} style={styles.confirmBtn}>
-            Confirmar Ubicación
-          </Button>
+      {/* FABs for Lists */}
+      {!editingEntity && panelMode === 'hidden' && (
+        <View style={styles.fabContainer}>
+          <FAB 
+            icon="map-marker-star" 
+            style={styles.fabLeft} 
+            onPress={() => { setPanelType('destacados'); setPanelMode('peek'); }} 
+            label="Lugares"
+          />
+          <FAB 
+            icon="check-decagram" 
+            style={styles.fabRight} 
+            onPress={() => { setPanelType('confirmar'); setPanelMode('peek'); }} 
+            label="Confirmar"
+            color={porConfirmar.length > 0 ? "orange" : undefined}
+          />
         </View>
-      ) : actionEntity ? (
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.actionPanel}>
-          <ScrollView keyboardShouldPersistTaps="handled">
-            <Title style={styles.actionTitle}>{actionEntity.title}</Title>
-            <Text style={{marginBottom: 10}}>¿Qué deseas hacer con este lugar?</Text>
-            
-            {actionEntity.is_confirmed === 0 && (
-              <Button mode="contained" onPress={() => acceptLocation(actionEntity.id)} style={{marginBottom: 8}}>
-                ✅ Aceptar Ubicación Sugerida
-              </Button>
-            )}
-            <Button mode="outlined" icon="map-marker" onPress={() => {
-              const ent = actionEntity;
-              setActionEntity(null);
-              startEditing(ent);
-            }} style={{marginBottom: 15}}>
-              Ubicar Manualmente en Mapa
+      )}
+
+      {/* Editing Overlay */}
+      {editingEntity && (
+        <View style={styles.panelPeek}>
+          <View style={styles.editFooter}>
+            <Text style={styles.editHint}>Arrastra el mapa para centrar el marcador en "{editingEntity.title}".</Text>
+            <Button mode="contained" onPress={confirmLocation} style={styles.confirmBtn}>
+              Confirmar Ubicación
             </Button>
+          </View>
+        </View>
+      )}
 
-            <Text style={{fontWeight: 'bold', marginBottom: 5}}>O asignar a un Lugar Padre:</Text>
-            <SmartDropdown
-              label="Lugar padre (ej: Colegio)"
-              value=""
-              items={allLocations}
-              enableNominatim={true}
-              onSelect={(item) => {
-                 if (item) assignParent_Action(item.id);
-              }}
-              onCreateNew={createAndGeocodeParent}
-              onSelectNominatim={createParentFromNominatim}
-              placeholder="Escribe para buscar..."
-            />
-            
-            <Button onPress={() => setActionEntity(null)} style={{marginTop: 10}}>Cancelar</Button>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      ) : (
-        <View style={styles.bottomSection}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroll}>
-            <Chip selected={activeTab === 'destacados'} onPress={() => setActiveTab('destacados')} style={styles.tabChip}>📍 Lugares ({destacados.length})</Chip>
-            <Chip selected={activeTab === 'confirmar'} onPress={() => setActiveTab('confirmar')} style={styles.tabChip}>
-              ✅ Confirmar ({porConfirmar.length})
-            </Chip>
-          </ScrollView>
-
-          <ScrollView style={styles.listArea}>
-            {activeTab === 'destacados' && (
-              destacados.length === 0 ? <Text style={styles.emptyText}>No hay lugares registrados aún.</Text> :
-              destacados.map(item => (
-                <TouchableOpacity key={item.id} onPress={() => jumpTo(item.coordinate)} style={styles.listItem}>
-                  <Text style={styles.listIcon}>{item.mem_count > 0 ? '⭐️' : '📍'}</Text>
-                  <View style={{flex:1}}>
-                    <Text style={styles.listTitle}>{item.title}</Text>
-                    <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
-                  </View>
-                  <IconButton icon="folder-open" size={24} iconColor="#6200ee" onPress={() => navigation.navigate('EntityMemories', { entityId: item.id })} />
-                </TouchableOpacity>
-              ))
+      {/* Bottom Sheet Panel */}
+      {panelMode !== 'hidden' && !editingEntity && (
+        <View style={panelMode === 'full' ? styles.panelFull : styles.panelPeek}>
+          {/* Header */}
+          <View style={styles.panelHeader}>
+             <IconButton icon="close" onPress={closePanel} />
+             <Text style={styles.panelTitle}>
+               {panelType === 'destacados' ? `Lugares (${destacados.length})` :
+                panelType === 'confirmar' ? `Por Confirmar (${porConfirmar.length})` :
+                panelType === 'action' ? actionEntity?.title :
+                panelType === 'memories' ? 'Explorador de Recuerdos' : ''}
+             </Text>
+             <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
+          </View>
+          
+          <View style={{ flex: 1 }}>
+            {panelType === 'destacados' && (
+              <ScrollView style={styles.listArea}>
+                {destacados.length === 0 ? <Text style={styles.emptyText}>No hay lugares registrados aún.</Text> :
+                destacados.map(item => (
+                  <TouchableOpacity key={item.id} onPress={() => jumpTo(item.coordinate)} style={styles.listItem}>
+                    <Text style={styles.listIcon}>{item.mem_count > 0 ? '⭐️' : '📍'}</Text>
+                    <View style={{flex:1}}>
+                      <Text style={styles.listTitle}>{item.title}</Text>
+                      <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
+                    </View>
+                    <IconButton icon="folder-open" size={24} iconColor="#6200ee" onPress={() => { setMemoryEntityId(item.id); setPanelType('memories'); setPanelMode('peek'); }} />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
             )}
 
-            {activeTab === 'confirmar' && (
-              porConfirmar.length === 0 ? <Text style={styles.emptyText}>No hay ubicaciones por confirmar.</Text> :
-              porConfirmar.map(item => (
-                <TouchableOpacity key={item.id} onPress={() => { jumpTo(item.coordinate); setActionEntity(item); }} style={styles.listItem}>
-                  <Text style={styles.listIcon}>⚠️</Text>
-                  <View style={{flex:1}}>
-                    <Text style={styles.listTitle}>{item.title}</Text>
-                    <Text style={styles.listSub}>Toca para confirmar</Text>
-                  </View>
-                </TouchableOpacity>
-              ))
+            {panelType === 'confirmar' && (
+              <ScrollView style={styles.listArea}>
+                {porConfirmar.length === 0 ? <Text style={styles.emptyText}>No hay ubicaciones por confirmar.</Text> :
+                porConfirmar.map(item => (
+                  <TouchableOpacity key={item.id} onPress={() => { jumpTo(item.coordinate); setActionEntity(item); setPanelType('action'); }} style={styles.listItem}>
+                    <Text style={styles.listIcon}>⚠️</Text>
+                    <View style={{flex:1}}>
+                      <Text style={styles.listTitle}>{item.title}</Text>
+                      <Text style={styles.listSub}>Toca para confirmar</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
             )}
-          </ScrollView>
+
+            {panelType === 'action' && actionEntity && (
+              <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.actionPanel}>
+                <ScrollView keyboardShouldPersistTaps="handled">
+                  <Text style={{marginBottom: 10, marginTop: 10}}>¿Qué deseas hacer con este lugar?</Text>
+                  
+                  {actionEntity.is_confirmed === 0 && (
+                    <Button mode="contained" onPress={() => acceptLocation(actionEntity.id)} style={{marginBottom: 8}}>
+                      ✅ Aceptar Ubicación Sugerida
+                    </Button>
+                  )}
+                  <Button mode="outlined" icon="map-marker" onPress={() => {
+                    const ent = actionEntity;
+                    closePanel();
+                    startEditing(ent);
+                  }} style={{marginBottom: 15}}>
+                    Ubicar Manualmente en Mapa
+                  </Button>
+
+                  <Text style={{fontWeight: 'bold', marginBottom: 5}}>O asignar a un Lugar Padre:</Text>
+                  <SmartDropdown
+                    label="Lugar padre (ej: Colegio)"
+                    value=""
+                    items={allLocations}
+                    enableNominatim={true}
+                    onSelect={(item) => {
+                       if (item) assignParent_Action(item.id);
+                    }}
+                    onCreateNew={createAndGeocodeParent}
+                    onSelectNominatim={createParentFromNominatim}
+                    placeholder="Escribe para buscar..."
+                  />
+                </ScrollView>
+              </KeyboardAvoidingView>
+            )}
+
+            {panelType === 'memories' && memoryEntityId && (
+              <EntityMemoriesView entityId={memoryEntityId} />
+            )}
+          </View>
         </View>
       )}
     </View>
@@ -528,20 +583,57 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   staticPin: { marginBottom: 50 },
-  editFooter: { padding: 15, backgroundColor: 'white', elevation: 10 },
+  
+  fabContainer: {
+    position: 'absolute',
+    bottom: 30,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  fabLeft: { backgroundColor: 'white' },
+  fabRight: { backgroundColor: 'white' },
+  
+  panelPeek: {
+    position: 'absolute',
+    bottom: 0, left: 0, right: 0,
+    height: '45%',
+    backgroundColor: 'white',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    elevation: 20,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.2, shadowRadius: 5,
+  },
+  panelFull: {
+    position: 'absolute',
+    top: 0, bottom: 0, left: 0, right: 0,
+    backgroundColor: 'white',
+    elevation: 20,
+  },
+  panelHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    paddingHorizontal: 10,
+    height: 50,
+  },
+  panelTitle: { fontSize: 16, fontWeight: 'bold' },
+  
+  editFooter: { padding: 15, flex: 1, justifyContent: 'center' },
   editHint: { textAlign: 'center', marginBottom: 10, color: '#666' },
   confirmBtn: { paddingVertical: 5 },
-  actionPanel: { padding: 15, backgroundColor: 'white', elevation: 10, maxHeight: 350 },
-  actionTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 5 },
-  bottomSection: { height: 200, backgroundColor: 'white', elevation: 10 },
-  tabScroll: { paddingHorizontal: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eee', maxHeight: 55 },
-  tabChip: { marginRight: 8, height: 32 },
+  
+  actionPanel: { padding: 15, flex: 1 },
   listArea: { padding: 10 },
   listItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   listIcon: { fontSize: 20, marginRight: 10 },
   listTitle: { fontSize: 15, fontWeight: 'bold', color: '#333' },
   listSub: { fontSize: 12, color: '#666' },
   emptyText: { textAlign: 'center', color: '#999', marginTop: 20, fontStyle: 'italic' },
+  
   debugHud: {
     position: 'absolute',
     top: 10,
