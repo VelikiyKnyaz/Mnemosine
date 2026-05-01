@@ -4,7 +4,7 @@ import { Text, Appbar, Card, Avatar } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
 
-export default function FamilyTreeScreen() {
+export default function FamilyTreeScreen({ navigation }: any) {
   const [people, setPeople] = useState<any[]>([]);
   const isFocused = useIsFocused();
 
@@ -12,6 +12,7 @@ export default function FamilyTreeScreen() {
     try {
       const db = await getDb();
       // Fetch all entities of type PERSON and count how many memories they have
+      // We will eventually use the recursive CTE here as well once groups are implemented
       const rows = await db.getAllAsync(`
         SELECT e.id, e.name, COUNT(me.memory_id) as mentions
         FROM entities e
@@ -43,7 +44,7 @@ export default function FamilyTreeScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         renderItem={({ item }) => (
-          <Card style={styles.card}>
+          <Card style={styles.card} onPress={() => navigation.navigate('EntityMemories', { entityId: item.id })}>
             <Card.Title
               title={item.name}
               subtitle={`${item.mentions} recuerdos`}

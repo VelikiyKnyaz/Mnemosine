@@ -16,6 +16,7 @@ import InboxScreen from '../features/inbox/InboxScreen';
 import EntitiesScreen from '../features/entities/EntitiesScreen';
 import ProfileScreen from '../features/profile/ProfileScreen';
 import DebugScreen from '../features/debug/DebugScreen';
+import EntityMemoriesScreen from '../features/memories/EntityMemoriesScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -69,7 +70,14 @@ export default function RootNavigator() {
 
   return (
     <NavigationContainer>
-      {session ? <MainTabs /> : <AuthStack />}
+      {session ? (
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="Main" component={MainTabs} />
+          <Stack.Screen name="EntityMemories" component={EntityMemoriesScreen} />
+        </Stack.Navigator>
+      ) : (
+        <AuthStack />
+      )}
     </NavigationContainer>
   );
 }

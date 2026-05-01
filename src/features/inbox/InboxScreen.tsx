@@ -49,7 +49,6 @@ export default function InboxScreen({ navigation }: any) {
   const startResolve = (task: any) => {
     setResolvingTask(task);
     setResolveDate(new Date());
-    setResolveParentId(null);
     setShowDatePicker(false);
   };
 

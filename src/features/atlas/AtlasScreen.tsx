@@ -487,12 +487,13 @@ export default function AtlasScreen({ route, navigation }: any) {
             {activeTab === 'destacados' && (
               destacados.length === 0 ? <Text style={styles.emptyText}>No hay lugares registrados aún.</Text> :
               destacados.map(item => (
-                <TouchableOpacity key={item.id} onPress={() => jumpTo(item.coordinate)} style={styles.listItem}>
+                <TouchableOpacity key={item.id} onPress={() => navigation.navigate('EntityMemories', { entityId: item.id })} style={styles.listItem}>
                   <Text style={styles.listIcon}>{item.mem_count > 0 ? '⭐️' : '📍'}</Text>
                   <View style={{flex:1}}>
                     <Text style={styles.listTitle}>{item.title}</Text>
                     <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
                   </View>
+                  <IconButton icon="map-marker-radius" size={24} iconColor="#6200ee" onPress={() => jumpTo(item.coordinate)} />
                 </TouchableOpacity>
               ))
             )}
