@@ -866,7 +866,10 @@ export default function AtlasScreen({ route, navigation }: any) {
             showsUserLocation={!editingEntity}
           >
             {!editingEntity && visibleMarkers.map(marker => {
-              const size = marker.hasChildren ? 48 : (marker.mem_count > 0 ? 36 : 24);
+              const isEmptyPlace = marker.is_confirmed === 1 && marker.mem_count === 0 && !marker.hasChildren;
+              if (isEmptyPlace) return null;
+              
+              const size = marker.hasChildren ? 48 : 36;
               return (
                 <Marker
                   key={marker.id}
@@ -1374,8 +1377,6 @@ const styles = StyleSheet.create({
   clusterMarker: {
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'white',
   },
   clusterText: {
     color: 'white',
