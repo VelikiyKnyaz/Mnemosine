@@ -181,33 +181,41 @@ export default function AtlasScreen({ route, navigation }: any) {
           computeHeight(r.id);
         }
       });
-      // Compute centroid for cluster nodes (city/state/country) from children coordinates
-      const computeCentroid = (id: string) => {
+      // Compute centroid and total mem_count for cluster nodes
+      const computeCentroidAndMemories = (id: string) => {
         const node = entityMap.get(id);
-        if (!node || node.children.length === 0) return;
+        if (!node) return;
 
-        // First compute children centroids recursively (bottom-up)
-        node.children.forEach((cid: string) => computeCentroid(cid));
+        // First compute children recursively (bottom-up)
+        node.children.forEach((cid: string) => computeCentroidAndMemories(cid));
 
         let sumLat = 0, sumLon = 0, count = 0;
+        let totalMemories = node.mem_count || 0; // Start with its own memories
+
         for (const cid of node.children) {
           const child = entityMap.get(cid);
-          if (child?.latitude != null && child?.longitude != null) {
-            sumLat += child.latitude;
-            sumLon += child.longitude;
-            count++;
+          if (child) {
+            totalMemories += (child.mem_count || 0); // Aggregate memory count
+            if (child.latitude != null && child.longitude != null) {
+              sumLat += child.latitude;
+              sumLon += child.longitude;
+              count++;
+            }
           }
         }
-        if (count > 0) {
+        
+        node.mem_count = totalMemories; // Update the node's mem_count
+
+        if (count > 0 && node.children.length > 0) {
           node.latitude = sumLat / count;
           node.longitude = sumLon / count;
         }
       };
 
-      // Apply centroid from roots down
+      // Apply centroid and memory aggregation from roots down
       locatedRows.forEach(r => {
         if (!r.parent_id || !entityMap.has(r.parent_id)) {
-          computeCentroid(r.id);
+          computeCentroidAndMemories(r.id);
         }
       });
 
@@ -938,7 +946,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                       height: size,
                       borderRadius: size / 2,
                     }]}>
-                      <Text style={styles.clusterText}>{marker.mem_count > 0 ? marker.mem_count : (marker.hasChildren ? '' : '📍')}</Text>
+                      <Text style={styles.clusterText}>{marker.mem_count}</Text>
                     </View>
                   </View>
 
