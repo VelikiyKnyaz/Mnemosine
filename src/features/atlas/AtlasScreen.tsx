@@ -111,9 +111,35 @@ export default function AtlasScreen({ route, navigation }: any) {
         } catch {}
         entityMap.set(r.id, { ...r, children: [], geoLevel });
       });
+      // Load ALL parent_id relationships so we can bridge gaps in the visible tree
+      const allParents = await db.getAllAsync<{id: string, parent_id: string | null}>(
+        `SELECT id, parent_id FROM entities WHERE type = 'LOCATION'`
+      );
+      const fullParentLookup = new Map<string, string | null>();
+      allParents.forEach(row => fullParentLookup.set(row.id, row.parent_id));
+
+      // For each entity, find the nearest ancestor that IS in entityMap
+      const resolveVisibleParent = (parentId: string | null): string | null => {
+        const visited = new Set<string>();
+        let current = parentId;
+        while (current) {
+          if (entityMap.has(current)) return current;
+          if (visited.has(current)) return null; // cycle guard
+          visited.add(current);
+          current = fullParentLookup.get(current) ?? null;
+        }
+        return null;
+      };
+
+      // Build children arrays using resolved (gap-bridged) parent references
+      const resolvedParentIds = new Map<string, string | null>();
       locatedRows.forEach(r => {
-        if (r.parent_id && entityMap.has(r.parent_id)) {
-          entityMap.get(r.parent_id).children.push(r.id);
+        const resolved = resolveVisibleParent(r.parent_id);
+        // Don't parent to self
+        const finalParent = (resolved && resolved !== r.id) ? resolved : null;
+        resolvedParentIds.set(r.id, finalParent);
+        if (finalParent && entityMap.has(finalParent)) {
+          entityMap.get(finalParent).children.push(r.id);
         }
       });
       
@@ -185,7 +211,8 @@ export default function AtlasScreen({ route, navigation }: any) {
         id: node.id,
         title: node.title,
         is_confirmed: node.is_confirmed,
-        parent_id: node.parent_id,
+        // Use resolved (gap-bridged) parent_id instead of raw DB parent_id
+        parent_id: resolvedParentIds.get(node.id) ?? null,
         // Use geo_level (geographic truth) if available, otherwise fall back to tree height
         height: node.geoLevel ?? node.treeHeight ?? 0,
         hasChildren: node.children.length > 0,
@@ -762,9 +789,13 @@ export default function AtlasScreen({ route, navigation }: any) {
       
       const children = childrenOf.get(node.id) || [];
       
-      if (shouldDissolve && children.length > 0) {
-        // Node is dissolved. Do not add it. Process children.
-        children.forEach(child => traverse(child));
+      if (shouldDissolve) {
+        if (children.length > 0) {
+          // Node is dissolved. Do not add it. Process children instead.
+          children.forEach(child => traverse(child));
+        }
+        // If shouldDissolve but no children to show, hide the node entirely.
+        // (A territory at leaf zoom with no visible children should vanish, not linger.)
       } else {
         // Node is NOT dissolved. Add it, and do not process children (they remain hidden inside).
         if (node.coordinate) {
