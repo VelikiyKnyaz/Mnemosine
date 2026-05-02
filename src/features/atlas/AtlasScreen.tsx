@@ -310,10 +310,15 @@ export default function AtlasScreen({ route, navigation }: any) {
         const apiKey = await getConfig('GOOGLE_MAPS_KEY');
         if (!apiKey) { setSearchingPlaces(false); return; }
 
+        const headers = {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.addressComponents',
+        };
+
+        // First attempt: with location bias
         const searchBody: any = { textQuery: query.trim(), maxResultCount: 5 };
-        
-        // Only add location bias at tight zoom to avoid blocking results at world view
-        if (currentRegion && currentRegion.latitudeDelta < 5) {
+        if (currentRegion) {
           searchBody.locationBias = {
             circle: {
               center: { latitude: currentRegion.latitude, longitude: currentRegion.longitude },
@@ -322,17 +327,23 @@ export default function AtlasScreen({ route, navigation }: any) {
           };
         }
 
-        const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.addressComponents',
-          },
-          body: JSON.stringify(searchBody),
+        let res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST', headers, body: JSON.stringify(searchBody),
         });
-        const data = await res.json();
-        setPlaceSuggestions(data.places || []);
+        let data = await res.json();
+        let results = data.places || [];
+
+        // Retry without bias if no results
+        if (results.length === 0 && currentRegion) {
+          const fallbackBody = { textQuery: query.trim(), maxResultCount: 5 };
+          res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+            method: 'POST', headers, body: JSON.stringify(fallbackBody),
+          });
+          data = await res.json();
+          results = data.places || [];
+        }
+
+        setPlaceSuggestions(results);
       } catch (e) {
         console.error('Places search error:', e);
         setPlaceSuggestions([]);
@@ -342,39 +353,36 @@ export default function AtlasScreen({ route, navigation }: any) {
     }, 600);
   };
 
-  // Geocode an address string and teleport map to it (for precise mode)
-  const geocodeAddress = (addr: string) => {
-    setAddressQuery(addr);
-    if (addressDebounce.current) clearTimeout(addressDebounce.current);
-    if (!addr.trim() || addr.trim().length < 4) return;
+  // Geocode an address: explicit action (called on submit)
+  const sendAddress = async () => {
+    if (!addressQuery.trim() || addressQuery.trim().length < 3) return;
+    try {
+      const apiKey = await getConfig('GOOGLE_MAPS_KEY');
+      if (!apiKey) return;
 
-    addressDebounce.current = setTimeout(async () => {
-      try {
-        const apiKey = await getConfig('GOOGLE_MAPS_KEY');
-        if (!apiKey) return;
-
-        const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': 'places.location,places.addressComponents',
-          },
-          body: JSON.stringify({ textQuery: addr.trim(), maxResultCount: 1 }),
-        });
-        const data = await res.json();
-        const place = data.places?.[0];
-        if (place?.location) {
-          mapRef.current?.animateToRegion({
-            latitude: place.location.latitude,
-            longitude: place.location.longitude,
-            latitudeDelta: 0.005, longitudeDelta: 0.005,
-          }, 500);
-        }
-      } catch (e) {
-        console.error('Address geocode error:', e);
+      const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': 'places.location',
+        },
+        body: JSON.stringify({ textQuery: addressQuery.trim(), maxResultCount: 1 }),
+      });
+      const data = await res.json();
+      const place = data.places?.[0];
+      if (place?.location) {
+        mapRef.current?.animateToRegion({
+          latitude: place.location.latitude,
+          longitude: place.location.longitude,
+          latitudeDelta: 0.005, longitudeDelta: 0.005,
+        }, 500);
+      } else {
+        Alert.alert('Sin resultados', 'No se encontró esa dirección.');
       }
-    }, 800);
+    } catch (e) {
+      console.error('Address geocode error:', e);
+    }
   };
 
   const selectPlaceSuggestion = (place: any) => {
@@ -739,7 +747,6 @@ export default function AtlasScreen({ route, navigation }: any) {
                     setEditingEntity(null);
                     setPanelType('action'); 
                     setPanelMode('peek');
-                    searchPlaces(item.title);
                   }} style={[styles.listItem, { backgroundColor: '#FFF8E1' }]}>
                     <Text style={styles.listIcon}>⚠️</Text>
                     <View style={{flex:1}}>
@@ -775,22 +782,6 @@ export default function AtlasScreen({ route, navigation }: any) {
                   <Text style={{fontWeight: 'bold', fontSize: 16, marginBottom: 8}}>
                     Confirmar: {actionEntity.title}
                   </Text>
-
-                  {/* Mode tabs */}
-                  <View style={{flexDirection: 'row', marginBottom: 10, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#ddd'}}>
-                    <TouchableOpacity
-                      onPress={() => { setConfirmMode('quick'); setEditingEntity(null); }}
-                      style={{flex: 1, paddingVertical: 8, backgroundColor: confirmMode === 'quick' ? '#6200ee' : '#f5f5f5', alignItems: 'center'}}
-                    >
-                      <Text style={{color: confirmMode === 'quick' ? 'white' : '#666', fontWeight: 'bold', fontSize: 13}}>⚡ Rápida</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => { setConfirmMode('precise'); }}
-                      style={{flex: 1, paddingVertical: 8, backgroundColor: confirmMode === 'precise' ? '#6200ee' : '#f5f5f5', alignItems: 'center'}}
-                    >
-                      <Text style={{color: confirmMode === 'precise' ? 'white' : '#666', fontWeight: 'bold', fontSize: 13}}>🎯 Precisa</Text>
-                    </TouchableOpacity>
-                  </View>
 
                   {/* ═══ QUICK MODE ═══ */}
                   {confirmMode === 'quick' && (
@@ -853,6 +844,13 @@ export default function AtlasScreen({ route, navigation }: any) {
                           Confirmar Lugar
                         </Button>
                       )}
+
+                      <TouchableOpacity
+                        onPress={() => setConfirmMode('precise')}
+                        style={{paddingVertical: 10, alignItems: 'center', marginTop: 4}}
+                      >
+                        <Text style={{color: '#6200ee', fontSize: 12}}>🎯 Ubicación precisa →</Text>
+                      </TouchableOpacity>
                     </View>
                   )}
 
@@ -860,19 +858,25 @@ export default function AtlasScreen({ route, navigation }: any) {
                   {confirmMode === 'precise' && (
                     <View>
                       <Text style={{color: '#666', fontSize: 12, marginBottom: 10}}>
-                        Arrastra el mapa para posicionar el marcador. Usa la dirección o un lugar padre para teletransportarte.
+                        Arrastra el mapa para posicionar el marcador rojo.
                       </Text>
 
-                      <TextInput
-                        mode="outlined"
-                        label="Dirección (ciudad, país...)"
-                        value={addressQuery}
-                        onChangeText={geocodeAddress}
-                        dense
-                        placeholder="ej: Calle 10 #30-20, Medellín, Colombia"
-                        style={{marginBottom: 10, backgroundColor: 'white'}}
-                        right={<TextInput.Icon icon="map-search" />}
-                      />
+                      <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 10}}>
+                        <View style={{flex: 1}}>
+                          <TextInput
+                            mode="outlined"
+                            label="Dirección"
+                            value={addressQuery}
+                            onChangeText={setAddressQuery}
+                            onSubmitEditing={sendAddress}
+                            dense
+                            placeholder="ej: Calle 10, Medellín, Colombia"
+                            style={{backgroundColor: 'white'}}
+                            returnKeyType="send"
+                          />
+                        </View>
+                        <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{marginLeft: 4}} />
+                      </View>
 
                       {/* Parent assignment */}
                       <TouchableOpacity
@@ -907,6 +911,13 @@ export default function AtlasScreen({ route, navigation }: any) {
                       >
                         Confirmar Ubicación
                       </Button>
+
+                      <TouchableOpacity
+                        onPress={() => { setConfirmMode('quick'); }}
+                        style={{paddingVertical: 10, alignItems: 'center', marginTop: 4}}
+                      >
+                        <Text style={{color: '#888', fontSize: 12}}>⚡ Volver a búsqueda rápida</Text>
+                      </TouchableOpacity>
                     </View>
                   )}
                 </ScrollView>
