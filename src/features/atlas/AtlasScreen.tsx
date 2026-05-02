@@ -711,12 +711,27 @@ export default function AtlasScreen({ route, navigation }: any) {
     }
   };
 
-  const jumpTo = (coordinate: any) => {
-    if (!coordinate) return;
+  const jumpTo = (item: any) => {
+    if (!item || !item.coordinate) return;
+    
+    let latDelta = 0.01;
+    if (item.height !== undefined && item.height !== null) {
+      if (item.height >= 4) {
+        latDelta = 15.0; // País
+      } else if (item.height === 3) {
+        latDelta = 4.0;  // Región/Estado
+      } else if (item.height === 2) {
+        latDelta = 0.5;  // Ciudad/Pueblo
+      } else if (item.height === 1) {
+        latDelta = 0.05; // Barrio/Localidad
+      }
+    }
+
     mapRef.current?.animateToRegion({
-      latitude: coordinate.latitude,
-      longitude: coordinate.longitude,
-      latitudeDelta: 0.01, longitudeDelta: 0.01,
+      latitude: item.coordinate.latitude,
+      longitude: item.coordinate.longitude,
+      latitudeDelta: latDelta,
+      longitudeDelta: latDelta,
     });
   };
 
@@ -1021,26 +1036,37 @@ export default function AtlasScreen({ route, navigation }: any) {
               <ScrollView style={styles.listArea}>
                 {/* Pending confirmation items first */}
                 {porConfirmar.map(item => (
-                  <TouchableOpacity key={item.id} onPress={() => {
-                    setActionEntity(item);
-                    setSearchQuery(item.title);
-                    fetchTopSuggestion(item);
-                    setSelectedPlace(null);
-                    setPlaceSuggestions([]);
-                    setShowParentAssign(false);
-                    setConfirmMode('none');
-                    setAddressQuery('');
-                    setEditingEntity(null);
-                    setPanelType('action');
-                    setPanelMode('peek');
-                  }} style={[styles.listItem, { backgroundColor: '#FFF8E1' }]}>
-                    <Text style={styles.listIcon}>⚠️</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.listTitle}>{item.title}</Text>
-                      <Text style={[styles.listSub, { color: '#F57C00' }]}>Toca para confirmar ubicación</Text>
-                    </View>
-                    <IconButton icon="close" size={18} iconColor="#999" onPress={(e) => { e.stopPropagation?.(); deleteEntity(item.id); }} style={{ margin: 0 }} />
-                  </TouchableOpacity>
+                  <View key={item.id} style={{ width: '100%', overflow: 'hidden' }}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      snapToOffsets={[0, 60]}
+                      decelerationRate="fast"
+                    >
+                      <TouchableOpacity onPress={() => {
+                        setActionEntity(item);
+                        setSearchQuery(item.title);
+                        fetchTopSuggestion(item);
+                        setSelectedPlace(null);
+                        setPlaceSuggestions([]);
+                        setShowParentAssign(false);
+                        setConfirmMode('none');
+                        setAddressQuery('');
+                        setEditingEntity(null);
+                        setPanelType('action');
+                        setPanelMode('peek');
+                      }} style={[styles.listItem, { backgroundColor: '#FFF8E1', width: windowHeight > 0 ? Dimensions.get('window').width - 20 : '100%' }]}>
+                        <Text style={styles.listIcon}>⚠️</Text>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.listTitle}>{item.title}</Text>
+                          <Text style={[styles.listSub, { color: '#F57C00' }]}>Toca para confirmar ubicación</Text>
+                        </View>
+                      </TouchableOpacity>
+                      <View style={{ width: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                        <IconButton icon="close" size={24} iconColor="#999" onPress={(e) => { e.stopPropagation?.(); deleteEntity(item.id); }} style={{ margin: 0, backgroundColor: '#f0f0f0' }} />
+                      </View>
+                    </ScrollView>
+                  </View>
                 ))}
 
                 {/* Confirmed items - Grouped */}
@@ -1063,31 +1089,41 @@ export default function AtlasScreen({ route, navigation }: any) {
                             {section.title}
                           </Text>
                           {items.map(item => (
-                            <TouchableOpacity
-                              key={item.id}
-                              onPress={() => jumpTo(item.coordinate)}
-                              style={styles.listItem}
-                            >
-                              <Text style={styles.listIcon}>{section.icon}</Text>
-                              <View style={{ flex: 1 }}>
-                                <Text style={styles.listTitle}>{item.title}</Text>
-                                <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
-                              </View>
-                              <IconButton icon="pencil" size={18} iconColor="#6200ee" onPress={() => {
-                                setActionEntity(item);
-                                setConfirmMode('none');
-                                setSearchQuery(item.title);
-                                fetchTopSuggestion(item);
-                                setSelectedPlace(null);
-                                setPlaceSuggestions([]);
-                                setAddressQuery('');
-                                setEditingEntity(null);
-                                setMemoryEntityId(null);
-                                setPanelType('action');
-                                setPanelMode('peek');
-                              }} style={{ margin: -4 }} />
-                              <IconButton icon="delete-outline" size={18} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{ margin: -4 }} />
-                            </TouchableOpacity>
+                            <View key={item.id} style={{ width: '100%', overflow: 'hidden' }}>
+                              <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                snapToOffsets={[0, 100]}
+                                decelerationRate="fast"
+                              >
+                                <TouchableOpacity
+                                  onPress={() => jumpTo(item)}
+                                  style={[styles.listItem, { width: windowHeight > 0 ? Dimensions.get('window').width - 20 : '100%' }]}
+                                >
+                                  <Text style={styles.listIcon}>{section.icon}</Text>
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={styles.listTitle}>{item.title}</Text>
+                                    <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
+                                  </View>
+                                </TouchableOpacity>
+                                <View style={{ width: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                                  <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
+                                    setActionEntity(item);
+                                    setConfirmMode('none');
+                                    setSearchQuery(item.title);
+                                    fetchTopSuggestion(item);
+                                    setSelectedPlace(null);
+                                    setPlaceSuggestions([]);
+                                    setAddressQuery('');
+                                    setEditingEntity(null);
+                                    setMemoryEntityId(null);
+                                    setPanelType('action');
+                                    setPanelMode('peek');
+                                  }} style={{ margin: 0, marginRight: 5, backgroundColor: '#e3f2fd' }} />
+                                  <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{ margin: 0, backgroundColor: '#ffebee' }} />
+                                </View>
+                              </ScrollView>
+                            </View>
                           ))}
                         </View>
                       );
