@@ -388,11 +388,11 @@ export default function AtlasScreen({ route, navigation }: any) {
     // Instead of depth (which varies wildly), height is consistent (0 = leaf).
     // A node "splits" (hides itself and shows its children) when delta drops below its threshold.
     let visibleHeight = 0;
-    if (delta <= 0.01) visibleHeight = 0;         // Max zoom, leaf nodes only
-    else if (delta <= 0.05) visibleHeight = 1;    // Neighborhood clusters
-    else if (delta <= 1) visibleHeight = 2;       // City clusters
-    else if (delta <= 10) visibleHeight = 3;      // State clusters
-    else visibleHeight = 4;                       // Country clusters
+    if (delta <= 0.02) visibleHeight = 0;        // Max zoom, leaf nodes only
+    else if (delta <= 0.2) visibleHeight = 1;    // Neighborhood clusters
+    else if (delta <= 5) visibleHeight = 2;      // City clusters
+    else if (delta <= 20) visibleHeight = 3;     // State clusters
+    else visibleHeight = 4;                      // Country clusters
 
     return markers.filter(m => {
       // 1. Always show the marker being acted upon
