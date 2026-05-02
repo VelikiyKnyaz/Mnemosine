@@ -53,8 +53,8 @@ KNOWN: [${existingEntitiesContext}]
 
 OUTPUT:
 - time_markers: Extract all temporal references. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:childhood|teenage|adulthood", "fuzzy:TEXT". Prefer exact_age over life_stage. Add "DATE_UNCLEAR" to ambiguities only if no temporal information exists.
-- entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT. IMPORTANT: Do not omit descriptive nouns from locations (e.g., extract "Hotel Astoria", not just "Astoria"; "Restaurante El Paso" not just "El Paso"). If a reference matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
-- parent_name: Set when text indicates containment (e.g. if the user says they were at a hotel in a specific city, set the city as parent). If uncertain, add "ENTITY_AMBIGUOUS" to ambiguities.
+- entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT. IMPORTANT: Retain complete proper nouns including their descriptive prefixes/suffixes (e.g. keep identifiers like "Hotel", "Museum", "Park", "Mount" if they are part of the recognized place name). If a reference matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
+- parent_name: Infer and set parent locations based on textual containment. If uncertain, add "ENTITY_AMBIGUOUS" to ambiguities.
 - sentiment: Float from -1.0 to 1.0.
 - title: Max 5 words.
 
