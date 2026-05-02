@@ -181,21 +181,21 @@ export default function AtlasScreen({ route, navigation }: any) {
           computeHeight(r.id);
         }
       });
-      // Compute centroid and total mem_count for cluster nodes
-      const computeCentroidAndMemories = (id: string) => {
+      // Compute centroid and total place_count for cluster nodes
+      const computeCentroidAndPlaces = (id: string) => {
         const node = entityMap.get(id);
         if (!node) return;
 
         // First compute children recursively (bottom-up)
-        node.children.forEach((cid: string) => computeCentroidAndMemories(cid));
+        node.children.forEach((cid: string) => computeCentroidAndPlaces(cid));
 
         let sumLat = 0, sumLon = 0, count = 0;
-        let totalMemories = node.mem_count || 0; // Start with its own memories
+        let totalPlaces = 0;
 
         for (const cid of node.children) {
           const child = entityMap.get(cid);
           if (child) {
-            totalMemories += (child.mem_count || 0); // Aggregate memory count
+            totalPlaces += (child.place_count || 1); // Aggregate place count
             if (child.latitude != null && child.longitude != null) {
               sumLat += child.latitude;
               sumLon += child.longitude;
@@ -204,7 +204,8 @@ export default function AtlasScreen({ route, navigation }: any) {
           }
         }
         
-        node.mem_count = totalMemories; // Update the node's mem_count
+        // If it has children, its count is the sum of their counts. If not, it's 1 (itself).
+        node.place_count = totalPlaces > 0 ? totalPlaces : 1;
 
         if (count > 0 && node.children.length > 0) {
           node.latitude = sumLat / count;
@@ -212,10 +213,10 @@ export default function AtlasScreen({ route, navigation }: any) {
         }
       };
 
-      // Apply centroid and memory aggregation from roots down
+      // Apply centroid and place aggregation from roots down
       locatedRows.forEach(r => {
         if (!r.parent_id || !entityMap.has(r.parent_id)) {
-          computeCentroidAndMemories(r.id);
+          computeCentroidAndPlaces(r.id);
         }
       });
 
@@ -228,6 +229,7 @@ export default function AtlasScreen({ route, navigation }: any) {
         // Use geo_level (geographic truth) if available, otherwise fall back to tree height
         height: node.geoLevel ?? node.treeHeight ?? 0,
         hasChildren: node.children.length > 0,
+        place_count: node.place_count || 1,
         mem_count: node.mem_count,
         coordinate: { latitude: node.latitude, longitude: node.longitude }
       }));
@@ -916,7 +918,7 @@ export default function AtlasScreen({ route, navigation }: any) {
             showsUserLocation={!editingEntity}
           >
             {!editingEntity && visibleMarkers.map(marker => {
-              const size = marker.hasChildren ? 48 : (marker.mem_count > 0 ? 36 : 24);
+              const size = marker.hasChildren ? 48 : (marker.place_count > 1 ? 36 : 24);
               return (
                 <Marker
                   key={marker.id}
@@ -946,7 +948,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                       height: size,
                       borderRadius: size / 2,
                     }]}>
-                      <Text style={styles.clusterText}>{marker.mem_count}</Text>
+                      <Text style={styles.clusterText}>{marker.place_count}</Text>
                     </View>
                   </View>
 
