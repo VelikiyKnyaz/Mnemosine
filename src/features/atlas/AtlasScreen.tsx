@@ -842,7 +842,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                 title={marker.title}
                 description={marker.is_confirmed === 0 ? "⚠️ Por confirmar" : `${marker.mem_count || 0} recuerdos`}
                 pinColor={marker.is_confirmed === 0 ? 'orange' : 'red'}
-                anchor={{ x: 0.5, y: 0.5 }}
+                anchor={(marker.hasChildren || marker.mem_count > 0) ? { x: 0.5, y: 0.5 } : undefined}
                 onPress={() => {
                   const isTerritory = marker.height >= 2 || marker.hasChildren;
                   if (marker.is_confirmed === 0 && !isTerritory) {
@@ -881,7 +881,7 @@ export default function AtlasScreen({ route, navigation }: any) {
             <Text style={styles.debugText}>Marcadores Visibles: {visibleMarkers.length}</Text>
           </View>
 
-          {(editingEntity || ((confirmMode === 'none' && autoTopResult) || confirmMode === 'quick' || confirmMode === 'precise') && actionEntity) && (
+          {(editingEntity || (actionEntity && panelType === 'action')) && (
             <View style={[styles.staticPinContainer, panelMode !== 'hidden' && { paddingBottom: '45%' }]} pointerEvents="none">
               <IconButton icon="map-marker" iconColor="red" size={50} style={styles.staticPin} />
             </View>
@@ -1006,7 +1006,6 @@ export default function AtlasScreen({ route, navigation }: any) {
                             <TouchableOpacity 
                               key={item.id} 
                               onPress={() => jumpTo(item.coordinate)} 
-                              onLongPress={() => deleteEntity(item.id)}
                               style={styles.listItem}
                             >
                               <Text style={styles.listIcon}>{section.icon}</Text>
@@ -1014,6 +1013,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                                 <Text style={styles.listTitle}>{item.title}</Text>
                                 <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
                               </View>
+                              <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{margin: 0}} />
                             </TouchableOpacity>
                           ))}
                         </View>
@@ -1027,67 +1027,60 @@ export default function AtlasScreen({ route, navigation }: any) {
             {panelType === 'action' && actionEntity && (
               <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.actionPanel}>
                 <ScrollView keyboardShouldPersistTaps="handled">
-                  <Text style={{fontWeight: 'bold', fontSize: 16, marginBottom: 8}}>
+                  <Text style={{fontWeight: 'bold', fontSize: 16, marginBottom: 4}}>
                     Confirmar: {actionEntity.title}
                   </Text>
+                  <Text style={{color: '#888', fontSize: 12, marginBottom: 12}}>
+                    El marcador rojo indica dónde se guardará este lugar.
+                  </Text>
 
-                  {/* ═══ CHOOSE MODE ═══ */}
-                  {confirmMode === 'none' && (
-                    <View style={{gap: 10}}>
-                      {loadingAutoTop ? (
-                        <View style={{ alignItems: 'center', padding: 10 }}>
-                          <ActivityIndicator size="small" color="#6200ee" />
-                          <Text style={{color: '#888', marginTop: 6, fontSize: 12}}>Buscando sugerencia automática...</Text>
-                        </View>
-                      ) : autoTopResult ? (
-                        <View style={{backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 10}}>
-                          <Text style={{fontWeight: 'bold', fontSize: 16, color: '#2e7d32', marginBottom: 4}}>✨ Sugerencia Automática</Text>
-                          <Text style={{fontSize: 14, fontWeight: 'bold', color: '#333'}}>{autoTopResult.displayName?.text}</Text>
-                          <Text style={{fontSize: 12, color: '#555', marginBottom: 12}}>{autoTopResult.formattedAddress}</Text>
-                          <Text style={{color: '#666', fontSize: 12, marginBottom: 10}}>
-                            El mapa se ha movido aquí. Ajusta el marcador rojo y confirma:
-                          </Text>
-                          <Button 
-                            mode="contained" 
-                            buttonColor="#4caf50"
-                            icon="check"
-                            onPress={confirmPrecise}
-                          >
-                            Confirmar Ubicación
-                          </Button>
-                        </View>
-                      ) : null}
-
-                      <TouchableOpacity
-                        onPress={() => { setConfirmMode('quick'); searchPlaces(searchQuery); }}
-                        style={{backgroundColor: '#F3E5F5', borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center'}}
-                      >
-                        <Text style={{fontSize: 22, marginRight: 12}}>⚡</Text>
-                        <View style={{flex: 1}}>
-                          <Text style={{fontWeight: 'bold', fontSize: 14, color: '#6200ee'}}>Búsqueda rápida</Text>
-                          <Text style={{fontSize: 12, color: '#888'}}>Busca por nombre y selecciona de sugerencias</Text>
-                        </View>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => setConfirmMode('precise')}
-                        style={{backgroundColor: '#E3F2FD', borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center'}}
-                      >
-                        <Text style={{fontSize: 22, marginRight: 12}}>🎯</Text>
-                        <View style={{flex: 1}}>
-                          <Text style={{fontWeight: 'bold', fontSize: 14, color: '#1565C0'}}>Ubicación precisa</Text>
-                          <Text style={{fontSize: 12, color: '#888'}}>Busca por dirección o arrastra el mapa</Text>
-                        </View>
-                      </TouchableOpacity>
+                  {/* ── Address field (always visible) ── */}
+                  <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 12}}>
+                    <View style={{flex: 1}}>
+                      <TextInput
+                        mode="outlined"
+                        label="Dirección"
+                        value={addressQuery}
+                        onChangeText={setAddressQuery}
+                        onSubmitEditing={sendAddress}
+                        dense
+                        placeholder="Escribe una dirección para mover el marcador"
+                        style={{backgroundColor: 'white'}}
+                        returnKeyType="send"
+                      />
                     </View>
-                  )}
+                    <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{marginLeft: 4}} />
+                  </View>
 
-                  {/* ═══ QUICK MODE ═══ */}
+                  {/* ── Auto suggestion ── */}
+                  {loadingAutoTop ? (
+                    <View style={{ alignItems: 'center', padding: 10 }}>
+                      <ActivityIndicator size="small" color="#6200ee" />
+                      <Text style={{color: '#888', marginTop: 6, fontSize: 12}}>Buscando sugerencia automática...</Text>
+                    </View>
+                  ) : autoTopResult ? (
+                    <View style={{backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 12}}>
+                      <Text style={{fontWeight: 'bold', fontSize: 14, color: '#2e7d32', marginBottom: 2}}>✨ Sugerencia</Text>
+                      <Text style={{fontSize: 14, fontWeight: 'bold', color: '#333'}}>{autoTopResult.displayName?.text}</Text>
+                      <Text style={{fontSize: 12, color: '#555'}}>{autoTopResult.formattedAddress}</Text>
+                    </View>
+                  ) : null}
+
+                  {/* ── Search alternatives (expandable) ── */}
+                  <TouchableOpacity
+                    onPress={() => {
+                      setConfirmMode(confirmMode === 'quick' ? 'none' : 'quick');
+                      if (confirmMode !== 'quick') searchPlaces(searchQuery);
+                    }}
+                    style={{paddingVertical: 8, alignItems: 'center', marginBottom: 6}}
+                  >
+                    <Text style={{color: '#6200ee', fontSize: 13, fontWeight: 'bold'}}>
+                      {confirmMode === 'quick' ? '▲ Ocultar alternativas' : '🔍 Buscar alternativas'}
+                    </Text>
+                  </TouchableOpacity>
+
                   {confirmMode === 'quick' && (
-                    <View>
-                      <Text style={{color: '#666', fontSize: 12, marginBottom: 10}}>
-                        Busca y selecciona una sugerencia. Puedes ajustar el marcador rojo arrastrando el mapa.
-                      </Text>
-                      
+                    <View style={{marginBottom: 10}}>
                       <TextInput
                         mode="outlined"
                         label="Buscar lugar"
@@ -1135,70 +1128,25 @@ export default function AtlasScreen({ route, navigation }: any) {
                           Sin resultados. Intenta con otro término.
                         </Text>
                       )}
-
-                      {/* Parent assignment feature removed to simplify UX */}
-
-                      <Button 
-                        mode="contained" 
-                        onPress={confirmPrecise} 
-                        style={{marginTop: 12, marginBottom: 6}}
-                        icon="check"
-                      >
-                        Confirmar Ubicación
-                      </Button>
-
-                      <TouchableOpacity
-                        onPress={() => setConfirmMode('none')}
-                        style={{paddingVertical: 10, alignItems: 'center', marginTop: 4}}
-                      >
-                        <Text style={{color: '#888', fontSize: 12}}>← Cambiar método</Text>
-                      </TouchableOpacity>
                     </View>
                   )}
 
-                  {/* ═══ PRECISE MODE ═══ */}
-                  {confirmMode === 'precise' && (
-                    <View>
-                      <Text style={{color: '#666', fontSize: 12, marginBottom: 10}}>
-                        Arrastra el mapa para posicionar el marcador rojo.
-                      </Text>
+                  {/* ── Confirm button: ALWAYS saves current map center (red pin) ── */}
+                  <Button 
+                    mode="contained" 
+                    onPress={confirmPrecise} 
+                    style={{marginTop: 8}}
+                    icon="map-marker-check"
+                  >
+                    Guardar posición del marcador
+                  </Button>
 
-                      <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 10}}>
-                        <View style={{flex: 1}}>
-                          <TextInput
-                            mode="outlined"
-                            label="Dirección"
-                            value={addressQuery}
-                            onChangeText={setAddressQuery}
-                            onSubmitEditing={sendAddress}
-                            dense
-                            placeholder="ej: Calle 10, Medellín, Colombia"
-                            style={{backgroundColor: 'white'}}
-                            returnKeyType="send"
-                          />
-                        </View>
-                        <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{marginLeft: 4}} />
-                      </View>
-
-                      {/* Parent assignment feature removed to simplify UX */}
-
-                      <Button 
-                        mode="contained" 
-                        onPress={confirmPrecise} 
-                        style={{marginTop: 12}}
-                        icon="check"
-                      >
-                        Confirmar Ubicación
-                      </Button>
-
-                      <TouchableOpacity
-                        onPress={() => { setConfirmMode('none'); }}
-                        style={{paddingVertical: 10, alignItems: 'center', marginTop: 4}}
-                      >
-                        <Text style={{color: '#888', fontSize: 12}}>← Cambiar método</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
+                  <TouchableOpacity
+                    onPress={() => deleteEntity(actionEntity.id)}
+                    style={{paddingVertical: 12, alignItems: 'center', marginTop: 8}}
+                  >
+                    <Text style={{color: '#B00020', fontSize: 13}}>Eliminar este lugar</Text>
+                  </TouchableOpacity>
                 </ScrollView>
               </KeyboardAvoidingView>
             )}
