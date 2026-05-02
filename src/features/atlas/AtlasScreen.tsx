@@ -930,7 +930,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                   coordinate={marker.coordinate}
                   anchor={isCluster ? { x: 0.5, y: 0.5 } : { x: 0.5, y: 1 }}
                   calloutAnchor={isCluster ? { x: 1, y: 0.5 } : { x: 0.5, y: 0 }}
-                  tracksViewChanges={true}
+                  tracksViewChanges={false}
                   onPress={(e) => {
                     if (e.stopPropagation) e.stopPropagation();
                     const isTerritory = marker.height >= 2 || marker.hasChildren;
