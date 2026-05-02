@@ -345,11 +345,8 @@ export default function AtlasScreen({ route, navigation }: any) {
         currNode = markers.find(m => m.id === currNode.parent_id);
       }
       if (contextParts.length === 0) {
-        try {
-          const db = await getDb();
-          const profile = await db.getFirstAsync<any>('SELECT country FROM user_profile LIMIT 1');
-          if (profile && profile.country) contextParts.push(profile.country);
-        } catch {}
+        // No parent lineage. We used to fallback to profile.country here, 
+        // but this overrides global footprint searches for international locations.
       }
       if (contextParts.length > 0) contextQuery += ' ' + contextParts.join(' ');
 
@@ -436,17 +433,9 @@ export default function AtlasScreen({ route, navigation }: any) {
           currNode = markers.find(m => m.id === currNode.parent_id);
         }
         
-        // If no parent lineage exists, fallback to user's country as context
         if (contextParts.length === 0) {
-          try {
-            const db = await getDb();
-            const profile = await db.getFirstAsync<any>('SELECT country FROM user_profile LIMIT 1');
-            if (profile && profile.country) {
-              contextParts.push(profile.country);
-            }
-          } catch (profileErr) {
-            console.warn('Could not load user profile context', profileErr);
-          }
+          // No parent lineage. We used to fallback to profile.country here, 
+          // but this overrides global footprint searches for international locations.
         }
 
         if (contextParts.length > 0) {
@@ -1094,30 +1083,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                         </Text>
                       )}
 
-                      {/* Parent assignment */}
-                      <TouchableOpacity
-                        onPress={() => setShowParentAssign(!showParentAssign)}
-                        style={{paddingVertical: 6, alignItems: 'center', marginTop: 10}}
-                      >
-                        <Text style={{color: '#6200ee', fontSize: 13, fontWeight: 'bold'}}>
-                          {showParentAssign ? '▲ Ocultar' : '📎 Hace parte de otro lugar'}
-                        </Text>
-                      </TouchableOpacity>
-
-                      {showParentAssign && (
-                        <View style={{marginTop: 4}}>
-                          <SmartDropdown
-                            label="Lugar padre"
-                            value=""
-                            items={allLocations}
-                            enablePlaces={false}
-                            onSelect={(item) => {
-                              if (item) assignParentToAction(item.id);
-                            }}
-                            placeholder="Buscar lugar existente..."
-                          />
-                        </View>
-                      )}
+                      {/* Parent assignment feature removed to simplify UX */}
 
                       <Button 
                         mode="contained" 
@@ -1161,30 +1127,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                         <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{marginLeft: 4}} />
                       </View>
 
-                      {/* Parent assignment */}
-                      <TouchableOpacity
-                        onPress={() => setShowParentAssign(!showParentAssign)}
-                        style={{paddingVertical: 6, alignItems: 'center'}}
-                      >
-                        <Text style={{color: '#6200ee', fontSize: 13, fontWeight: 'bold'}}>
-                          {showParentAssign ? '▲ Ocultar' : '📎 Hace parte de otro lugar'}
-                        </Text>
-                      </TouchableOpacity>
-
-                      {showParentAssign && (
-                        <View style={{marginTop: 4}}>
-                          <SmartDropdown
-                            label="Lugar padre"
-                            value=""
-                            items={allLocations}
-                            enablePlaces={false}
-                            onSelect={(item) => {
-                              if (item) assignParentToAction(item.id);
-                            }}
-                            placeholder="Buscar lugar existente..."
-                          />
-                        </View>
-                      )}
+                      {/* Parent assignment feature removed to simplify UX */}
 
                       <Button 
                         mode="contained" 
