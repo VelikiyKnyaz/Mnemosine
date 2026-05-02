@@ -908,15 +908,15 @@ export default function AtlasScreen({ route, navigation }: any) {
             showsUserLocation={!editingEntity}
           >
             {!editingEntity && visibleMarkers.map(marker => {
-              const isEmptyPlace = marker.is_confirmed === 1 && marker.mem_count === 0 && !marker.hasChildren;
-              if (isEmptyPlace) return null;
+              const isCluster = marker.hasChildren || marker.mem_count > 0;
               
-              const size = marker.hasChildren ? 48 : 36;
               return (
                 <Marker
                   key={marker.id}
                   coordinate={marker.coordinate}
-                  anchor={{ x: 0.5, y: 0.5 }}
+                  {...(isCluster ? { anchor: { x: 0.5, y: 0.5 } } : {})}
+                  calloutAnchor={isCluster ? { x: 1, y: 0.5 } : { x: 0.5, y: 0 }}
+                  pinColor={!isCluster ? (marker.is_confirmed === 0 ? 'orange' : 'red') : undefined}
                   tracksViewChanges={true}
                   onPress={(e) => {
                     if (e.stopPropagation) e.stopPropagation();
@@ -930,32 +930,32 @@ export default function AtlasScreen({ route, navigation }: any) {
                       setPanelMode('peek');
                     } else {
                       setSelectedPlaceEntity(marker);
-                      setMemoryEntityId(marker.id);
-                      setPanelType('memories');
-                      setPanelMode('peek');
-                      setEditingEntity(null);
                     }
                   }}
                 >
-                  <View style={{ width: size + 10, height: size + 10, justifyContent: 'center', alignItems: 'center' }}>
-                    <MaterialCommunityIcons 
-                      name="circle" 
-                      size={size} 
-                      color={marker.is_confirmed === 0 ? '#ff9800' : '#e53935'} 
-                      style={{ position: 'absolute' }} 
-                    />
-                    <Text style={{
-                      color: 'white',
-                      fontWeight: 'bold',
-                      fontSize: size * 0.4,
-                      zIndex: 1,
-                      textShadowColor: 'rgba(0, 0, 0, 0.5)',
-                      textShadowOffset: {width: 0, height: 1},
-                      textShadowRadius: 1
+                  {isCluster ? (
+                    <View style={[styles.clusterMarker, { 
+                      backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
+                      width: marker.hasChildren ? 48 : 36,
+                      height: marker.hasChildren ? 48 : 36,
+                      borderRadius: marker.hasChildren ? 24 : 18,
+                    }]}>
+                      <Text style={styles.clusterText}>{marker.mem_count}</Text>
+                    </View>
+                  ) : null}
+
+                  {marker.is_confirmed !== 0 && (
+                    <Callout tooltip onPress={() => {
+                        setMemoryEntityId(marker.id);
+                        setPanelType('memories');
+                        setPanelMode('peek');
                     }}>
-                      {marker.mem_count || ''}
-                    </Text>
-                  </View>
+                      <View style={{ backgroundColor: '#1565C0', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, flexDirection: 'row', alignItems: 'center' }}>
+                         <Text style={{ fontWeight: 'bold', color: 'white', marginRight: 4 }}>Ver recuerdos</Text>
+                         <MaterialCommunityIcons name="chevron-right" size={16} color="white" />
+                      </View>
+                    </Callout>
+                  )}
                 </Marker>
               );
             })}
@@ -1369,5 +1369,21 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 8,
   },
-  debugText: { color: 'white', fontSize: 10, fontWeight: 'bold' }
+  debugText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
+  clusterMarker: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+    elevation: 4,
+  },
+  clusterText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
 });
