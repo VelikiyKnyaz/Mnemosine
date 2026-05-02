@@ -394,7 +394,17 @@ export default function AtlasScreen({ route, navigation }: any) {
       });
 
       const searchBody: any = { textQuery: contextQuery, maxResultCount: 1 };
-      if (validCoords) {
+
+      // If the entity already has confirmed coordinates, use them as a tight bias
+      const existingMarker = markers.find(m => m.id === entity.id);
+      if (existingMarker?.coordinate?.latitude && existingMarker?.is_confirmed) {
+        searchBody.locationBias = {
+          circle: {
+            center: { latitude: existingMarker.coordinate.latitude, longitude: existingMarker.coordinate.longitude },
+            radius: 5000, // 5km radius - very tight to the existing location
+          }
+        };
+      } else if (validCoords) {
         searchBody.locationBias = {
           rectangle: {
             low: { latitude: Math.max(-90, minLat - 5), longitude: Math.max(-180, minLon - 5) },
