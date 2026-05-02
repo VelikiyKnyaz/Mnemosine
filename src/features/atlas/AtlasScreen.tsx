@@ -837,14 +837,12 @@ export default function AtlasScreen({ route, navigation }: any) {
           >
             {!editingEntity && visibleMarkers.map(marker => {
               const isCluster = marker.hasChildren || marker.mem_count > 0;
-              const size = marker.hasChildren ? 48 : isCluster ? 36 : 20;
               return (
               <Marker
                 key={marker.id}
                 coordinate={marker.coordinate}
-                anchor={{ x: 0.5, y: 0.5 }}
-                calloutAnchor={{ x: 0.5, y: 0 }}
-                tracksViewChanges={false}
+                {...(isCluster ? { anchor: { x: 0.5, y: 0.5 } } : {})}
+                pinColor={!isCluster ? (marker.is_confirmed === 0 ? 'orange' : 'red') : undefined}
                 onPress={() => {
                   const isTerritory = marker.height >= 2 || marker.hasChildren;
                   if (marker.is_confirmed === 0 && !isTerritory) {
@@ -861,18 +859,16 @@ export default function AtlasScreen({ route, navigation }: any) {
                   }
                 }}
               >
-                <View style={[styles.clusterMarker, { 
-                  backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : isCluster ? '#e53935' : '#1565C0',
-                  width: size,
-                  height: size,
-                  borderRadius: size / 2,
-                }]}>
-                  {isCluster ? (
+                {isCluster ? (
+                  <View style={[styles.clusterMarker, { 
+                    backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
+                    width: marker.hasChildren ? 48 : 36,
+                    height: marker.hasChildren ? 48 : 36,
+                    borderRadius: marker.hasChildren ? 24 : 18,
+                  }]}>
                     <Text style={styles.clusterText}>{marker.mem_count}</Text>
-                  ) : (
-                    <Text style={{color: 'white', fontSize: 10}}>●</Text>
-                  )}
-                </View>
+                  </View>
+                ) : null}
               </Marker>
               );
             })}
