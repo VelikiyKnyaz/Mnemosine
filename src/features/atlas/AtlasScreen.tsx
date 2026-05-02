@@ -331,7 +331,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.addressComponents',
         };
 
-        // 1. Gather Context from Ancestors
+        // 1. Gather Context from Ancestors or Profile
         let contextQuery = query.trim();
         let contextParts: string[] = [];
         let currNode = markers.find(m => m.id === actionEntity?.parent_id);
@@ -339,6 +339,21 @@ export default function AtlasScreen({ route, navigation }: any) {
           contextParts.push(currNode.title);
           currNode = markers.find(m => m.id === currNode.parent_id);
         }
+        
+        // If no parent lineage exists, fallback to user's birthplace/hometown as context
+        if (contextParts.length === 0) {
+          try {
+            const db = await getDb();
+            const profile = await db.getFirstAsync<any>('SELECT hometown, country FROM user_profile LIMIT 1');
+            if (profile) {
+              if (profile.hometown) contextParts.push(profile.hometown);
+              if (profile.country) contextParts.push(profile.country);
+            }
+          } catch (profileErr) {
+            console.warn('Could not load user profile context', profileErr);
+          }
+        }
+
         if (contextParts.length > 0) {
           contextQuery += ' ' + contextParts.join(' ');
         }
