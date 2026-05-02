@@ -927,29 +927,6 @@ export default function AtlasScreen({ route, navigation }: any) {
                 panelType === 'memories' ? 'Explorador de Recuerdos' : ''}
              </Text>
              <View style={{flexDirection: 'row'}}>
-               {panelType === 'memories' && memoryEntityId && (
-                 <IconButton 
-                   icon="pencil" 
-                   iconColor="#6200ee"
-                   onPress={() => {
-                     const m = destacados.find(x => x.id === memoryEntityId);
-                     if (m) {
-                       setActionEntity(m);
-                       setConfirmMode('none');
-                       setSearchQuery(m.title);
-                       fetchTopSuggestion(m);
-                       setSelectedPlace(null);
-                       setPlaceSuggestions([]);
-                       setShowParentAssign(false);
-                       setAddressQuery('');
-                       setEditingEntity(null);
-                       setMemoryEntityId(null);
-                       setPanelType('action'); 
-                       setPanelMode('peek');
-                     }
-                   }} 
-                 />
-               )}
                {panelType !== 'action' && (
                  <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
                )}
@@ -1013,7 +990,22 @@ export default function AtlasScreen({ route, navigation }: any) {
                                 <Text style={styles.listTitle}>{item.title}</Text>
                                 <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
                               </View>
-                              <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{margin: 0}} />
+                              <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                                <IconButton icon="pencil" size={20} iconColor="#6200ee" onPress={() => {
+                                  setActionEntity(item);
+                                  setConfirmMode('none');
+                                  setSearchQuery(item.title);
+                                  fetchTopSuggestion(item);
+                                  setSelectedPlace(null);
+                                  setPlaceSuggestions([]);
+                                  setAddressQuery('');
+                                  setEditingEntity(null);
+                                  setMemoryEntityId(null);
+                                  setPanelType('action'); 
+                                  setPanelMode('peek');
+                                }} style={{margin: 0}} />
+                                <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{margin: 0}} />
+                              </View>
                             </TouchableOpacity>
                           ))}
                         </View>
