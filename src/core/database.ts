@@ -107,6 +107,14 @@ export const initDatabase = async () => {
 export const inheritCoordinatesFromParent = async (childId: string, parentId: string) => {
   try {
     const database = await getDb();
+    
+    // Only inherit if child has no coordinates yet — never overwrite confirmed coordinates
+    const child = await database.getFirstAsync<{latitude: number | null}>('SELECT latitude FROM entities WHERE id = ?', childId);
+    if (child?.latitude !== null && child?.latitude !== undefined) {
+      console.log(`Child ${childId} already has coordinates, skipping inheritance.`);
+      return;
+    }
+    
     const parent = await database.getFirstAsync<{latitude: number | null, longitude: number | null}>(
       'SELECT latitude, longitude FROM entities WHERE id = ?', parentId
     );

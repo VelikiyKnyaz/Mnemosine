@@ -128,6 +128,35 @@ export default function AtlasScreen({ route, navigation }: any) {
           computeHeight(r.id);
         }
       });
+      // Compute centroid for cluster nodes (city/state/country) from children coordinates
+      const computeCentroid = (id: string) => {
+        const node = entityMap.get(id);
+        if (!node || node.children.length === 0) return;
+        
+        // First compute children centroids recursively (bottom-up)
+        node.children.forEach((cid: string) => computeCentroid(cid));
+        
+        let sumLat = 0, sumLon = 0, count = 0;
+        for (const cid of node.children) {
+          const child = entityMap.get(cid);
+          if (child?.latitude != null && child?.longitude != null) {
+            sumLat += child.latitude;
+            sumLon += child.longitude;
+            count++;
+          }
+        }
+        if (count > 0) {
+          node.latitude = sumLat / count;
+          node.longitude = sumLon / count;
+        }
+      };
+      
+      // Apply centroid from roots down
+      locatedRows.forEach(r => {
+        if (!r.parent_id || !entityMap.has(r.parent_id)) {
+          computeCentroid(r.id);
+        }
+      });
 
       const processedMarkers = Array.from(entityMap.values()).map(node => ({
         id: node.id,
@@ -275,6 +304,18 @@ export default function AtlasScreen({ route, navigation }: any) {
         const apiKey = await getConfig('GOOGLE_MAPS_KEY');
         if (!apiKey) { setSearchingPlaces(false); return; }
 
+        const searchBody: any = { textQuery: query.trim(), maxResultCount: 5 };
+        
+        // Add location bias from current map view for more relevant results
+        if (currentRegion) {
+          searchBody.locationBias = {
+            circle: {
+              center: { latitude: currentRegion.latitude, longitude: currentRegion.longitude },
+              radius: Math.max(1000, currentRegion.latitudeDelta * 111000), // rough meters
+            }
+          };
+        }
+
         const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
           method: 'POST',
           headers: {
@@ -282,7 +323,7 @@ export default function AtlasScreen({ route, navigation }: any) {
             'X-Goog-Api-Key': apiKey,
             'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.addressComponents',
           },
-          body: JSON.stringify({ textQuery: query.trim(), maxResultCount: 5 }),
+          body: JSON.stringify(searchBody),
         });
         const data = await res.json();
         setPlaceSuggestions(data.places || []);
@@ -413,22 +454,23 @@ export default function AtlasScreen({ route, navigation }: any) {
       }
     });
 
-    // Smart split: check if a cluster's children are too spread for the current viewport
-    const shouldSplitEarly = (nodeId: string): boolean => {
+    // Smart split: measure child-to-child spread relative to viewport
+    const childSpread = (nodeId: string): number => {
       const children = childrenOf.get(nodeId);
-      if (!children || children.length < 2) return false;
-      const node = markerMap.get(nodeId);
-      if (!node?.coordinate) return false;
+      if (!children || children.length < 2) return 0;
       
-      let maxDist = 0;
+      let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+      let count = 0;
       for (const child of children) {
         if (!child.coordinate) continue;
-        const dist = Math.abs(child.coordinate.latitude - node.coordinate.latitude)
-                   + Math.abs(child.coordinate.longitude - node.coordinate.longitude);
-        maxDist = Math.max(maxDist, dist);
+        minLat = Math.min(minLat, child.coordinate.latitude);
+        maxLat = Math.max(maxLat, child.coordinate.latitude);
+        minLon = Math.min(minLon, child.coordinate.longitude);
+        maxLon = Math.max(maxLon, child.coordinate.longitude);
+        count++;
       }
-      // If children span > 35% of viewport, split early
-      return maxDist > delta * 0.35;
+      if (count < 2) return 0;
+      return (maxLat - minLat) + (maxLon - minLon);
     };
 
     // Determine which clusters should force-dissolve (cascade down the tree)
@@ -438,20 +480,35 @@ export default function AtlasScreen({ route, navigation }: any) {
       changed = false;
       markers.forEach(m => {
         if (forceDissolved.has(m.id)) return;
-        // Only check nodes that are currently acting as clusters (height > visibleHeight)
-        // OR nodes whose parent was just dissolved (making them newly visible clusters)
         const isCluster = m.height > visibleHeight || (m.parent_id && forceDissolved.has(m.parent_id));
-        if (isCluster && m.hasChildren && shouldSplitEarly(m.id)) {
-          forceDissolved.add(m.id);
-          changed = true;
+        if (isCluster && m.hasChildren) {
+          const spread = childSpread(m.id);
+          // If children span > 25% of viewport, split early
+          if (spread > delta * 0.25) {
+            forceDissolved.add(m.id);
+            changed = true;
+          }
         }
       });
     }
 
+    // Inverse rule: nodes at their normal threshold should DEFER splitting
+    // if their children are still tightly clustered (< 8% of viewport)
+    const forceKeepClustered = new Set<string>();
+    markers.forEach(m => {
+      if (m.height <= visibleHeight && m.hasChildren) {
+        const spread = childSpread(m.id);
+        if (spread < delta * 0.08) {
+          forceKeepClustered.add(m.id);
+        }
+      }
+    });
+
     return markers.filter(m => {
       // Always show the marker being edited
       if (editingEntity && editingEntity.id === m.id) return true;
-      // Don't force-show actionEntity on map (avoids phantom pin during confirmation)
+      // Hide actionEntity marker on map (avoids phantom pin during confirmation)
+      if (actionEntity && actionEntity.id === m.id) return false;
       
       if (!m.coordinate) return false;
 
@@ -463,6 +520,9 @@ export default function AtlasScreen({ route, navigation }: any) {
 
       // Show if parent was force-dissolved (this node replaces it)
       if (parent && forceDissolved.has(parent.id)) return true;
+
+      // Inverse rule: if parent should stay clustered, hide children
+      if (parent && forceKeepClustered.has(parent.id)) return false;
 
       // Normal rule: show if height is appropriate and parent is above zoom level
       return m.height <= visibleHeight && parentHeight > visibleHeight;
