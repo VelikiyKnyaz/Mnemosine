@@ -39,6 +39,8 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [showParentAssign, setShowParentAssign] = useState(false);
   const [allLocations, setAllLocations] = useState<any[]>([]);
   const [confirmMode, setConfirmMode] = useState<'none'|'quick'|'precise'>('none');
+  const [autoTopResult, setAutoTopResult] = useState<any | null>(null);
+  const [loadingAutoTop, setLoadingAutoTop] = useState(false);
   const [addressQuery, setAddressQuery] = useState('');
   const searchDebounce = useRef<NodeJS.Timeout | null>(null);
   const addressDebounce = useRef<NodeJS.Timeout | null>(null);
@@ -194,13 +196,25 @@ export default function AtlasScreen({ route, navigation }: any) {
       setMarkers(processedMarkers);
       setDestacados(processedMarkers);
       
-      // Por Confirmar: unconfirmed with coords + ALL locations without coords
+      // Por Confirmar: unconfirmed with coords + ALL unconfirmed locations without coords
       const noCoordRows = await db.getAllAsync<any>(
-        `SELECT id, name as title, is_confirmed, parent_id, 0 as mem_count 
-         FROM entities WHERE type = 'LOCATION' AND latitude IS NULL`
+        `SELECT id, name as title, is_confirmed, parent_id, metadata, 0 as mem_count 
+         FROM entities WHERE type = 'LOCATION' AND latitude IS NULL AND is_confirmed = 0`
       );
-      const unconfirmedWithCoords = processedMarkers.filter(m => m.is_confirmed === 0);
-      const noCoordFormatted = noCoordRows.map(r => ({
+      
+      const isTerritory = (m: any) => {
+        if (m.height >= 2 || m.hasChildren) return true;
+        if (m.metadata) {
+          try {
+            const meta = JSON.parse(m.metadata);
+            if (meta.geo_level >= 2) return true;
+          } catch {}
+        }
+        return false;
+      };
+
+      const unconfirmedWithCoords = processedMarkers.filter(m => m.is_confirmed === 0 && !isTerritory(m));
+      const noCoordFormatted = noCoordRows.filter(m => !isTerritory(m)).map(r => ({
         id: r.id, title: r.title, is_confirmed: 0, parent_id: r.parent_id,
         height: 0, hasChildren: false, mem_count: r.mem_count,
         coordinate: null,
@@ -309,6 +323,88 @@ export default function AtlasScreen({ route, navigation }: any) {
 
 
   // ── Place Confirmation Flow ──
+
+  const fetchTopSuggestion = async (entity: any) => {
+    try {
+      setLoadingAutoTop(true);
+      setAutoTopResult(null);
+      const apiKey = await getConfig('GOOGLE_MAPS_KEY');
+      if (!apiKey) { setLoadingAutoTop(false); return; }
+
+      const headers = {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.addressComponents',
+      };
+
+      let contextQuery = entity.title.trim();
+      let contextParts: string[] = [];
+      let currNode = markers.find(m => m.id === entity.parent_id);
+      while (currNode) {
+        contextParts.push(currNode.title);
+        currNode = markers.find(m => m.id === currNode.parent_id);
+      }
+      if (contextParts.length === 0) {
+        try {
+          const db = await getDb();
+          const profile = await db.getFirstAsync<any>('SELECT country FROM user_profile LIMIT 1');
+          if (profile && profile.country) contextParts.push(profile.country);
+        } catch {}
+      }
+      if (contextParts.length > 0) contextQuery += ' ' + contextParts.join(' ');
+
+      let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+      let validCoords = false;
+      markers.forEach(m => {
+        if (m.coordinate && m.is_confirmed) {
+          validCoords = true;
+          if (m.coordinate.latitude < minLat) minLat = m.coordinate.latitude;
+          if (m.coordinate.latitude > maxLat) maxLat = m.coordinate.latitude;
+          if (m.coordinate.longitude < minLon) minLon = m.coordinate.longitude;
+          if (m.coordinate.longitude > maxLon) maxLon = m.coordinate.longitude;
+        }
+      });
+
+      const searchBody: any = { textQuery: contextQuery, maxResultCount: 1 };
+      if (validCoords) {
+        searchBody.locationBias = {
+          rectangle: {
+            low: { latitude: Math.max(-90, minLat - 5), longitude: Math.max(-180, minLon - 5) },
+            high: { latitude: Math.min(90, maxLat + 5), longitude: Math.min(180, maxLon + 5) }
+          }
+        };
+      } else if (currentRegion) {
+        searchBody.locationBias = {
+          circle: {
+            center: { latitude: currentRegion.latitude, longitude: currentRegion.longitude },
+            radius: Math.max(5000, currentRegion.latitudeDelta * 111000),
+          }
+        };
+      }
+
+      let res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST', headers, body: JSON.stringify(searchBody),
+      });
+      let data = await res.json();
+      let results = data.places || [];
+
+      if (results.length === 0 && searchBody.locationBias) {
+        res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST', headers, body: JSON.stringify({ textQuery: contextQuery, maxResultCount: 1 }),
+        });
+        data = await res.json();
+        results = data.places || [];
+      }
+      
+      if (results.length > 0) {
+        setAutoTopResult(results[0]);
+      }
+    } catch (e) {
+      console.error('Auto top suggestion error:', e);
+    } finally {
+      setLoadingAutoTop(false);
+    }
+  };
 
   const searchPlaces = async (query: string) => {
     setSearchQuery(query);
@@ -524,18 +620,9 @@ export default function AtlasScreen({ route, navigation }: any) {
       // Set parent, but don't confirm coordinates yet - let user adjust marker
       await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", parentId, actionEntity.id);
       
-      // Teleport map to parent's location + small offset
-      const parent = await db.getFirstAsync<{latitude: number, longitude: number}>(
-        "SELECT latitude, longitude FROM entities WHERE id = ?", parentId
-      );
-      if (parent?.latitude) {
-        const jLat = parent.latitude + (Math.random() - 0.5) * 0.0008;
-        const jLon = parent.longitude + (Math.random() - 0.5) * 0.0008;
-        mapRef.current?.animateToRegion({
-          latitude: jLat, longitude: jLon,
-          latitudeDelta: 0.005, longitudeDelta: 0.005,
-        }, 500);
-      }
+      // Teleport map to parent's location ONLY IF the actionEntity does not have its own location yet
+      // Actually, per user request: "ni debe trasladarse un lugar a el si la ciudad es el padre."
+      // So we remove the teleport map logic entirely to avoid confusing jumps.
       
       setShowParentAssign(false);
     } catch (e) {
@@ -727,10 +814,12 @@ export default function AtlasScreen({ route, navigation }: any) {
                 description={marker.is_confirmed === 0 ? "⚠️ Por confirmar" : `${marker.mem_count || 0} recuerdos`}
                 pinColor={marker.is_confirmed === 0 ? 'orange' : 'red'}
                 onPress={() => {
-                  if (marker.is_confirmed === 0) {
+                  const isTerritory = marker.height >= 2 || marker.hasChildren;
+                  if (marker.is_confirmed === 0 && !isTerritory) {
                     setActionEntity(marker);
                     setConfirmMode('none');
                     setSearchQuery(marker.title);
+                    fetchTopSuggestion(marker);
                     setPanelType('action');
                     setPanelMode('peek');
                   } else {
@@ -761,7 +850,7 @@ export default function AtlasScreen({ route, navigation }: any) {
             <Text style={styles.debugText}>Marcadores Visibles: {visibleMarkers.length}</Text>
           </View>
 
-          {(editingEntity || (confirmMode === 'precise' && actionEntity)) && (
+          {(editingEntity || (confirmMode === 'manual' && actionEntity)) && (
             <View style={[styles.staticPinContainer, panelMode !== 'hidden' && { paddingBottom: '45%' }]} pointerEvents="none">
               <IconButton icon="map-marker" iconColor="red" size={50} style={styles.staticPin} />
             </View>
@@ -834,6 +923,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                   <TouchableOpacity key={item.id} onPress={() => { 
                     setActionEntity(item); 
                     setSearchQuery(item.title);
+                    fetchTopSuggestion(item);
                     setSelectedPlace(null);
                     setPlaceSuggestions([]);
                     setShowParentAssign(false);
@@ -852,22 +942,40 @@ export default function AtlasScreen({ route, navigation }: any) {
                   </TouchableOpacity>
                 ))}
 
-                {/* Confirmed items */}
+                {/* Confirmed items - Grouped */}
                 {destacados.length === 0 && porConfirmar.length === 0 ? (
                   <Text style={styles.emptyText}>No hay lugares registrados aún.</Text>
-                ) : destacados.filter(d => d.is_confirmed !== 0).map(item => {
-                  const icon = item.height >= 4 ? '🏳️' : item.height >= 2 ? '🏙️' : item.mem_count > 0 ? '⭐️' : '📍';
-                  return (
-                    <TouchableOpacity key={item.id} onPress={() => jumpTo(item.coordinate)} style={styles.listItem}>
-                      <Text style={styles.listIcon}>{icon}</Text>
-                      <View style={{flex:1}}>
-                        <Text style={styles.listTitle}>{item.title}</Text>
-                        <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
-                      </View>
-                      <IconButton icon="folder-open" size={24} iconColor="#6200ee" onPress={() => { setMemoryEntityId(item.id); setPanelType('memories'); setPanelMode('peek'); }} />
-                    </TouchableOpacity>
-                  );
-                })}
+                ) : (
+                  <>
+                    {[
+                      { title: 'Países', filter: (d: any) => d.height >= 4, icon: '🏳️' },
+                      { title: 'Regiones y Estados', filter: (d: any) => d.height === 3, icon: '🗺️' },
+                      { title: 'Ciudades y Pueblos', filter: (d: any) => d.height === 2, icon: '🏙️' },
+                      { title: 'Lugares Específicos', filter: (d: any) => d.height < 2, icon: '📍' }
+                    ].map((section, idx) => {
+                      const items = destacados.filter(d => d.is_confirmed !== 0 && section.filter(d));
+                      if (items.length === 0) return null;
+                      
+                      return (
+                        <View key={idx}>
+                          <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#666', marginTop: 15, marginBottom: 8, marginLeft: 10 }}>
+                            {section.title}
+                          </Text>
+                          {items.map(item => (
+                            <TouchableOpacity key={item.id} onPress={() => jumpTo(item.coordinate)} style={styles.listItem}>
+                              <Text style={styles.listIcon}>{section.icon}</Text>
+                              <View style={{flex:1}}>
+                                <Text style={styles.listTitle}>{item.title}</Text>
+                                <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
+                              </View>
+                              <IconButton icon="folder-open" size={24} iconColor="#6200ee" onPress={() => { setMemoryEntityId(item.id); setPanelType('memories'); setPanelMode('peek'); }} />
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      );
+                    })}
+                  </>
+                )}
               </ScrollView>
             )}
 
@@ -881,102 +989,48 @@ export default function AtlasScreen({ route, navigation }: any) {
                   {/* ═══ CHOOSE MODE ═══ */}
                   {confirmMode === 'none' && (
                     <View style={{gap: 10}}>
-                      <TouchableOpacity
-                        onPress={() => { setConfirmMode('quick'); searchPlaces(searchQuery); }}
-                        style={{backgroundColor: '#F3E5F5', borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center'}}
-                      >
-                        <Text style={{fontSize: 22, marginRight: 12}}>⚡</Text>
-                        <View style={{flex: 1}}>
-                          <Text style={{fontWeight: 'bold', fontSize: 14, color: '#6200ee'}}>Búsqueda rápida</Text>
-                          <Text style={{fontSize: 12, color: '#888'}}>Busca por nombre y selecciona de sugerencias</Text>
+                      {loadingAutoTop ? (
+                        <ActivityIndicator size="small" color="#6200ee" style={{ marginVertical: 10 }} />
+                      ) : autoTopResult ? (
+                        <View style={{backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 10}}>
+                          <Text style={{fontWeight: 'bold', fontSize: 16, color: '#2e7d32', marginBottom: 4}}>✨ Sugerencia Automática</Text>
+                          <Text style={{fontSize: 14, fontWeight: 'bold'}}>{autoTopResult.displayName?.text}</Text>
+                          <Text style={{fontSize: 12, color: '#555', marginBottom: 12}}>{autoTopResult.formattedAddress}</Text>
+                          <Button 
+                            mode="contained" 
+                            buttonColor="#4caf50"
+                            onPress={() => {
+                              setSelectedPlace(autoTopResult);
+                              setConfirmMode('manual');
+                              if (autoTopResult.location) {
+                                mapRef.current?.animateToRegion({
+                                  latitude: autoTopResult.location.latitude,
+                                  longitude: autoTopResult.location.longitude,
+                                  latitudeDelta: 0.005, longitudeDelta: 0.005,
+                                }, 500);
+                              }
+                            }}
+                          >
+                            Revisar en Mapa
+                          </Button>
                         </View>
-                      </TouchableOpacity>
+                      ) : null}
+
                       <TouchableOpacity
-                        onPress={() => setConfirmMode('precise')}
+                        onPress={() => setConfirmMode('manual')}
                         style={{backgroundColor: '#E3F2FD', borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center'}}
                       >
-                        <Text style={{fontSize: 22, marginRight: 12}}>🎯</Text>
+                        <Text style={{fontSize: 22, marginRight: 12}}>🗺️</Text>
                         <View style={{flex: 1}}>
-                          <Text style={{fontWeight: 'bold', fontSize: 14, color: '#1565C0'}}>Ubicación precisa</Text>
-                          <Text style={{fontSize: 12, color: '#888'}}>Arrastra el mapa o escribe la dirección</Text>
+                          <Text style={{fontWeight: 'bold', fontSize: 14, color: '#1565C0'}}>Ubicar en mapa</Text>
+                          <Text style={{fontSize: 12, color: '#888'}}>Busca un lugar o arrastra el pin manualmente</Text>
                         </View>
                       </TouchableOpacity>
                     </View>
                   )}
 
-                  {/* ═══ QUICK MODE ═══ */}
-                  {confirmMode === 'quick' && (
-                    <View>
-                      <TextInput
-                        mode="outlined"
-                        label="Buscar lugar"
-                        value={searchQuery}
-                        onChangeText={searchPlaces}
-                        dense
-                        right={searchingPlaces ? <TextInput.Icon icon="loading" /> : <TextInput.Icon icon="magnify" />}
-                        style={{marginBottom: 10, backgroundColor: 'white'}}
-                      />
-
-                      {placeSuggestions.map((place: any, idx: number) => {
-                        const isSelected = selectedPlace === place;
-                        return (
-                          <TouchableOpacity
-                            key={idx}
-                            style={[styles.suggestionItem, isSelected && styles.suggestionSelected]}
-                            onPress={() => selectPlaceSuggestion(place)}
-                          >
-                            <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                              <Text style={{fontSize: 18, marginRight: 10}}>
-                                {isSelected ? '✅' : '📍'}
-                              </Text>
-                              <View style={{flex: 1}}>
-                                <Text style={{fontWeight: 'bold', fontSize: 15, color: '#333'}}>
-                                  {place.displayName?.text || ''}
-                                </Text>
-                                <Text style={{fontSize: 12, color: '#888'}} numberOfLines={2}>
-                                  {place.formattedAddress || ''}
-                                </Text>
-                              </View>
-                            </View>
-                          </TouchableOpacity>
-                        );
-                      })}
-
-                      {searchingPlaces && (
-                        <View style={{padding: 15, alignItems: 'center'}}>
-                          <ActivityIndicator size="small" />
-                          <Text style={{color: '#888', marginTop: 6}}>Buscando...</Text>
-                        </View>
-                      )}
-
-                      {!searchingPlaces && placeSuggestions.length === 0 && searchQuery.length > 2 && (
-                        <Text style={{color: '#888', textAlign: 'center', padding: 12, fontSize: 13}}>
-                          Sin resultados. Intenta con otro término.
-                        </Text>
-                      )}
-
-                      {selectedPlace && (
-                        <Button 
-                          mode="contained" 
-                          onPress={confirmPlace} 
-                          style={{marginTop: 12, marginBottom: 6}}
-                          icon="check"
-                        >
-                          Confirmar Lugar
-                        </Button>
-                      )}
-
-                      <TouchableOpacity
-                        onPress={() => setConfirmMode('none')}
-                        style={{paddingVertical: 10, alignItems: 'center', marginTop: 4}}
-                      >
-                        <Text style={{color: '#888', fontSize: 12}}>← Cambiar método</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-
-                  {/* ═══ PRECISE MODE ═══ */}
-                  {confirmMode === 'precise' && (
+                  {/* ═══ MANUAL MODE (UNIFIED) ═══ */}
+                  {confirmMode === 'manual' && (
                     <View>
                       <Text style={{color: '#666', fontSize: 12, marginBottom: 10}}>
                         Arrastra el mapa para posicionar el marcador rojo.
@@ -986,18 +1040,50 @@ export default function AtlasScreen({ route, navigation }: any) {
                         <View style={{flex: 1}}>
                           <TextInput
                             mode="outlined"
-                            label="Dirección"
-                            value={addressQuery}
-                            onChangeText={setAddressQuery}
-                            onSubmitEditing={sendAddress}
+                            label="Buscar lugar o dirección"
+                            value={searchQuery}
+                            onChangeText={searchPlaces}
                             dense
-                            placeholder="ej: Calle 10, Medellín, Colombia"
+                            right={searchingPlaces ? <TextInput.Icon icon="loading" /> : <TextInput.Icon icon="magnify" />}
                             style={{backgroundColor: 'white'}}
-                            returnKeyType="send"
                           />
                         </View>
-                        <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{marginLeft: 4}} />
                       </View>
+
+                      {placeSuggestions.length > 0 && (
+                        <ScrollView style={{maxHeight: 150, marginBottom: 10}}>
+                          {placeSuggestions.map((place: any, idx: number) => {
+                            const isSelected = selectedPlace === place;
+                            return (
+                              <TouchableOpacity
+                                key={idx}
+                                style={[styles.suggestionItem, isSelected && styles.suggestionSelected]}
+                                onPress={() => selectPlaceSuggestion(place)}
+                              >
+                                <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                                  <Text style={{fontSize: 18, marginRight: 10}}>
+                                    {isSelected ? '✅' : '📍'}
+                                  </Text>
+                                  <View style={{flex: 1}}>
+                                    <Text style={{fontWeight: 'bold', fontSize: 15, color: '#333'}}>
+                                      {place.displayName?.text || ''}
+                                    </Text>
+                                    <Text style={{fontSize: 12, color: '#888'}} numberOfLines={2}>
+                                      {place.formattedAddress || ''}
+                                    </Text>
+                                  </View>
+                                </View>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
+                      )}
+
+                      {searchingPlaces && (
+                        <View style={{padding: 10, alignItems: 'center'}}>
+                          <ActivityIndicator size="small" color="#6200ee" />
+                        </View>
+                      )}
 
                       {/* Parent assignment */}
                       <TouchableOpacity

@@ -86,6 +86,20 @@ export async function generateTerritorialHierarchy(db: any, entityId: string, en
   let currentChildId = entityId;
   let currentChildName = entityName.toLowerCase();
 
+  // Check if the entity itself is the territory
+  let isTerritory = false;
+  if (cityName && currentChildName === cityName.toLowerCase()) {
+     await db.runAsync("UPDATE entities SET metadata = json_insert(COALESCE(metadata, '{}'), '$.geo_level', 2), is_confirmed = 1 WHERE id = ?", currentChildId);
+     isTerritory = true;
+  } else if (stateName && currentChildName === stateName.toLowerCase()) {
+     await db.runAsync("UPDATE entities SET metadata = json_insert(COALESCE(metadata, '{}'), '$.geo_level', 3), is_confirmed = 1 WHERE id = ?", currentChildId);
+     isTerritory = true;
+  } else if (countryName && currentChildName === countryName.toLowerCase()) {
+     await db.runAsync("UPDATE entities SET metadata = json_insert(COALESCE(metadata, '{}'), '$.geo_level', 4), is_confirmed = 1 WHERE id = ?", currentChildId);
+     isTerritory = true;
+  }
+
+  // Only assign parents if it's not the territory itself or if we are building the hierarchy above it
   if (cityName && currentChildName !== cityName.toLowerCase()) {
      let cityId = await getOrCreateTerritory(db, cityName, coords.lat, coords.lon, 'city');
      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", cityId, currentChildId);
@@ -268,6 +282,7 @@ export const processPendingMemories = async () => {
             "UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?",
             coords.lat, coords.lon, loc.id
           );
+          await generateTerritorialHierarchy(db, loc.id, loc.name, coords);
           console.log(`Geocoded old location: ${loc.name}`);
         }
       }
