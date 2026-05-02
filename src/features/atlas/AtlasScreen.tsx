@@ -687,8 +687,8 @@ export default function AtlasScreen({ route, navigation }: any) {
     
     // Height thresholds (geo_level matches these: 0=leaf, 1=neighborhood, 2=city, 3=state, 4=country)
     let visibleHeight = 0;
-    if (delta <= 0.02) visibleHeight = 0;
-    else if (delta <= 0.2) visibleHeight = 1;
+    if (delta <= 0.05) visibleHeight = 0;
+    else if (delta <= 0.5) visibleHeight = 1;
     else if (delta <= 5) visibleHeight = 2;
     else if (delta <= 25) visibleHeight = 3;
     else visibleHeight = 4;
@@ -696,87 +696,87 @@ export default function AtlasScreen({ route, navigation }: any) {
     // Pre-build children map and marker lookup for O(1) access
     const markerMap = new Map<string, any>();
     const childrenOf = new Map<string, any[]>();
+    const roots: any[] = [];
+    
     markers.forEach(m => {
       markerMap.set(m.id, m);
-      if (m.parent_id) {
+    });
+
+    markers.forEach(m => {
+      // Add to children map or roots
+      if (m.parent_id && markerMap.has(m.parent_id)) {
         if (!childrenOf.has(m.parent_id)) childrenOf.set(m.parent_id, []);
         childrenOf.get(m.parent_id)!.push(m);
+      } else {
+        roots.push(m);
       }
     });
 
-    // Smart split: measure child-to-child spread relative to viewport
+    // Smart split: measure child-to-child spread
     const childSpread = (nodeId: string): number => {
       const children = childrenOf.get(nodeId);
       if (!children || children.length < 2) return 0;
       
       let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-      let count = 0;
+      let validCount = 0;
       for (const child of children) {
         if (!child.coordinate) continue;
         minLat = Math.min(minLat, child.coordinate.latitude);
         maxLat = Math.max(maxLat, child.coordinate.latitude);
         minLon = Math.min(minLon, child.coordinate.longitude);
         maxLon = Math.max(maxLon, child.coordinate.longitude);
-        count++;
+        validCount++;
       }
-      if (count < 2) return 0;
-      return (maxLat - minLat) + (maxLon - minLon);
+      if (validCount < 2) return 0;
+      // use the max of lat or lon spread as the metric
+      return Math.max(maxLat - minLat, maxLon - minLon);
     };
 
-    // Determine which clusters should force-dissolve (cascade down the tree)
-    const forceDissolved = new Set<string>();
-    let changed = true;
-    while (changed) {
-      changed = false;
-      markers.forEach(m => {
-        if (forceDissolved.has(m.id)) return;
-        const isCluster = m.height > visibleHeight || (m.parent_id && forceDissolved.has(m.parent_id));
-        if (isCluster && m.hasChildren) {
-          const spread = childSpread(m.id);
-          // If children span > 25% of viewport, split early
-          if (spread > delta * 0.25) {
-            forceDissolved.add(m.id);
-            changed = true;
-          }
-        }
-      });
-    }
-
-
-
-    return markers.filter(m => {
-      // Always show the marker being edited
-      if (editingEntity && editingEntity.id === m.id) return true;
-      // Hide actionEntity marker on map (avoids phantom pin during confirmation)
-      if (actionEntity && actionEntity.id === m.id) return false;
-      
-      if (!m.coordinate) return false;
-
-      // If this node is force-dissolved, hide it (children replace it)
-      if (forceDissolved.has(m.id)) return false;
-
-      const parent = m.parent_id ? markerMap.get(m.parent_id) : null;
-      const parentHeight = parent ? parent.height : Infinity;
-
-      // Show if parent was force-dissolved (this node replaces it)
-      if (parent && forceDissolved.has(parent.id)) return true;
-
-
-      // Normal rule: show if height is appropriate and parent is above zoom level
-      return m.height <= visibleHeight && parentHeight > visibleHeight;
-    });
-
-    // Post-filter: prevent parent-child coexistence
-    // If a node and any ancestor are both visible, hide the child (parent wins)
-    const visibleIds = new Set(filtered.map(m => m.id));
-    return filtered.filter(m => {
-      let ancestor = m.parent_id ? markerMap.get(m.parent_id) : null;
-      while (ancestor) {
-        if (visibleIds.has(ancestor.id)) return false; // ancestor is also visible, hide me
-        ancestor = ancestor.parent_id ? markerMap.get(ancestor.parent_id) : null;
+    const resultList: any[] = [];
+    
+    // Always show actionEntity and editingEntity regardless of tree logic
+    const specialIds = new Set<string>();
+    if (editingEntity) specialIds.add(editingEntity.id);
+    // Note: actionEntity is intentionally NOT added to specialIds because we want to hide it completely (avoids phantom pin)
+    
+    const traverse = (node: any) => {
+      if (specialIds.has(node.id)) {
+        resultList.push(node);
+        return; // Always show special nodes, no need to traverse them as clusters
       }
-      return true;
-    });
+      
+      if (actionEntity && actionEntity.id === node.id) {
+        // Explicitly hide the actionEntity marker
+        return;
+      }
+      
+      let shouldDissolve = node.height > visibleHeight;
+      
+      if (!shouldDissolve && node.hasChildren) {
+        // If it shouldn't normally dissolve, but children are spread wide, force dissolve it
+        const spread = childSpread(node.id);
+        if (spread > delta * 0.3) {
+          shouldDissolve = true;
+        }
+      }
+      
+      const children = childrenOf.get(node.id) || [];
+      
+      if (shouldDissolve && children.length > 0) {
+        // Node is dissolved. Do not add it. Process children.
+        children.forEach(child => traverse(child));
+      } else {
+        // Node is NOT dissolved. Add it, and do not process children (they remain hidden inside).
+        if (node.coordinate) {
+          resultList.push(node);
+        }
+      }
+    };
+
+    // Start traversal from all roots
+    roots.forEach(root => traverse(root));
+
+    return resultList;
   }, [markers, currentRegion, editingEntity, actionEntity]);
 
   return (
