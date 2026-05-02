@@ -999,27 +999,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                   panelType === 'memories' ? 'Explorador de Recuerdos' : ''}
             </Text>
             <View style={{ flexDirection: 'row' }}>
-              {panelType === 'memories' && memoryEntityId && (
-                <>
-                  <IconButton icon="pencil" size={22} iconColor="#6200ee" onPress={() => {
-                    const m = destacados.find(x => x.id === memoryEntityId);
-                    if (m) {
-                      setActionEntity(m);
-                      setConfirmMode('none');
-                      setSearchQuery(m.title);
-                      fetchTopSuggestion(m);
-                      setSelectedPlace(null);
-                      setPlaceSuggestions([]);
-                      setAddressQuery('');
-                      setEditingEntity(null);
-                      setMemoryEntityId(null);
-                      setPanelType('action');
-                      setPanelMode('peek');
-                    }
-                  }} />
-                  <IconButton icon="delete-outline" size={22} iconColor="#B00020" onPress={() => deleteEntity(memoryEntityId)} />
-                </>
-              )}
+
               {panelType !== 'action' && (
                 <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
               )}
