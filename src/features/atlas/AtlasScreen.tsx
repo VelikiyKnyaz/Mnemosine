@@ -908,15 +908,13 @@ export default function AtlasScreen({ route, navigation }: any) {
             showsUserLocation={!editingEntity}
           >
             {!editingEntity && visibleMarkers.map(marker => {
-              const isCluster = marker.hasChildren || marker.mem_count > 0;
-              
+              const size = marker.hasChildren ? 48 : (marker.mem_count > 0 ? 36 : 24);
               return (
                 <Marker
                   key={marker.id}
                   coordinate={marker.coordinate}
-                  {...(isCluster ? { anchor: { x: 0.5, y: 0.5 } } : {})}
-                  calloutAnchor={isCluster ? { x: 1, y: 0.5 } : { x: 0.5, y: 0 }}
-                  pinColor={!isCluster ? (marker.is_confirmed === 0 ? 'orange' : 'red') : undefined}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  calloutAnchor={{ x: 0.5, y: 0 }}
                   tracksViewChanges={true}
                   onPress={(e) => {
                     if (e.stopPropagation) e.stopPropagation();
@@ -933,16 +931,16 @@ export default function AtlasScreen({ route, navigation }: any) {
                     }
                   }}
                 >
-                  {isCluster ? (
+                  <View style={{ padding: 4 }}>
                     <View style={[styles.clusterMarker, { 
                       backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                      width: marker.hasChildren ? 48 : 36,
-                      height: marker.hasChildren ? 48 : 36,
-                      borderRadius: marker.hasChildren ? 24 : 18,
+                      width: size,
+                      height: size,
+                      borderRadius: size / 2,
                     }]}>
-                      <Text style={styles.clusterText}>{marker.mem_count}</Text>
+                      <Text style={styles.clusterText}>{marker.mem_count > 0 ? marker.mem_count : (marker.hasChildren ? '' : '📍')}</Text>
                     </View>
-                  ) : null}
+                  </View>
 
                   {marker.is_confirmed !== 0 && (
                     <Callout tooltip onPress={() => {
