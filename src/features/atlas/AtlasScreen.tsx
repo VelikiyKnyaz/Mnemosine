@@ -14,13 +14,7 @@ import EntityMemoriesView from '../memories/EntityMemoriesView';
 export default function AtlasScreen({ route, navigation }: any) {
   const [markers, setMarkers] = useState<any[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
-  const [trackChanges, setTrackChanges] = useState(true);
-
-  useEffect(() => {
-    setTrackChanges(true);
-    const t = setTimeout(() => setTrackChanges(false), 1000);
-    return () => clearTimeout(t);
-  }, [markers, currentRegion]);
+  // (trackChanges removed)
 
   // Lists
   const [destacados, setDestacados] = useState<any[]>([]);
@@ -878,7 +872,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                   key={marker.id}
                   coordinate={marker.coordinate}
                   anchor={{ x: 0.5, y: 0.5 }}
-                  tracksViewChanges={trackChanges}
+                  tracksViewChanges={true}
                   onPress={(e) => {
                     if (e.stopPropagation) e.stopPropagation();
                     const isTerritory = marker.height >= 2 || marker.hasChildren;
@@ -898,15 +892,13 @@ export default function AtlasScreen({ route, navigation }: any) {
                     }
                   }}
                 >
-                  <View style={{ width: 80, height: 80, justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' }}>
-                    <View style={[styles.clusterMarker, {
-                      backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                      width: size,
-                      height: size,
-                      borderRadius: size / 2,
-                    }]}>
-                      <Text style={styles.clusterText}>{marker.mem_count || ''}</Text>
-                    </View>
+                  <View style={[styles.clusterMarker, {
+                    backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
+                    width: size,
+                    height: size,
+                    borderRadius: size / 2,
+                  }]}>
+                    <Text style={styles.clusterText}>{marker.mem_count || ''}</Text>
                   </View>
                 </Marker>
               );
