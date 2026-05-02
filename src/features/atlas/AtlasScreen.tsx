@@ -470,19 +470,43 @@ export default function AtlasScreen({ route, navigation }: any) {
     }
   };
 
-  // Confirm location from precise mode: uses current map center
+  // Confirm location from precise mode: uses current map center + auto-assign parent via reverse geocode
   const confirmPrecise = async () => {
     if (!actionEntity || !currentRegion) return;
     try {
       const db = await getDb();
+      const lat = currentRegion.latitude;
+      const lon = currentRegion.longitude;
+      
       await db.runAsync(
         'UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 1 WHERE id = ?',
-        currentRegion.latitude, currentRegion.longitude, actionEntity.id
+        lat, lon, actionEntity.id
       );
+      
+      // Reverse geocode to auto-assign territorial parent
+      try {
+        const apiKey = await getConfig('GOOGLE_MAPS_KEY');
+        if (apiKey) {
+          const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lon}&key=${apiKey}`);
+          const data = await res.json();
+          if (data.status === 'OK' && data.results?.length > 0) {
+            const components = data.results[0].address_components || [];
+            const getComp = (type: string) => components.find((c: any) => c.types?.includes(type))?.long_name || '';
+            const address = {
+              city: getComp('locality') || getComp('administrative_area_level_2'),
+              state: getComp('administrative_area_level_1'),
+              country: getComp('country'),
+            };
+            await generateTerritorialHierarchy(db, actionEntity.id, actionEntity.title, { lat, lon, address });
+          }
+        }
+      } catch (geoErr) {
+        console.warn('Reverse geocode for parenting failed:', geoErr);
+      }
       
       Alert.alert('Confirmado', `"${actionEntity.title}" ubicado.`);
       setEditingEntity(null);
-      setConfirmMode('quick');
+      setConfirmMode('none');
       closePanel();
       loadLocations();
     } catch (e) {
@@ -560,17 +584,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       });
     }
 
-    // Inverse rule: nodes at their normal threshold should DEFER splitting
-    // if their children are still tightly clustered (< 8% of viewport)
-    const forceKeepClustered = new Set<string>();
-    markers.forEach(m => {
-      if (m.height <= visibleHeight && m.hasChildren) {
-        const spread = childSpread(m.id);
-        if (spread < delta * 0.08) {
-          forceKeepClustered.add(m.id);
-        }
-      }
-    });
+
 
     return markers.filter(m => {
       // Always show the marker being edited
@@ -589,8 +603,6 @@ export default function AtlasScreen({ route, navigation }: any) {
       // Show if parent was force-dissolved (this node replaces it)
       if (parent && forceDissolved.has(parent.id)) return true;
 
-      // Inverse rule: if parent should stay clustered, hide children
-      if (parent && forceKeepClustered.has(parent.id)) return false;
 
       // Normal rule: show if height is appropriate and parent is above zoom level
       return m.height <= visibleHeight && parentHeight > visibleHeight;
@@ -677,7 +689,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           </View>
 
           {(editingEntity || (confirmMode === 'precise' && actionEntity)) && (
-            <View style={styles.staticPinContainer} pointerEvents="none">
+            <View style={[styles.staticPinContainer, panelMode !== 'hidden' && { paddingBottom: '45%' }]} pointerEvents="none">
               <IconButton icon="map-marker" iconColor="red" size={50} style={styles.staticPin} />
             </View>
           )}
