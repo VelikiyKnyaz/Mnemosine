@@ -14,6 +14,13 @@ import EntityMemoriesView from '../memories/EntityMemoriesView';
 export default function AtlasScreen({ route, navigation }: any) {
   const [markers, setMarkers] = useState<any[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
+  const [trackChanges, setTrackChanges] = useState(true);
+
+  useEffect(() => {
+    setTrackChanges(true);
+    const t = setTimeout(() => setTrackChanges(false), 1000);
+    return () => clearTimeout(t);
+  }, [markers, currentRegion]);
 
   // Lists
   const [destacados, setDestacados] = useState<any[]>([]);
@@ -839,7 +846,11 @@ export default function AtlasScreen({ route, navigation }: any) {
             style={styles.map}
             initialRegion={initialRegion}
             mapPadding={{ top: 0, right: 0, bottom: activeMapPadding, left: 0 }}
-            onPress={() => setSelectedPlaceEntity(null)}
+            onPress={(e) => {
+               if (e.nativeEvent.action !== 'marker-press') {
+                 setSelectedPlaceEntity(null);
+               }
+            }}
             onRegionChangeComplete={(region) => {
               setCurrentRegion(region);
             }}
@@ -852,8 +863,9 @@ export default function AtlasScreen({ route, navigation }: any) {
                   key={marker.id}
                   coordinate={marker.coordinate}
                   anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={trackChanges}
                   onPress={(e) => {
-                    e.stopPropagation();
+                    if (e.stopPropagation) e.stopPropagation();
                     const isTerritory = marker.height >= 2 || marker.hasChildren;
                     if (marker.is_confirmed === 0 && !isTerritory) {
                       setActionEntity(marker);
@@ -864,12 +876,14 @@ export default function AtlasScreen({ route, navigation }: any) {
                       setPanelMode('peek');
                     } else {
                       setSelectedPlaceEntity(marker);
-                      setPanelMode('hidden');
+                      setMemoryEntityId(marker.id);
+                      setPanelType('memories');
+                      setPanelMode('peek');
                       setEditingEntity(null);
                     }
                   }}
                 >
-                  <View style={{ width: size + 12, height: size + 12, justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' }}>
+                  <View style={{ width: 80, height: 80, justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' }}>
                     <View style={[styles.clusterMarker, {
                       backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
                       width: size,
@@ -915,35 +929,22 @@ export default function AtlasScreen({ route, navigation }: any) {
       )}
 
       {/* Floating Action Menu for Selected Marker */}
-      {selectedPlaceEntity && !editingEntity && panelMode === 'hidden' && (
+      {selectedPlaceEntity && !editingEntity && (
         <View style={{
           position: 'absolute',
-          bottom: 40,
-          alignSelf: 'center',
+          top: 20,
+          right: 20,
           backgroundColor: 'rgba(255, 255, 255, 0.95)',
-          padding: 12,
-          borderRadius: 20,
+          padding: 6,
+          borderRadius: 30,
           elevation: 10,
           shadowColor: '#000',
           shadowOpacity: 0.3,
           shadowOffset: { width: 0, height: 4 },
           shadowRadius: 10,
-          width: '85%',
           flexDirection: 'row',
           alignItems: 'center',
-          justifyContent: 'space-between'
         }}>
-          <View style={{flex: 1, paddingRight: 10}}>
-            <Text style={{fontWeight: 'bold', fontSize: 16, color: '#333'}} numberOfLines={1}>{selectedPlaceEntity.title}</Text>
-            <Text style={{fontSize: 12, color: '#666'}}>{selectedPlaceEntity.mem_count > 0 ? `${selectedPlaceEntity.mem_count} recuerdos` : 'Lugar guardado'}</Text>
-          </View>
-          <View style={{flexDirection: 'row'}}>
-            <IconButton icon="folder-open" size={24} iconColor="#6200ee" onPress={() => {
-              setMemoryEntityId(selectedPlaceEntity.id);
-              setPanelType('memories');
-              setPanelMode('peek');
-              setSelectedPlaceEntity(null);
-            }} style={{margin: 0, backgroundColor: '#f3e5f5'}} />
             <IconButton icon="pencil" size={24} iconColor="#1565C0" onPress={() => {
               setActionEntity(selectedPlaceEntity);
               setConfirmMode('none');
@@ -957,12 +958,12 @@ export default function AtlasScreen({ route, navigation }: any) {
               setPanelType('action'); 
               setPanelMode('peek');
               setSelectedPlaceEntity(null);
-            }} style={{margin: 0, marginLeft: 8, backgroundColor: '#e3f2fd'}} />
+            }} style={{margin: 0, backgroundColor: '#e3f2fd'}} />
             <IconButton icon="delete-outline" size={24} iconColor="#B00020" onPress={() => {
               deleteEntity(selectedPlaceEntity.id);
               setSelectedPlaceEntity(null);
+              setPanelMode('hidden');
             }} style={{margin: 0, marginLeft: 8, backgroundColor: '#ffebee'}} />
-          </View>
         </View>
       )}
 
