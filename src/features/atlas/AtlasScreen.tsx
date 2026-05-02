@@ -79,6 +79,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           e.longitude, 
           e.is_confirmed,
           e.parent_id,
+          e.metadata,
           COUNT(me.memory_id) as mem_count
         FROM entities e
         JOIN hierarchy h ON e.id = h.root_id
@@ -92,7 +93,15 @@ export default function AtlasScreen({ route, navigation }: any) {
       // Compute tree height (distance from bottom) and parent-child relationships
       const entityMap = new Map();
       locatedRows.forEach(r => {
-        entityMap.set(r.id, { ...r, children: [] });
+        // Parse geo_level from metadata (set by generateTerritorialHierarchy)
+        let geoLevel: number | null = null;
+        try {
+          if (r.metadata) {
+            const meta = JSON.parse(r.metadata);
+            if (meta.geo_level != null) geoLevel = meta.geo_level;
+          }
+        } catch {}
+        entityMap.set(r.id, { ...r, children: [], geoLevel });
       });
       locatedRows.forEach(r => {
         if (r.parent_id && entityMap.has(r.parent_id)) {
@@ -103,14 +112,14 @@ export default function AtlasScreen({ route, navigation }: any) {
       const computeHeight = (id: string): number => {
         const node = entityMap.get(id);
         if (!node) return 0;
-        if (node.height !== undefined) return node.height; // already computed
+        if (node.treeHeight !== undefined) return node.treeHeight;
         if (node.children.length === 0) {
-          node.height = 0;
+          node.treeHeight = 0;
           return 0;
         }
         const maxChildHeight = Math.max(...node.children.map((cid: string) => computeHeight(cid)));
-        node.height = maxChildHeight + 1;
-        return node.height;
+        node.treeHeight = maxChildHeight + 1;
+        return node.treeHeight;
       };
       
       // Find roots
@@ -125,7 +134,8 @@ export default function AtlasScreen({ route, navigation }: any) {
         title: node.title,
         is_confirmed: node.is_confirmed,
         parent_id: node.parent_id,
-        height: node.height || 0,
+        // Use geo_level (geographic truth) if available, otherwise fall back to tree height
+        height: node.geoLevel ?? node.treeHeight ?? 0,
         hasChildren: node.children.length > 0,
         mem_count: node.mem_count,
         coordinate: { latitude: node.latitude, longitude: node.longitude }

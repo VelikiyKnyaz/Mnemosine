@@ -51,14 +51,20 @@ export const geocodeLocation = async (name: string, hometownContext: string): Pr
 
 async function getOrCreateTerritory(db: any, name: string, lat: number, lon: number, level: 'city'|'state'|'country'): Promise<string> {
    const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'LOCATION' AND name = ? COLLATE NOCASE", name);
-   if (existing) return existing.id;
+   if (existing) {
+     // Ensure geo_level is set even on existing territories
+     const geoLevel = level === 'country' ? 3 : level === 'state' ? 2 : 1;
+     await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ? AND (metadata IS NULL OR metadata = '')", JSON.stringify({ geo_level: geoLevel }), existing.id);
+     return existing.id;
+   }
    const newId = uuidv4();
    
    const jitterMag = level === 'country' ? 2 : level === 'state' ? 0.5 : 0.05;
    const jLat = lat + (Math.random() - 0.5) * jitterMag;
    const jLon = lon + (Math.random() - 0.5) * jitterMag;
 
-   await db.runAsync("INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 1)", newId, name, jLat, jLon);
+   const geoLevel = level === 'country' ? 3 : level === 'state' ? 2 : 1;
+   await db.runAsync("INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed, metadata) VALUES (?, 'LOCATION', ?, ?, ?, 1, ?)", newId, name, jLat, jLon, JSON.stringify({ geo_level: geoLevel }));
    return newId;
 }
 
