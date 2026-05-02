@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEYS = {
   OPENAI_API_KEY: 'config:openai_api_key',
+  GOOGLE_MAPS_KEY: 'config:google_maps_key',
   SUPABASE_URL: 'config:supabase_url',
   SUPABASE_ANON_KEY: 'config:supabase_anon_key',
 };

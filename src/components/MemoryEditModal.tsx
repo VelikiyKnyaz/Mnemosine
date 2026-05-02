@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Modal, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
 import { Text, TextInput, Button, IconButton, Chip } from 'react-native-paper';
 import { getDb } from '../core/database';
-import SmartDropdown, { NominatimSuggestion } from './SmartDropdown';
+import SmartDropdown, { PlaceSuggestion } from './SmartDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { geocodeLocation, generateTerritorialHierarchy } from '../core/ai_processor';
 
@@ -127,12 +127,12 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     }
   };
 
-  const createFromNominatim = async (suggestion: NominatimSuggestion) => {
+  const createFromPlace = async (suggestion: PlaceSuggestion) => {
     try {
       const db = await getDb();
-      const name = suggestion.display_name.split(',')[0].trim();
-      const lat = parseFloat(suggestion.lat);
-      const lon = parseFloat(suggestion.lon);
+      const name = suggestion.displayName;
+      const lat = suggestion.lat;
+      const lon = suggestion.lon;
       
       const newId = uuidv4();
       await db.runAsync(
@@ -140,9 +140,15 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
         newId, name, lat, lon
       );
       
-      if (suggestion.address) {
-        await generateTerritorialHierarchy(db, newId, name, { lat, lon, address: suggestion.address });
-      }
+      // Build address for territorial hierarchy
+      const components = suggestion.addressComponents || [];
+      const getComp = (type: string) => components.find((c: any) => c.types?.includes(type))?.longText || '';
+      const address = {
+        city: getComp('locality') || getComp('administrative_area_level_2'),
+        state: getComp('administrative_area_level_1'),
+        country: getComp('country'),
+      };
+      await generateTerritorialHierarchy(db, newId, name, { lat, lon, address });
       await addEntityRelation(newId);
     } catch (e) {
       console.error(e);
@@ -195,12 +201,12 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
                   label="Buscar o crear elemento..."
                   value=""
                   items={allEntities}
-                  enableNominatim={true}
+                  enablePlaces={true}
                   onSelect={(item) => {
                     if (item) addEntityRelation(item.id);
                   }}
                   onCreateNew={createNewEntity}
-                  onSelectNominatim={createFromNominatim}
+                  onSelectPlace={createFromPlace}
                   placeholder="Escribe el nombre..."
                 />
                 <Button onPress={() => setShowDropdown(false)} style={{marginTop: 5}}>Cancelar Añadir</Button>

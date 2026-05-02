@@ -1,12 +1,13 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { View, StyleSheet, FlatList, TouchableOpacity, Keyboard, Modal, SafeAreaView, Platform, KeyboardAvoidingView } from 'react-native';
 import { TextInput, Text, Chip, Appbar } from 'react-native-paper';
+import { getConfig } from '../core/config';
 
-export interface NominatimSuggestion {
-  display_name: string;
-  lat: string;
-  lon: string;
-  address?: any;
+export interface PlaceSuggestion {
+  displayName: string;
+  lat: number;
+  lon: number;
+  addressComponents?: any[];
 }
 
 interface SmartDropdownProps {
@@ -14,18 +15,18 @@ interface SmartDropdownProps {
   value: string;
   onSelect: (item: { id: string; name: string } | null) => void;
   onCreateNew?: (name: string) => void;
-  onSelectNominatim?: (suggestion: NominatimSuggestion) => void;
-  enableNominatim?: boolean;
+  onSelectPlace?: (suggestion: PlaceSuggestion) => void;
+  enablePlaces?: boolean;
   items: { id: string; name: string; score?: number }[];
   placeholder?: string;
 }
 
 export default function SmartDropdown({ 
-  label, value, onSelect, onCreateNew, onSelectNominatim, enableNominatim, items, placeholder 
+  label, value, onSelect, onCreateNew, onSelectPlace, enablePlaces, items, placeholder 
 }: SmartDropdownProps) {
   const [modalVisible, setModalVisible] = useState(false);
   const [query, setQuery] = useState(value || '');
-  const [nominatimResults, setNominatimResults] = useState<NominatimSuggestion[]>([]);
+  const [placeResults, setPlaceResults] = useState<PlaceSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -50,8 +51,8 @@ export default function SmartDropdown({
   const exactMatch = items.find(i => i.name.toLowerCase() === query.toLowerCase());
 
   useEffect(() => {
-    if (!enableNominatim || !query.trim() || query.trim().length < 3) {
-      setNominatimResults([]);
+    if (!enablePlaces || !query.trim() || query.trim().length < 3) {
+      setPlaceResults([]);
       return;
     }
 
@@ -60,23 +61,44 @@ export default function SmartDropdown({
     debounceRef.current = setTimeout(async () => {
       try {
         setSearching(true);
-        const q = encodeURIComponent(query.trim());
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=5&addressdetails=1`,
-          { headers: { 'User-Agent': 'MnemosineApp/1.0 (memory@app.com)' } }
-        );
+        const apiKey = await getConfig('GOOGLE_MAPS_KEY');
+        if (!apiKey) {
+          setPlaceResults([]);
+          return;
+        }
+
+        const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask': 'places.displayName,places.location,places.addressComponents',
+          },
+          body: JSON.stringify({ textQuery: query.trim(), maxResultCount: 5 }),
+        });
+
         const data = await res.json();
-        setNominatimResults(data || []);
+        if (data.places && data.places.length > 0) {
+          const mapped: PlaceSuggestion[] = data.places.map((p: any) => ({
+            displayName: p.displayName?.text || '',
+            lat: p.location?.latitude || 0,
+            lon: p.location?.longitude || 0,
+            addressComponents: p.addressComponents || [],
+          }));
+          setPlaceResults(mapped);
+        } else {
+          setPlaceResults([]);
+        }
       } catch (e) {
-        console.log('Nominatim autocomplete failed:', e);
-        setNominatimResults([]);
+        console.log('Places search failed:', e);
+        setPlaceResults([]);
       } finally {
         setSearching(false);
       }
     }, 500);
 
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [query, enableNominatim]);
+  }, [query, enablePlaces]);
 
   const handleSubmit = () => {
     const trimmed = query.trim();
@@ -101,12 +123,15 @@ export default function SmartDropdown({
     }
   };
 
-  const shortName = (displayName: string) => {
-    const parts = displayName.split(',').map(p => p.trim());
-    return parts.slice(0, 3).join(', ');
+  const getPlaceAddress = (place: PlaceSuggestion) => {
+    if (!place.addressComponents || place.addressComponents.length === 0) return '';
+    const parts = place.addressComponents
+      .filter((c: any) => c.types?.some((t: string) => ['locality', 'administrative_area_level_1', 'country'].includes(t)))
+      .map((c: any) => c.longText);
+    return parts.join(', ');
   };
 
-  const hasResults = filtered.length > 0 || nominatimResults.length > 0;
+  const hasResults = filtered.length > 0 || placeResults.length > 0;
 
   return (
     <View style={styles.container}>
@@ -147,7 +172,7 @@ export default function SmartDropdown({
                   searching ? (
                     <TextInput.Icon icon="loading" />
                   ) : query.trim() ? (
-                    <TextInput.Icon icon="close" onPress={() => { setQuery(''); setNominatimResults([]); }} />
+                    <TextInput.Icon icon="close" onPress={() => { setQuery(''); setPlaceResults([]); }} />
                   ) : undefined
                 }
               />
@@ -157,12 +182,12 @@ export default function SmartDropdown({
               data={[
                 ...(query.trim() && !exactMatch && onCreateNew ? [{ _type: 'create' as const, id: '__create__', name: query.trim() }] : []),
                 ...filtered.map(item => ({ ...item, _type: 'local' as const })),
-                ...(filtered.length > 0 && nominatimResults.length > 0 ? [{ _type: 'separator' as const, id: '__sep__', name: '' }] : []),
-                ...nominatimResults.map((nr, i) => ({ 
-                  id: `nom_${i}`, 
-                  name: shortName(nr.display_name), 
-                  _type: 'nominatim' as const,
-                  _nominatim: nr 
+                ...(filtered.length > 0 && placeResults.length > 0 ? [{ _type: 'separator' as const, id: '__sep__', name: '' }] : []),
+                ...placeResults.map((pr, i) => ({ 
+                  id: `place_${i}`, 
+                  name: pr.displayName, 
+                  _type: 'place' as const,
+                  _place: pr 
                 })),
               ]}
               keyExtractor={(item) => item.id}
@@ -189,20 +214,21 @@ export default function SmartDropdown({
                     </View>
                   );
                 }
-                if (item._type === 'nominatim') {
+                if (item._type === 'place') {
+                  const place = item._place as PlaceSuggestion;
                   return (
                     <TouchableOpacity 
-                      style={styles.nominatimOption}
+                      style={styles.placeOption}
                       onPress={() => {
-                        if (onSelectNominatim) onSelectNominatim(item._nominatim);
-                        setQuery(item.name.split(',')[0]);
+                        if (onSelectPlace) onSelectPlace(place);
+                        setQuery(place.displayName);
                         setModalVisible(false);
                       }}
                     >
-                      <Text style={styles.nominatimIcon}>📍</Text>
+                      <Text style={styles.placeIcon}>📍</Text>
                       <View style={{flex: 1}}>
-                        <Text style={styles.nominatimName}>{item.name.split(',')[0]}</Text>
-                        <Text style={styles.nominatimAddress} numberOfLines={1}>{item.name}</Text>
+                        <Text style={styles.placeName}>{place.displayName}</Text>
+                        <Text style={styles.placeAddress} numberOfLines={1}>{getPlaceAddress(place)}</Text>
                       </View>
                     </TouchableOpacity>
                   );
@@ -260,16 +286,16 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eee',
   },
   separatorText: { fontSize: 12, fontWeight: 'bold', color: '#888' },
-  nominatimOption: {
+  placeOption: {
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
     flexDirection: 'row',
     alignItems: 'center',
   },
-  nominatimIcon: { fontSize: 20, marginRight: 12 },
-  nominatimName: { fontSize: 16, fontWeight: 'bold', color: '#333', marginBottom: 2 },
-  nominatimAddress: { fontSize: 12, color: '#888' },
+  placeIcon: { fontSize: 20, marginRight: 12 },
+  placeName: { fontSize: 16, fontWeight: 'bold', color: '#333', marginBottom: 2 },
+  placeAddress: { fontSize: 12, color: '#888' },
   emptyContainer: { padding: 20, alignItems: 'center' },
   createBtn: {
     backgroundColor: '#f3e5f5',

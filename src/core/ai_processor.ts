@@ -1,37 +1,50 @@
 import { getDb, inheritCoordinatesFromParent } from './database';
 import { transcribeAudio, extractMemoryData } from './ai_service';
 import { calculateDatesFromMarkers } from './chrono_engine';
+import { getConfig } from './config';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
-// Helper: buscar coordenadas en Nominatim
+// Helper: buscar coordenadas con Google Places API (Text Search)
 export const geocodeLocation = async (name: string, hometownContext: string): Promise<{lat: number, lon: number, address?: any} | null> => {
   try {
-    const query = encodeURIComponent(`${name}${hometownContext}`);
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1&addressdetails=1`, {
-      headers: { 'User-Agent': 'MnemosineApp/1.0 (memory@app.com)' }
-    });
-    const data = await res.json();
-    if (data && data.length > 0) {
-      const result = data[0];
-      const importance = parseFloat(result.importance || '0');
-      const resultName = result.display_name.toLowerCase();
-      const hometownStr = hometownContext.replace(', ', '').trim().toLowerCase();
-      
-      // Si usamos contexto de ciudad, verificar que Nominatim no nos haya mandado
-      // a otro país o ciudad por ser un término muy genérico.
-      if (hometownStr && !resultName.includes(hometownStr)) {
-        console.log(`Geocoding rejected: "${resultName}" no está en "${hometownStr}"`);
-        return null;
-      }
-      
-      // Filtro de confianza eliminado: Nominatim le da importancia muy baja a lugares locales (ej. Unicentro).
-      // Nos basamos únicamente en el filtro de ciudad (hometownStr).
+    const apiKey = await getConfig('GOOGLE_MAPS_KEY');
+    if (!apiKey) {
+      console.log('Google Maps API Key not configured, skipping geocoding');
+      return null;
+    }
 
-      return { lat: parseFloat(result.lat), lon: parseFloat(result.lon), address: result.address };
+    const textQuery = `${name}${hometownContext}`;
+    const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'places.displayName,places.location,places.addressComponents',
+      },
+      body: JSON.stringify({ textQuery, maxResultCount: 1 }),
+    });
+
+    const data = await res.json();
+    if (data.places && data.places.length > 0) {
+      const place = data.places[0];
+      const lat = place.location?.latitude;
+      const lon = place.location?.longitude;
+      if (lat == null || lon == null) return null;
+
+      // Map addressComponents to flat format for generateTerritorialHierarchy
+      const components = place.addressComponents || [];
+      const getComponent = (type: string) => components.find((c: any) => c.types?.includes(type))?.longText || '';
+      const address = {
+        city: getComponent('locality') || getComponent('administrative_area_level_2'),
+        state: getComponent('administrative_area_level_1'),
+        country: getComponent('country'),
+      };
+
+      return { lat, lon, address };
     }
   } catch (e) {
-    console.log('Geocoding failed for:', name);
+    console.log('Geocoding failed for:', name, e);
   }
   return null;
 };

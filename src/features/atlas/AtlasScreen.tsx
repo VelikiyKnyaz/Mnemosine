@@ -5,7 +5,7 @@ import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { getDb, inheritCoordinatesFromParent } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
-import SmartDropdown, { NominatimSuggestion } from '../../components/SmartDropdown';
+import SmartDropdown, { PlaceSuggestion } from '../../components/SmartDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { geocodeLocation, generateTerritorialHierarchy } from '../../core/ai_processor';
 import EntityMemoriesView from '../memories/EntityMemoriesView';
@@ -308,17 +308,16 @@ export default function AtlasScreen({ route, navigation }: any) {
     await assignParent_Action(newId);
   };
 
-  const createParentFromNominatim = async (suggestion: NominatimSuggestion) => {
+  const createParentFromPlace = async (suggestion: PlaceSuggestion) => {
     if (!actionEntity) return;
     const db = await getDb();
-    const name = suggestion.display_name.split(',')[0].trim();
-    const lat = parseFloat(suggestion.lat);
-    const lon = parseFloat(suggestion.lon);
+    const name = suggestion.displayName;
+    const lat = suggestion.lat;
+    const lon = suggestion.lon;
     
     // Check if a location with this exact name already exists
     const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'LOCATION' AND name = ? COLLATE NOCASE", name);
     if (existing) {
-      // Update its coordinates if needed
       await db.runAsync("UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 0 WHERE id = ?", lat, lon, existing.id);
       await assignParent_Action(existing.id);
       return;
@@ -330,9 +329,15 @@ export default function AtlasScreen({ route, navigation }: any) {
       newId, name, lat, lon
     );
     
-    if (suggestion.address) {
-      await generateTerritorialHierarchy(db, newId, name, { lat, lon, address: suggestion.address });
-    }
+    // Build address object for territorial hierarchy
+    const components = suggestion.addressComponents || [];
+    const getComp = (type: string) => components.find((c: any) => c.types?.includes(type))?.longText || '';
+    const address = {
+      city: getComp('locality') || getComp('administrative_area_level_2'),
+      state: getComp('administrative_area_level_1'),
+      country: getComp('country'),
+    };
+    await generateTerritorialHierarchy(db, newId, name, { lat, lon, address });
     
     await assignParent_Action(newId);
   };
@@ -575,12 +580,12 @@ export default function AtlasScreen({ route, navigation }: any) {
                     label="Lugar padre (ej: Colegio)"
                     value=""
                     items={allLocations}
-                    enableNominatim={true}
+                    enablePlaces={true}
                     onSelect={(item) => {
                        if (item) assignParent_Action(item.id);
                     }}
                     onCreateNew={createAndGeocodeParent}
-                    onSelectNominatim={createParentFromNominatim}
+                    onSelectPlace={createParentFromPlace}
                     placeholder="Escribe para buscar..."
                   />
                 </ScrollView>

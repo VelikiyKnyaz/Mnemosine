@@ -115,7 +115,7 @@ export default function ProfileScreen() {
             }}
             onCreateNew={(name) => setCountry(name)}
             placeholder="Selecciona o escribe tu país"
-            enableNominatim={false}
+            enablePlaces={false}
           />
         </View>
 

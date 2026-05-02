@@ -14,6 +14,7 @@ export default function DebugScreen() {
 
   // Config keys state
   const [openaiKey, setOpenaiKey] = useState('');
+  const [googleMapsKey, setGoogleMapsKey] = useState('');
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
   const [configSaved, setConfigSaved] = useState(false);
@@ -33,6 +34,7 @@ export default function DebugScreen() {
   const loadConfig = async () => {
     const cfg = await getAllConfig();
     setOpenaiKey(cfg.OPENAI_API_KEY || '');
+    setGoogleMapsKey(cfg.GOOGLE_MAPS_KEY || '');
     setSupabaseUrl(cfg.SUPABASE_URL || '');
     setSupabaseAnonKey(cfg.SUPABASE_ANON_KEY || '');
     setConfigSaved(!!(cfg.OPENAI_API_KEY));
@@ -45,6 +47,7 @@ export default function DebugScreen() {
 
   const handleSaveConfig = async () => {
     await setConfig('OPENAI_API_KEY', openaiKey.trim());
+    await setConfig('GOOGLE_MAPS_KEY', googleMapsKey.trim());
     await setConfig('SUPABASE_URL', supabaseUrl.trim());
     await setConfig('SUPABASE_ANON_KEY', supabaseAnonKey.trim());
     setConfigSaved(true);
@@ -103,6 +106,7 @@ export default function DebugScreen() {
           {configSaved ? (
             <View>
               <Text style={styles.savedKey}>OpenAI: {maskKey(openaiKey)}</Text>
+              <Text style={styles.savedKey}>Google Maps: {maskKey(googleMapsKey)}</Text>
               <Text style={styles.savedKey}>Supabase URL: {maskKey(supabaseUrl)}</Text>
               <Text style={styles.savedKey}>Supabase Key: {maskKey(supabaseAnonKey)}</Text>
               <Button mode="text" onPress={() => setConfigSaved(false)} style={{marginTop: 5}}>
@@ -115,6 +119,14 @@ export default function DebugScreen() {
                 label="OpenAI API Key (sk-proj-...)"
                 value={openaiKey}
                 onChangeText={setOpenaiKey}
+                style={styles.input}
+                secureTextEntry
+                dense
+              />
+              <TextInput
+                label="Google Maps API Key"
+                value={googleMapsKey}
+                onChangeText={setGoogleMapsKey}
                 style={styles.input}
                 secureTextEntry
                 dense
