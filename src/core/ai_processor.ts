@@ -53,8 +53,8 @@ async function getOrCreateTerritory(db: any, name: string, lat: number, lon: num
    const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'LOCATION' AND name = ? COLLATE NOCASE", name);
    if (existing) {
      // Ensure geo_level is set even on existing territories
-     const geoLevel = level === 'country' ? 3 : level === 'state' ? 2 : 1;
-     await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ? AND (metadata IS NULL OR metadata = '')", JSON.stringify({ geo_level: geoLevel }), existing.id);
+     const geoLevel = level === 'country' ? 4 : level === 'state' ? 3 : 2;
+     await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify({ geo_level: geoLevel }), existing.id);
      return existing.id;
    }
    const newId = uuidv4();
@@ -63,7 +63,7 @@ async function getOrCreateTerritory(db: any, name: string, lat: number, lon: num
    const jLat = lat + (Math.random() - 0.5) * jitterMag;
    const jLon = lon + (Math.random() - 0.5) * jitterMag;
 
-   const geoLevel = level === 'country' ? 3 : level === 'state' ? 2 : 1;
+   const geoLevel = level === 'country' ? 4 : level === 'state' ? 3 : 2;
    await db.runAsync("INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed, metadata) VALUES (?, 'LOCATION', ?, ?, ?, 1, ?)", newId, name, jLat, jLon, JSON.stringify({ geo_level: geoLevel }));
    return newId;
 }
