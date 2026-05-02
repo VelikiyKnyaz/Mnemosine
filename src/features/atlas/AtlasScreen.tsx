@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
-import { Appbar, Text, Button, IconButton, Chip, Title, FAB } from 'react-native-paper';
+import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { Appbar, Text, Button, IconButton, Chip, Title, FAB, TextInput } from 'react-native-paper';
 import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
-import { getDb, inheritCoordinatesFromParent } from '../../core/database';
+import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
-import SmartDropdown, { PlaceSuggestion } from '../../components/SmartDropdown';
 import { v4 as uuidv4 } from 'uuid';
-import { geocodeLocation, generateTerritorialHierarchy } from '../../core/ai_processor';
+import { generateTerritorialHierarchy } from '../../core/ai_processor';
+import { getConfig } from '../../core/config';
 import EntityMemoriesView from '../memories/EntityMemoriesView';
 
 export default function AtlasScreen({ route, navigation }: any) {
@@ -17,7 +17,7 @@ export default function AtlasScreen({ route, navigation }: any) {
   // Lists
   const [destacados, setDestacados] = useState<any[]>([]);
   const [porConfirmar, setPorConfirmar] = useState<any[]>([]);
-  const [allLocations, setAllLocations] = useState<any[]>([]); // For dropdown
+
   
   // Panel State
   const [panelMode, setPanelMode] = useState<'hidden'|'peek'|'full'>('hidden');
@@ -29,7 +29,13 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
 
   const [actionEntity, setActionEntity] = useState<any | null>(null);
-  const [resolveParentId, setResolveParentId] = useState<string | null>(null);
+  
+  // Place confirmation states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [placeSuggestions, setPlaceSuggestions] = useState<any[]>([]);
+  const [selectedPlace, setSelectedPlace] = useState<any | null>(null);
+  const [searchingPlaces, setSearchingPlaces] = useState(false);
+  const searchDebounce = useRef<NodeJS.Timeout | null>(null);
 
   const isFocused = useIsFocused();
   const mapRef = useRef<MapView>(null);
@@ -48,9 +54,7 @@ export default function AtlasScreen({ route, navigation }: any) {
     try {
       const db = await getDb();
       
-      // All Locations for Dropdown
-      const allRows = await db.getAllAsync<any>("SELECT id, name FROM entities WHERE type = 'LOCATION'");
-      setAllLocations(allRows);
+
 
       // Unified Hierarchical Query (Markers + Top + Por Confirmar)
       const query = `
@@ -236,110 +240,90 @@ export default function AtlasScreen({ route, navigation }: any) {
     }
   };
 
-  const acceptLocation = async (entityId: string) => {
-    try {
-      const db = await getDb();
-      await db.runAsync("UPDATE entities SET is_confirmed = 1 WHERE id = ?", entityId);
-      closePanel();
-      loadLocations();
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
-  const assignParent_Action = async (parentId: string) => {
-    if (!actionEntity || !parentId) return;
-    try {
-      const db = await getDb();
-      
-      // Get the parent's name to use as geocoding context
-      const parent = await db.getFirstAsync<{name: string, latitude: number|null, longitude: number|null}>(
-        "SELECT name, latitude, longitude FROM entities WHERE id = ?", parentId
-      );
-      
-      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", parentId, actionEntity.id);
-      
-      // Try to re-geocode the child using the parent name as context
-      // e.g. "Colegio, Medellín" instead of just "Colegio"
-      if (parent?.name) {
-        const betterCoords = await geocodeLocation(actionEntity.title, `, ${parent.name}`);
-        if (betterCoords) {
-          await db.runAsync(
-            "UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 0 WHERE id = ?",
-            betterCoords.lat, betterCoords.lon, actionEntity.id
-          );
-          Alert.alert('Reubicado', `"${actionEntity.title}" se reubicó cerca de "${parent.name}". Confírmalo en el mapa.`);
-        } else {
-          // Fallback: inherit parent coordinates with jitter
-          await inheritCoordinatesFromParent(actionEntity.id, parentId);
-          Alert.alert('Asignado', `Padre asignado. No se encontró ubicación específica, se colocó cerca del padre.`);
-        }
-      } else {
-        await inheritCoordinatesFromParent(actionEntity.id, parentId);
-        Alert.alert('Asignado', 'Lugar padre asignado con éxito.');
-      }
-      
-      setResolveParentId(null);
-      closePanel();
-      loadLocations();
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
-  const createAndGeocodeParent = async (name: string) => {
-    const db = await getDb();
-    const newId = uuidv4();
-    // Default 0 for is_confirmed since we are guessing
-    await db.runAsync("INSERT INTO entities (id, type, name, is_confirmed) VALUES (?, 'LOCATION', ?, 0)", newId, name);
-    
-    // Attempt Geocoding
-    const coords = await geocodeLocation(name, ''); 
-    if (coords) {
-      await db.runAsync("UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?", coords.lat, coords.lon, newId);
-      if (coords.address) {
-        await generateTerritorialHierarchy(db, newId, name, coords);
-      }
-    } else if (actionEntity && actionEntity.coordinate) {
-      // Reverse inheritance: If parent not found, place parent exactly at child's position
-      await db.runAsync("UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?", actionEntity.coordinate.latitude, actionEntity.coordinate.longitude, newId);
-    }
-    
-    await assignParent_Action(newId);
-  };
+  // ── Place Confirmation Flow ──
 
-  const createParentFromPlace = async (suggestion: PlaceSuggestion) => {
-    if (!actionEntity) return;
-    const db = await getDb();
-    const name = suggestion.displayName;
-    const lat = suggestion.lat;
-    const lon = suggestion.lon;
+  const searchPlaces = async (query: string) => {
+    setSearchQuery(query);
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
     
-    // Check if a location with this exact name already exists
-    const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'LOCATION' AND name = ? COLLATE NOCASE", name);
-    if (existing) {
-      await db.runAsync("UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 0 WHERE id = ?", lat, lon, existing.id);
-      await assignParent_Action(existing.id);
+    if (!query.trim() || query.trim().length < 2) {
+      setPlaceSuggestions([]);
       return;
     }
-    
-    const newId = uuidv4();
-    await db.runAsync(
-      "INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 0)",
-      newId, name, lat, lon
-    );
-    
-    // Build address object for territorial hierarchy
-    const components = suggestion.addressComponents || [];
-    const getComp = (type: string) => components.find((c: any) => c.types?.includes(type))?.longText || '';
-    const address = {
-      city: getComp('locality') || getComp('administrative_area_level_2'),
-      state: getComp('administrative_area_level_1'),
-      country: getComp('country'),
-    };
-    await generateTerritorialHierarchy(db, newId, name, { lat, lon, address });
-    
-    await assignParent_Action(newId);
+
+    searchDebounce.current = setTimeout(async () => {
+      try {
+        setSearchingPlaces(true);
+        const apiKey = await getConfig('GOOGLE_MAPS_KEY');
+        if (!apiKey) { setSearchingPlaces(false); return; }
+
+        const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.addressComponents',
+          },
+          body: JSON.stringify({ textQuery: query.trim(), maxResultCount: 5 }),
+        });
+        const data = await res.json();
+        setPlaceSuggestions(data.places || []);
+      } catch (e) {
+        console.error('Places search error:', e);
+        setPlaceSuggestions([]);
+      } finally {
+        setSearchingPlaces(false);
+      }
+    }, 600);
+  };
+
+  const selectPlaceSuggestion = (place: any) => {
+    setSelectedPlace(place);
+    if (place.location) {
+      mapRef.current?.animateToRegion({
+        latitude: place.location.latitude,
+        longitude: place.location.longitude,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      }, 500);
+    }
+  };
+
+  const confirmPlace = async () => {
+    if (!actionEntity || !selectedPlace) return;
+    try {
+      const db = await getDb();
+      const lat = selectedPlace.location.latitude;
+      const lon = selectedPlace.location.longitude;
+      
+      // Update entity with confirmed coordinates
+      await db.runAsync(
+        "UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 1 WHERE id = ?",
+        lat, lon, actionEntity.id
+      );
+
+      // Generate territorial hierarchy automatically from addressComponents
+      const components = selectedPlace.addressComponents || [];
+      const getComp = (type: string) => components.find((c: any) => c.types?.includes(type))?.longText || '';
+      const address = {
+        city: getComp('locality') || getComp('administrative_area_level_2'),
+        state: getComp('administrative_area_level_1'),
+        country: getComp('country'),
+      };
+      await generateTerritorialHierarchy(db, actionEntity.id, actionEntity.title, { lat, lon, address });
+
+      // Reset state
+      setSelectedPlace(null);
+      setPlaceSuggestions([]);
+      setSearchQuery('');
+      closePanel();
+      loadLocations();
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'No se pudo confirmar la ubicación.');
+    }
   };
 
   const jumpTo = (coordinate: any) => {
@@ -546,11 +530,20 @@ export default function AtlasScreen({ route, navigation }: any) {
               <ScrollView style={styles.listArea}>
                 {porConfirmar.length === 0 ? <Text style={styles.emptyText}>No hay ubicaciones por confirmar.</Text> :
                 porConfirmar.map(item => (
-                  <TouchableOpacity key={item.id} onPress={() => { jumpTo(item.coordinate); setActionEntity(item); setPanelType('action'); }} style={styles.listItem}>
+                  <TouchableOpacity key={item.id} onPress={() => { 
+                    setActionEntity(item); 
+                    setSearchQuery(item.title);
+                    setSelectedPlace(null);
+                    setPlaceSuggestions([]);
+                    setPanelType('action'); 
+                    setPanelMode('full');
+                    // Trigger initial search
+                    searchPlaces(item.title);
+                  }} style={styles.listItem}>
                     <Text style={styles.listIcon}>⚠️</Text>
                     <View style={{flex:1}}>
                       <Text style={styles.listTitle}>{item.title}</Text>
-                      <Text style={styles.listSub}>Toca para confirmar</Text>
+                      <Text style={styles.listSub}>Toca para confirmar ubicación</Text>
                     </View>
                   </TouchableOpacity>
                 ))}
@@ -560,34 +553,85 @@ export default function AtlasScreen({ route, navigation }: any) {
             {panelType === 'action' && actionEntity && (
               <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.actionPanel}>
                 <ScrollView keyboardShouldPersistTaps="handled">
-                  <Text style={{marginBottom: 10, marginTop: 10}}>¿Qué deseas hacer con este lugar?</Text>
-                  
-                  {actionEntity.is_confirmed === 0 && (
-                    <Button mode="contained" onPress={() => acceptLocation(actionEntity.id)} style={{marginBottom: 8}}>
-                      ✅ Aceptar Ubicación Sugerida
+                  <Text style={{fontWeight: 'bold', fontSize: 16, marginBottom: 4}}>
+                    Confirmar: {actionEntity.title}
+                  </Text>
+                  <Text style={{color: '#666', fontSize: 13, marginBottom: 12}}>
+                    Busca el lugar real y selecciona la opción correcta.
+                  </Text>
+
+                  <TextInput
+                    mode="outlined"
+                    label="Buscar lugar"
+                    value={searchQuery}
+                    onChangeText={searchPlaces}
+                    dense
+                    right={searchingPlaces ? <TextInput.Icon icon="loading" /> : <TextInput.Icon icon="magnify" />}
+                    style={{marginBottom: 10, backgroundColor: 'white'}}
+                  />
+
+                  {/* Suggestions list */}
+                  {placeSuggestions.map((place: any, idx: number) => {
+                    const isSelected = selectedPlace === place;
+                    return (
+                      <TouchableOpacity
+                        key={idx}
+                        style={[styles.suggestionItem, isSelected && styles.suggestionSelected]}
+                        onPress={() => selectPlaceSuggestion(place)}
+                      >
+                        <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                          <Text style={{fontSize: 18, marginRight: 10}}>
+                            {isSelected ? '✅' : '📍'}
+                          </Text>
+                          <View style={{flex: 1}}>
+                            <Text style={{fontWeight: 'bold', fontSize: 15, color: '#333'}}>
+                              {place.displayName?.text || ''}
+                            </Text>
+                            <Text style={{fontSize: 12, color: '#888'}} numberOfLines={2}>
+                              {place.formattedAddress || ''}
+                            </Text>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+
+                  {searchingPlaces && (
+                    <View style={{padding: 20, alignItems: 'center'}}>
+                      <ActivityIndicator size="small" />
+                      <Text style={{color: '#888', marginTop: 8}}>Buscando...</Text>
+                    </View>
+                  )}
+
+                  {!searchingPlaces && placeSuggestions.length === 0 && searchQuery.length > 2 && (
+                    <Text style={{color: '#888', textAlign: 'center', padding: 15}}>
+                      No se encontraron resultados. Intenta con otro término.
+                    </Text>
+                  )}
+
+                  {/* Confirm button */}
+                  {selectedPlace && (
+                    <Button 
+                      mode="contained" 
+                      onPress={confirmPlace} 
+                      style={{marginTop: 15, marginBottom: 8}}
+                      icon="check"
+                    >
+                      Confirmar Lugar
                     </Button>
                   )}
-                  <Button mode="outlined" icon="map-marker" onPress={() => {
-                    const ent = actionEntity;
-                    closePanel();
-                    startEditing(ent);
-                  }} style={{marginBottom: 15}}>
-                    Ubicar Manualmente en Mapa
-                  </Button>
 
-                  <Text style={{fontWeight: 'bold', marginBottom: 5}}>O asignar a un Lugar Padre:</Text>
-                  <SmartDropdown
-                    label="Lugar padre (ej: Colegio)"
-                    value=""
-                    items={allLocations}
-                    enablePlaces={true}
-                    onSelect={(item) => {
-                       if (item) assignParent_Action(item.id);
+                  {/* Manual placement - secondary option */}
+                  <TouchableOpacity
+                    onPress={() => {
+                      const ent = actionEntity;
+                      closePanel();
+                      startEditing(ent);
                     }}
-                    onCreateNew={createAndGeocodeParent}
-                    onSelectPlace={createParentFromPlace}
-                    placeholder="Escribe para buscar..."
-                  />
+                    style={{paddingVertical: 10, alignItems: 'center'}}
+                  >
+                    <Text style={{color: '#888', fontSize: 13}}>Ubicar manualmente en el mapa →</Text>
+                  </TouchableOpacity>
                 </ScrollView>
               </KeyboardAvoidingView>
             )}
@@ -674,6 +718,19 @@ const styles = StyleSheet.create({
   listTitle: { fontSize: 15, fontWeight: 'bold', color: '#333' },
   listSub: { fontSize: 12, color: '#666' },
   emptyText: { textAlign: 'center', color: '#999', marginTop: 20, fontStyle: 'italic' },
+  
+  suggestionItem: {
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 8,
+    marginBottom: 8,
+    backgroundColor: '#fafafa',
+  },
+  suggestionSelected: {
+    borderColor: '#4CAF50',
+    backgroundColor: '#e8f5e9',
+  },
   
   debugHud: {
     position: 'absolute',

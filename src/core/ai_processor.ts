@@ -162,9 +162,8 @@ export const processPendingMemories = async () => {
           textToProcess.trim(), dates.start_date, dates.end_date, aiData.sentiment, memory.id
         );
 
-        // 6. Hydrate Entities with Hierarchies and Geocoding
-        const entityIdMap: Record<string, string> = {}; 
-        let geocodedLocations = 0;
+        // 6. Hydrate Entities (LOCATIONs created without coords, confirmed in Atlas)
+        const entityIdMap: Record<string, string> = {};
         
         for (const entity of aiData.entities) {
           // Resolve via alias first (deterministic local resolution)
@@ -184,51 +183,11 @@ export const processPendingMemories = async () => {
 
           let entityId = existingEntity?.id;
 
-          if (entity.type === 'LOCATION') {
-            // Geocodify: si es nueva O si ya existe pero sin coordenadas
-            const needsGeocode = !entityId || (existingEntity && existingEntity.latitude === null);
-            
-            if (needsGeocode) {
-              let coords = await geocodeLocation(entity.name, hometownContext);
-              
-              // Fallback a la ciudad base si falla la busqueda especifica
-              if (!coords && hometownContext) {
-                 const fallbackContext = hometownContext.replace(', ', '').trim();
-                 if (fallbackContext) {
-                    coords = await geocodeLocation(fallbackContext, '');
-                 }
-              }
-
-              if (coords) {
-                geocodedLocations++;
-                if (entityId) {
-                  await db.runAsync(
-                    "UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 0 WHERE id = ?",
-                    coords.lat, coords.lon, entityId
-                  );
-                } else {
-                  entityId = uuidv4();
-                  await db.runAsync(
-                    "INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, ?, ?, ?, ?, 0)",
-                    entityId, entity.type, entity.name, coords.lat, coords.lon
-                  );
-                }
-
-                // Generar Jerarquía Territorial
-                await generateTerritorialHierarchy(db, entityId, entity.name, coords);
-              } else if (!entityId) {
-                entityId = uuidv4();
-                await db.runAsync(
-                  "INSERT INTO entities (id, type, name) VALUES (?, ?, ?)",
-                  entityId, entity.type, entity.name
-                );
-              }
-            }
-          } else if (!entityId) {
-            // PERSON, EVENT, OBJECT: crear sin coords
+          if (!entityId) {
+            // Create new entity without coordinates (LOCATION will be confirmed manually in Atlas)
             entityId = uuidv4();
             await db.runAsync(
-              "INSERT INTO entities (id, type, name) VALUES (?, ?, ?)",
+              "INSERT INTO entities (id, type, name, is_confirmed) VALUES (?, ?, ?, 0)",
               entityId, entity.type, entity.name
             );
           }
