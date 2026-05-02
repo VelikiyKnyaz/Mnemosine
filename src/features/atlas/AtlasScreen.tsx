@@ -394,43 +394,77 @@ export default function AtlasScreen({ route, navigation }: any) {
   const visibleMarkers = React.useMemo(() => {
     const delta = currentRegion?.latitudeDelta || 100;
     
-    // Determine the visible HEIGHT threshold based on zoom level
-    // Instead of depth (which varies wildly), height is consistent (0 = leaf).
-    // A node "splits" (hides itself and shows its children) when delta drops below its threshold.
+    // Height thresholds (geo_level matches these: 0=leaf, 1=neighborhood, 2=city, 3=state, 4=country)
     let visibleHeight = 0;
-    if (delta <= 0.02) visibleHeight = 0;        // Max zoom, leaf nodes only
-    else if (delta <= 0.2) visibleHeight = 1;    // Neighborhood clusters
-    else if (delta <= 5) visibleHeight = 2;      // City clusters
-    else if (delta <= 20) visibleHeight = 3;     // State clusters
-    else visibleHeight = 4;                      // Country clusters
+    if (delta <= 0.02) visibleHeight = 0;
+    else if (delta <= 0.2) visibleHeight = 1;
+    else if (delta <= 5) visibleHeight = 2;
+    else if (delta <= 25) visibleHeight = 3;
+    else visibleHeight = 4;
+
+    // Pre-build children map and marker lookup for O(1) access
+    const markerMap = new Map<string, any>();
+    const childrenOf = new Map<string, any[]>();
+    markers.forEach(m => {
+      markerMap.set(m.id, m);
+      if (m.parent_id) {
+        if (!childrenOf.has(m.parent_id)) childrenOf.set(m.parent_id, []);
+        childrenOf.get(m.parent_id)!.push(m);
+      }
+    });
+
+    // Smart split: check if a cluster's children are too spread for the current viewport
+    const shouldSplitEarly = (nodeId: string): boolean => {
+      const children = childrenOf.get(nodeId);
+      if (!children || children.length < 2) return false;
+      const node = markerMap.get(nodeId);
+      if (!node?.coordinate) return false;
+      
+      let maxDist = 0;
+      for (const child of children) {
+        if (!child.coordinate) continue;
+        const dist = Math.abs(child.coordinate.latitude - node.coordinate.latitude)
+                   + Math.abs(child.coordinate.longitude - node.coordinate.longitude);
+        maxDist = Math.max(maxDist, dist);
+      }
+      // If children span > 35% of viewport, split early
+      return maxDist > delta * 0.35;
+    };
+
+    // Determine which clusters should force-dissolve (cascade down the tree)
+    const forceDissolved = new Set<string>();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      markers.forEach(m => {
+        if (forceDissolved.has(m.id)) return;
+        // Only check nodes that are currently acting as clusters (height > visibleHeight)
+        // OR nodes whose parent was just dissolved (making them newly visible clusters)
+        const isCluster = m.height > visibleHeight || (m.parent_id && forceDissolved.has(m.parent_id));
+        if (isCluster && m.hasChildren && shouldSplitEarly(m.id)) {
+          forceDissolved.add(m.id);
+          changed = true;
+        }
+      });
+    }
 
     return markers.filter(m => {
-      // 1. Always show the marker being acted upon
+      // Always show the marker being edited
       if (editingEntity && editingEntity.id === m.id) return true;
-      if (actionEntity && actionEntity.id === m.id) return true;
+      // Don't force-show actionEntity on map (avoids phantom pin during confirmation)
       
-      // 2. Hide markers without coordinates
       if (!m.coordinate) return false;
 
-      // 3. Bottom-up cluster logic:
-      // A node is visible if its height matches the current visibleHeight.
-      // Exception: If a node is a leaf (height=0) but we are at a higher zoom level (e.g. visibleHeight=2),
-      // it should be visible ONLY if it doesn't have a parent that is currently acting as its cluster.
-      // To simplify: if a node's height is >= visibleHeight, we show it (it acts as the cluster for its children).
-      // Wait, if height >= visibleHeight, then BOTH height 2 and height 3 would show? No, we only want the TOPMOST visible node.
-      // Correct rule: A node is visible if it is exactly the visibleHeight, OR if it's a leaf node and visibleHeight < its height.
-      // Actually: A node is visible if `m.height === visibleHeight`.
-      // What if `visibleHeight === 3` but the max height in a branch is 1? Then nothing shows!
-      // Better rule: A node shows if its height is the MAX(m.height, visibleHeight) for its branch.
-      // Simplest rule: A node is visible if:
-      // a) It is a cluster and its height == visibleHeight
-      // b) It is a leaf (height == 0) and visibleHeight <= 0 (wait, if visibleHeight is 1, a standalone leaf should show!)
-      // Let's do: A node shows if its height <= visibleHeight AND it has no parent, OR its parent's height > visibleHeight.
-      
-      const parent = m.parent_id ? markers.find(p => p.id === m.parent_id) : null;
+      // If this node is force-dissolved, hide it (children replace it)
+      if (forceDissolved.has(m.id)) return false;
+
+      const parent = m.parent_id ? markerMap.get(m.parent_id) : null;
       const parentHeight = parent ? parent.height : Infinity;
 
-      // It is visible if the current map zoom allows its height, BUT the map zoom does NOT allow its parent's height.
+      // Show if parent was force-dissolved (this node replaces it)
+      if (parent && forceDissolved.has(parent.id)) return true;
+
+      // Normal rule: show if height is appropriate and parent is above zoom level
       return m.height <= visibleHeight && parentHeight > visibleHeight;
     });
   }, [markers, currentRegion, editingEntity, actionEntity]);
