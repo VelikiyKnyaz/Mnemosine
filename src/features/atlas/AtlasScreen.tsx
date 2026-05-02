@@ -850,7 +850,7 @@ export default function AtlasScreen({ route, navigation }: any) {
             <Text style={styles.debugText}>Marcadores Visibles: {visibleMarkers.length}</Text>
           </View>
 
-          {(editingEntity || (confirmMode === 'manual' && actionEntity)) && (
+          {(editingEntity || ((confirmMode === 'quick' || confirmMode === 'precise') && actionEntity)) && (
             <View style={[styles.staticPinContainer, panelMode !== 'hidden' && { paddingBottom: '45%' }]} pointerEvents="none">
               <IconButton icon="map-marker" iconColor="red" size={50} style={styles.staticPin} />
             </View>
@@ -1001,7 +1001,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                             buttonColor="#4caf50"
                             onPress={() => {
                               setSelectedPlace(autoTopResult);
-                              setConfirmMode('manual');
+                              setConfirmMode('quick');
                               if (autoTopResult.location) {
                                 mapRef.current?.animateToRegion({
                                   latitude: autoTopResult.location.latitude,
@@ -1017,20 +1017,128 @@ export default function AtlasScreen({ route, navigation }: any) {
                       ) : null}
 
                       <TouchableOpacity
-                        onPress={() => setConfirmMode('manual')}
+                        onPress={() => { setConfirmMode('quick'); searchPlaces(searchQuery); }}
+                        style={{backgroundColor: '#F3E5F5', borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center'}}
+                      >
+                        <Text style={{fontSize: 22, marginRight: 12}}>⚡</Text>
+                        <View style={{flex: 1}}>
+                          <Text style={{fontWeight: 'bold', fontSize: 14, color: '#6200ee'}}>Búsqueda rápida</Text>
+                          <Text style={{fontSize: 12, color: '#888'}}>Busca por nombre y selecciona de sugerencias</Text>
+                        </View>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setConfirmMode('precise')}
                         style={{backgroundColor: '#E3F2FD', borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center'}}
                       >
-                        <Text style={{fontSize: 22, marginRight: 12}}>🗺️</Text>
+                        <Text style={{fontSize: 22, marginRight: 12}}>🎯</Text>
                         <View style={{flex: 1}}>
-                          <Text style={{fontWeight: 'bold', fontSize: 14, color: '#1565C0'}}>Ubicar en mapa</Text>
-                          <Text style={{fontSize: 12, color: '#888'}}>Busca un lugar o arrastra el pin manualmente</Text>
+                          <Text style={{fontWeight: 'bold', fontSize: 14, color: '#1565C0'}}>Ubicación precisa</Text>
+                          <Text style={{fontSize: 12, color: '#888'}}>Busca por dirección o arrastra el mapa</Text>
                         </View>
                       </TouchableOpacity>
                     </View>
                   )}
 
-                  {/* ═══ MANUAL MODE (UNIFIED) ═══ */}
-                  {confirmMode === 'manual' && (
+                  {/* ═══ QUICK MODE ═══ */}
+                  {confirmMode === 'quick' && (
+                    <View>
+                      <Text style={{color: '#666', fontSize: 12, marginBottom: 10}}>
+                        Busca y selecciona una sugerencia. Puedes ajustar el marcador rojo arrastrando el mapa.
+                      </Text>
+                      
+                      <TextInput
+                        mode="outlined"
+                        label="Buscar lugar"
+                        value={searchQuery}
+                        onChangeText={searchPlaces}
+                        dense
+                        right={searchingPlaces ? <TextInput.Icon icon="loading" /> : <TextInput.Icon icon="magnify" />}
+                        style={{marginBottom: 10, backgroundColor: 'white'}}
+                      />
+
+                      {placeSuggestions.map((place: any, idx: number) => {
+                        const isSelected = selectedPlace === place;
+                        return (
+                          <TouchableOpacity
+                            key={idx}
+                            style={[styles.suggestionItem, isSelected && styles.suggestionSelected]}
+                            onPress={() => selectPlaceSuggestion(place)}
+                          >
+                            <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                              <Text style={{fontSize: 18, marginRight: 10}}>
+                                {isSelected ? '✅' : '📍'}
+                              </Text>
+                              <View style={{flex: 1}}>
+                                <Text style={{fontWeight: 'bold', fontSize: 15, color: '#333'}}>
+                                  {place.displayName?.text || ''}
+                                </Text>
+                                <Text style={{fontSize: 12, color: '#888'}} numberOfLines={2}>
+                                  {place.formattedAddress || ''}
+                                </Text>
+                              </View>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+
+                      {searchingPlaces && (
+                        <View style={{padding: 15, alignItems: 'center'}}>
+                          <ActivityIndicator size="small" />
+                          <Text style={{color: '#888', marginTop: 6}}>Buscando...</Text>
+                        </View>
+                      )}
+
+                      {!searchingPlaces && placeSuggestions.length === 0 && searchQuery.length > 2 && (
+                        <Text style={{color: '#888', textAlign: 'center', padding: 12, fontSize: 13}}>
+                          Sin resultados. Intenta con otro término.
+                        </Text>
+                      )}
+
+                      {/* Parent assignment */}
+                      <TouchableOpacity
+                        onPress={() => setShowParentAssign(!showParentAssign)}
+                        style={{paddingVertical: 6, alignItems: 'center', marginTop: 10}}
+                      >
+                        <Text style={{color: '#6200ee', fontSize: 13, fontWeight: 'bold'}}>
+                          {showParentAssign ? '▲ Ocultar' : '📎 Hace parte de otro lugar'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      {showParentAssign && (
+                        <View style={{marginTop: 4}}>
+                          <SmartDropdown
+                            label="Lugar padre"
+                            value=""
+                            items={allLocations}
+                            enablePlaces={false}
+                            onSelect={(item) => {
+                              if (item) assignParentToAction(item.id);
+                            }}
+                            placeholder="Buscar lugar existente..."
+                          />
+                        </View>
+                      )}
+
+                      <Button 
+                        mode="contained" 
+                        onPress={confirmPrecise} 
+                        style={{marginTop: 12, marginBottom: 6}}
+                        icon="check"
+                      >
+                        Confirmar Ubicación
+                      </Button>
+
+                      <TouchableOpacity
+                        onPress={() => setConfirmMode('none')}
+                        style={{paddingVertical: 10, alignItems: 'center', marginTop: 4}}
+                      >
+                        <Text style={{color: '#888', fontSize: 12}}>← Cambiar método</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* ═══ PRECISE MODE ═══ */}
+                  {confirmMode === 'precise' && (
                     <View>
                       <Text style={{color: '#666', fontSize: 12, marginBottom: 10}}>
                         Arrastra el mapa para posicionar el marcador rojo.
@@ -1040,50 +1148,18 @@ export default function AtlasScreen({ route, navigation }: any) {
                         <View style={{flex: 1}}>
                           <TextInput
                             mode="outlined"
-                            label="Buscar lugar o dirección"
-                            value={searchQuery}
-                            onChangeText={searchPlaces}
+                            label="Dirección"
+                            value={addressQuery}
+                            onChangeText={setAddressQuery}
+                            onSubmitEditing={sendAddress}
                             dense
-                            right={searchingPlaces ? <TextInput.Icon icon="loading" /> : <TextInput.Icon icon="magnify" />}
+                            placeholder="ej: Calle 10, Medellín, Colombia"
                             style={{backgroundColor: 'white'}}
+                            returnKeyType="send"
                           />
                         </View>
+                        <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{marginLeft: 4}} />
                       </View>
-
-                      {placeSuggestions.length > 0 && (
-                        <ScrollView style={{maxHeight: 150, marginBottom: 10}}>
-                          {placeSuggestions.map((place: any, idx: number) => {
-                            const isSelected = selectedPlace === place;
-                            return (
-                              <TouchableOpacity
-                                key={idx}
-                                style={[styles.suggestionItem, isSelected && styles.suggestionSelected]}
-                                onPress={() => selectPlaceSuggestion(place)}
-                              >
-                                <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                                  <Text style={{fontSize: 18, marginRight: 10}}>
-                                    {isSelected ? '✅' : '📍'}
-                                  </Text>
-                                  <View style={{flex: 1}}>
-                                    <Text style={{fontWeight: 'bold', fontSize: 15, color: '#333'}}>
-                                      {place.displayName?.text || ''}
-                                    </Text>
-                                    <Text style={{fontSize: 12, color: '#888'}} numberOfLines={2}>
-                                      {place.formattedAddress || ''}
-                                    </Text>
-                                  </View>
-                                </View>
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </ScrollView>
-                      )}
-
-                      {searchingPlaces && (
-                        <View style={{padding: 10, alignItems: 'center'}}>
-                          <ActivityIndicator size="small" color="#6200ee" />
-                        </View>
-                      )}
 
                       {/* Parent assignment */}
                       <TouchableOpacity
