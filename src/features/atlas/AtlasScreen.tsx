@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Dimensions } from 'react-native';
 import { Appbar, Text, Button, IconButton, Chip, Title, FAB, TextInput } from 'react-native-paper';
 import MapView, { Marker, Region, Callout } from 'react-native-maps';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
@@ -839,11 +840,42 @@ export default function AtlasScreen({ route, navigation }: any) {
       <Appbar.Header>
         <Appbar.Content title={
           editingEntity ? `Ubicar: ${editingEntity.title}` :
-            (confirmMode === 'precise' && actionEntity) ? `📍 ${actionEntity.title}` :
-              'Atlas de Vida'
+            selectedPlaceEntity ? selectedPlaceEntity.title :
+              (confirmMode === 'precise' && actionEntity) ? `📍 ${actionEntity.title}` :
+                'Atlas de Vida'
         } />
-        {editingEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
-        {confirmMode === 'precise' && actionEntity && !editingEntity && (
+        
+        {/* Actions for Selected Place */}
+        {selectedPlaceEntity && !editingEntity && (
+          <>
+            <Appbar.Action icon="pencil" onPress={() => {
+              setActionEntity(selectedPlaceEntity);
+              setConfirmMode('none');
+              setSearchQuery(selectedPlaceEntity.title);
+              fetchTopSuggestion(selectedPlaceEntity);
+              setSelectedPlace(null);
+              setPlaceSuggestions([]);
+              setAddressQuery('');
+              setEditingEntity(null);
+              setMemoryEntityId(null);
+              setPanelType('action'); 
+              setPanelMode('peek');
+              setSelectedPlaceEntity(null);
+            }} />
+            <Appbar.Action icon="delete" iconColor="#B00020" onPress={() => {
+              deleteEntity(selectedPlaceEntity.id);
+              setSelectedPlaceEntity(null);
+              setPanelMode('hidden');
+            }} />
+            <Appbar.Action icon="close" onPress={() => setSelectedPlaceEntity(null)} />
+          </>
+        )}
+
+        {/* Actions for Editing */}
+        {editingEntity && !selectedPlaceEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
+        
+        {/* Actions for Confirm Mode */}
+        {confirmMode === 'precise' && actionEntity && !editingEntity && !selectedPlaceEntity && (
           <Appbar.Action icon="close" onPress={() => { setConfirmMode('quick'); setEditingEntity(null); }} />
         )}
       </Appbar.Header>
@@ -895,13 +927,24 @@ export default function AtlasScreen({ route, navigation }: any) {
                     }
                   }}
                 >
-                  <View style={[styles.clusterMarker, {
-                    backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                    width: size,
-                    height: size,
-                    borderRadius: size / 2,
-                  }]}>
-                    <Text style={styles.clusterText}>{marker.mem_count || ''}</Text>
+                  <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+                    <MaterialCommunityIcons 
+                      name="circle" 
+                      size={size} 
+                      color={marker.is_confirmed === 0 ? '#ff9800' : '#e53935'} 
+                      style={{ position: 'absolute' }} 
+                    />
+                    <Text style={{
+                      color: 'white',
+                      fontWeight: 'bold',
+                      fontSize: size * 0.4,
+                      zIndex: 1,
+                      textShadowColor: 'rgba(0, 0, 0, 0.5)',
+                      textShadowOffset: {width: 0, height: 1},
+                      textShadowRadius: 1
+                    }}>
+                      {marker.mem_count || ''}
+                    </Text>
                   </View>
                 </Marker>
               );
@@ -938,44 +981,7 @@ export default function AtlasScreen({ route, navigation }: any) {
         </View>
       )}
 
-      {/* Floating Action Menu for Selected Marker */}
-      {selectedPlaceEntity && !editingEntity && (
-        <View style={{
-          position: 'absolute',
-          top: 20,
-          right: 20,
-          backgroundColor: 'rgba(255, 255, 255, 0.95)',
-          padding: 6,
-          borderRadius: 30,
-          elevation: 10,
-          shadowColor: '#000',
-          shadowOpacity: 0.3,
-          shadowOffset: { width: 0, height: 4 },
-          shadowRadius: 10,
-          flexDirection: 'row',
-          alignItems: 'center',
-        }}>
-            <IconButton icon="pencil" size={24} iconColor="#1565C0" onPress={() => {
-              setActionEntity(selectedPlaceEntity);
-              setConfirmMode('none');
-              setSearchQuery(selectedPlaceEntity.title);
-              fetchTopSuggestion(selectedPlaceEntity);
-              setSelectedPlace(null);
-              setPlaceSuggestions([]);
-              setAddressQuery('');
-              setEditingEntity(null);
-              setMemoryEntityId(null);
-              setPanelType('action'); 
-              setPanelMode('peek');
-              setSelectedPlaceEntity(null);
-            }} style={{margin: 0, backgroundColor: '#e3f2fd'}} />
-            <IconButton icon="delete-outline" size={24} iconColor="#B00020" onPress={() => {
-              deleteEntity(selectedPlaceEntity.id);
-              setSelectedPlaceEntity(null);
-              setPanelMode('hidden');
-            }} style={{margin: 0, marginLeft: 8, backgroundColor: '#ffebee'}} />
-        </View>
-      )}
+      {/* Floating Action Menu for Selected Marker removed: integrated into Appbar */}
 
       {/* Editing Overlay */}
       {editingEntity && (
@@ -1353,14 +1359,5 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 8,
   },
-  debugText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
-  clusterMarker: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  clusterText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 12,
-  },
+  debugText: { color: 'white', fontSize: 10, fontWeight: 'bold' }
 });
