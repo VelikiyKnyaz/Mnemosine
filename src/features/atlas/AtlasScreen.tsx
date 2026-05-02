@@ -340,14 +340,13 @@ export default function AtlasScreen({ route, navigation }: any) {
           currNode = markers.find(m => m.id === currNode.parent_id);
         }
         
-        // If no parent lineage exists, fallback to user's birthplace/hometown as context
+        // If no parent lineage exists, fallback to user's country as context
         if (contextParts.length === 0) {
           try {
             const db = await getDb();
-            const profile = await db.getFirstAsync<any>('SELECT hometown, country FROM user_profile LIMIT 1');
-            if (profile) {
-              if (profile.hometown) contextParts.push(profile.hometown);
-              if (profile.country) contextParts.push(profile.country);
+            const profile = await db.getFirstAsync<any>('SELECT country FROM user_profile LIMIT 1');
+            if (profile && profile.country) {
+              contextParts.push(profile.country);
             }
           } catch (profileErr) {
             console.warn('Could not load user profile context', profileErr);
