@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Dimensions } from 'react-native';
 import { Appbar, Text, Button, IconButton, Chip, Title, FAB, TextInput } from 'react-native-paper';
-import MapView, { Marker, Region } from 'react-native-maps';
+import MapView, { Marker, Region, Callout } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
@@ -812,6 +812,10 @@ export default function AtlasScreen({ route, navigation }: any) {
     return resultList;
   }, [markers, currentRegion, editingEntity, actionEntity]);
 
+  const { height: windowHeight } = Dimensions.get('window');
+  const panelHeight = panelMode === 'full' ? windowHeight * 0.9 : (panelMode === 'peek' ? windowHeight * 0.45 : 0);
+  const activeMapPadding = (editingEntity || (actionEntity && panelType === 'action') || panelMode !== 'hidden') ? panelHeight : 0;
+
   return (
     <View style={styles.container}>
       <Appbar.Header>
@@ -832,6 +836,7 @@ export default function AtlasScreen({ route, navigation }: any) {
             ref={mapRef}
             style={styles.map}
             initialRegion={initialRegion}
+            mapPadding={{ top: 0, right: 0, bottom: activeMapPadding, left: 0 }}
             onRegionChangeComplete={(region) => {
               setCurrentRegion(region);
             }}
@@ -853,36 +858,8 @@ export default function AtlasScreen({ route, navigation }: any) {
                       fetchTopSuggestion(marker);
                       setPanelType('action');
                       setPanelMode('peek');
-                    } else {
-                      Alert.alert(
-                        marker.title,
-                        '¿Qué deseas hacer con este lugar?',
-                        [
-                          { text: 'Ver Recuerdos', onPress: () => {
-                              setMemoryEntityId(marker.id);
-                              setPanelType('memories');
-                              setPanelMode('peek');
-                            } 
-                          },
-                          { text: 'Editar Ubicación', onPress: () => {
-                              setActionEntity(marker);
-                              setConfirmMode('none');
-                              setSearchQuery(marker.title);
-                              fetchTopSuggestion(marker);
-                              setSelectedPlace(null);
-                              setPlaceSuggestions([]);
-                              setAddressQuery('');
-                              setEditingEntity(null);
-                              setMemoryEntityId(null);
-                              setPanelType('action'); 
-                              setPanelMode('peek');
-                            } 
-                          },
-                          { text: 'Eliminar', style: 'destructive', onPress: () => deleteEntity(marker.id) },
-                          { text: 'Cancelar', style: 'cancel' }
-                        ]
-                      );
                     }
+                    // For confirmed markers, let the Callout show natively
                   }}
                 >
                   <View style={{ padding: 6 }}>
@@ -895,6 +872,34 @@ export default function AtlasScreen({ route, navigation }: any) {
                       <Text style={styles.clusterText}>{marker.mem_count || ''}</Text>
                     </View>
                   </View>
+                  
+                  {/* Floating Action Menu (Callout) */}
+                  <Callout tooltip>
+                    <View style={{ backgroundColor: 'white', padding: 10, borderRadius: 10, width: 160, elevation: 5, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 4 }}>
+                      <Text style={{ fontWeight: 'bold', marginBottom: 8, textAlign: 'center', color: '#333' }}>{marker.title}</Text>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-around' }}>
+                        <IconButton icon="folder-open" size={24} iconColor="#6200ee" onPress={() => {
+                          setMemoryEntityId(marker.id);
+                          setPanelType('memories');
+                          setPanelMode('peek');
+                        }} style={{margin: 0}} />
+                        <IconButton icon="pencil" size={24} iconColor="#1565C0" onPress={() => {
+                          setActionEntity(marker);
+                          setConfirmMode('none');
+                          setSearchQuery(marker.title);
+                          fetchTopSuggestion(marker);
+                          setSelectedPlace(null);
+                          setPlaceSuggestions([]);
+                          setAddressQuery('');
+                          setEditingEntity(null);
+                          setMemoryEntityId(null);
+                          setPanelType('action'); 
+                          setPanelMode('peek');
+                        }} style={{margin: 0}} />
+                        <IconButton icon="delete-outline" size={24} iconColor="#B00020" onPress={() => deleteEntity(marker.id)} style={{margin: 0}} />
+                      </View>
+                    </View>
+                  </Callout>
                 </Marker>
               );
             })}
@@ -907,7 +912,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           </View>
 
           {(editingEntity || (actionEntity && panelType === 'action')) && (
-            <View style={styles.staticPinContainer} pointerEvents="none">
+            <View style={[styles.staticPinContainer, { paddingBottom: activeMapPadding }]} pointerEvents="none">
               <View style={[styles.clusterMarker, { backgroundColor: '#e53935', width: 36, height: 36, borderRadius: 18 }]} />
             </View>
           )}
