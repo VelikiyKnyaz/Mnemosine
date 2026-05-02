@@ -842,6 +842,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                 title={marker.title}
                 description={marker.is_confirmed === 0 ? "⚠️ Por confirmar" : `${marker.mem_count || 0} recuerdos`}
                 pinColor={marker.is_confirmed === 0 ? 'orange' : 'red'}
+                anchor={{ x: 0.5, y: 0.5 }}
                 onPress={() => {
                   const isTerritory = marker.height >= 2 || marker.hasChildren;
                   if (marker.is_confirmed === 0 && !isTerritory) {
@@ -857,14 +858,15 @@ export default function AtlasScreen({ route, navigation }: any) {
                     setPanelMode('peek');
                   }
                 }}
+                onLongPress={() => deleteEntity(marker.id)}
               >
                 {/* Custom Marker View for Clusters */}
                 {marker.hasChildren || marker.mem_count > 0 ? (
                   <View style={[styles.clusterMarker, { 
                     backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                    width: marker.hasChildren ? 40 : 30,
-                    height: marker.hasChildren ? 40 : 30,
-                    borderRadius: marker.hasChildren ? 20 : 15,
+                    width: marker.hasChildren ? 48 : 36,
+                    height: marker.hasChildren ? 48 : 36,
+                    borderRadius: marker.hasChildren ? 24 : 18,
                   }]}>
                     <Text style={styles.clusterText}>{marker.mem_count}</Text>
                   </View>
@@ -927,13 +929,23 @@ export default function AtlasScreen({ route, navigation }: any) {
              <View style={{flexDirection: 'row'}}>
                {panelType === 'memories' && memoryEntityId && (
                  <IconButton 
-                   icon="map-marker-edit" 
+                   icon="pencil" 
                    iconColor="#6200ee"
                    onPress={() => {
                      const m = destacados.find(x => x.id === memoryEntityId);
                      if (m) {
-                       closePanel();
-                       startEditing(m);
+                       setActionEntity(m);
+                       setConfirmMode('none');
+                       setSearchQuery(m.title);
+                       fetchTopSuggestion(m);
+                       setSelectedPlace(null);
+                       setPlaceSuggestions([]);
+                       setShowParentAssign(false);
+                       setAddressQuery('');
+                       setEditingEntity(null);
+                       setMemoryEntityId(null);
+                       setPanelType('action'); 
+                       setPanelMode('peek');
                      }
                    }} 
                  />
@@ -991,13 +1003,17 @@ export default function AtlasScreen({ route, navigation }: any) {
                             {section.title}
                           </Text>
                           {items.map(item => (
-                            <TouchableOpacity key={item.id} onPress={() => jumpTo(item.coordinate)} style={styles.listItem}>
+                            <TouchableOpacity 
+                              key={item.id} 
+                              onPress={() => jumpTo(item.coordinate)} 
+                              onLongPress={() => deleteEntity(item.id)}
+                              style={styles.listItem}
+                            >
                               <Text style={styles.listIcon}>{section.icon}</Text>
                               <View style={{flex:1}}>
                                 <Text style={styles.listTitle}>{item.title}</Text>
                                 <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
                               </View>
-                              <IconButton icon="folder-open" size={24} iconColor="#6200ee" onPress={() => { setMemoryEntityId(item.id); setPanelType('memories'); setPanelMode('peek'); }} />
                             </TouchableOpacity>
                           ))}
                         </View>
