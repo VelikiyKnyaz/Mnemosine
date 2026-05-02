@@ -394,7 +394,17 @@ export default function AtlasScreen({ route, navigation }: any) {
       }
       
       if (results.length > 0) {
-        setAutoTopResult(results[0]);
+        const topResult = results[0];
+        setAutoTopResult(topResult);
+        setSelectedPlace(topResult);
+        setConfirmMode('quick');
+        if (topResult.location) {
+          mapRef.current?.animateToRegion({
+            latitude: topResult.location.latitude,
+            longitude: topResult.location.longitude,
+            latitudeDelta: 0.005, longitudeDelta: 0.005,
+          }, 500);
+        }
       }
     } catch (e) {
       console.error('Auto top suggestion error:', e);
@@ -978,32 +988,12 @@ export default function AtlasScreen({ route, navigation }: any) {
                   {/* ═══ CHOOSE MODE ═══ */}
                   {confirmMode === 'none' && (
                     <View style={{gap: 10}}>
-                      {loadingAutoTop ? (
-                        <ActivityIndicator size="small" color="#6200ee" style={{ marginVertical: 10 }} />
-                      ) : autoTopResult ? (
-                        <View style={{backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 10}}>
-                          <Text style={{fontWeight: 'bold', fontSize: 16, color: '#2e7d32', marginBottom: 4}}>✨ Sugerencia Automática</Text>
-                          <Text style={{fontSize: 14, fontWeight: 'bold'}}>{autoTopResult.displayName?.text}</Text>
-                          <Text style={{fontSize: 12, color: '#555', marginBottom: 12}}>{autoTopResult.formattedAddress}</Text>
-                          <Button 
-                            mode="contained" 
-                            buttonColor="#4caf50"
-                            onPress={() => {
-                              setSelectedPlace(autoTopResult);
-                              setConfirmMode('quick');
-                              if (autoTopResult.location) {
-                                mapRef.current?.animateToRegion({
-                                  latitude: autoTopResult.location.latitude,
-                                  longitude: autoTopResult.location.longitude,
-                                  latitudeDelta: 0.005, longitudeDelta: 0.005,
-                                }, 500);
-                              }
-                            }}
-                          >
-                            Revisar en Mapa
-                          </Button>
+                      {loadingAutoTop && (
+                        <View style={{ alignItems: 'center', padding: 10 }}>
+                          <ActivityIndicator size="small" color="#6200ee" />
+                          <Text style={{color: '#888', marginTop: 6, fontSize: 12}}>Buscando sugerencia automática...</Text>
                         </View>
-                      ) : null}
+                      )}
 
                       <TouchableOpacity
                         onPress={() => { setConfirmMode('quick'); searchPlaces(searchQuery); }}
