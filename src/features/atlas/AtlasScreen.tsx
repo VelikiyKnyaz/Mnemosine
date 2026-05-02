@@ -835,14 +835,16 @@ export default function AtlasScreen({ route, navigation }: any) {
             }}
             showsUserLocation={!editingEntity}
           >
-            {!editingEntity && visibleMarkers.map(marker => (
+            {!editingEntity && visibleMarkers.map(marker => {
+              const isCluster = marker.hasChildren || marker.mem_count > 0;
+              const size = marker.hasChildren ? 48 : isCluster ? 36 : 20;
+              return (
               <Marker
                 key={marker.id}
                 coordinate={marker.coordinate}
-                title={marker.title}
-                description={marker.is_confirmed === 0 ? "⚠️ Por confirmar" : `${marker.mem_count || 0} recuerdos`}
-                pinColor={marker.is_confirmed === 0 ? 'orange' : 'red'}
-                anchor={(marker.hasChildren || marker.mem_count > 0) ? { x: 0.5, y: 0.5 } : undefined}
+                anchor={{ x: 0.5, y: 0.5 }}
+                calloutAnchor={{ x: 0.5, y: 0 }}
+                tracksViewChanges={false}
                 onPress={() => {
                   const isTerritory = marker.height >= 2 || marker.hasChildren;
                   if (marker.is_confirmed === 0 && !isTerritory) {
@@ -858,21 +860,22 @@ export default function AtlasScreen({ route, navigation }: any) {
                     setPanelMode('peek');
                   }
                 }}
-                onLongPress={() => deleteEntity(marker.id)}
               >
-                {/* Custom Marker View for Clusters */}
-                {marker.hasChildren || marker.mem_count > 0 ? (
-                  <View style={[styles.clusterMarker, { 
-                    backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                    width: marker.hasChildren ? 48 : 36,
-                    height: marker.hasChildren ? 48 : 36,
-                    borderRadius: marker.hasChildren ? 24 : 18,
-                  }]}>
+                <View style={[styles.clusterMarker, { 
+                  backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : isCluster ? '#e53935' : '#1565C0',
+                  width: size,
+                  height: size,
+                  borderRadius: size / 2,
+                }]}>
+                  {isCluster ? (
                     <Text style={styles.clusterText}>{marker.mem_count}</Text>
-                  </View>
-                ) : null}
+                  ) : (
+                    <Text style={{color: 'white', fontSize: 10}}>●</Text>
+                  )}
+                </View>
               </Marker>
-            ))}
+              );
+            })}
           </MapView>
 
           {/* Debug HUD for Zoom tweaks */}
@@ -990,22 +993,20 @@ export default function AtlasScreen({ route, navigation }: any) {
                                 <Text style={styles.listTitle}>{item.title}</Text>
                                 <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
                               </View>
-                              <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                                <IconButton icon="pencil" size={20} iconColor="#6200ee" onPress={() => {
-                                  setActionEntity(item);
-                                  setConfirmMode('none');
-                                  setSearchQuery(item.title);
-                                  fetchTopSuggestion(item);
-                                  setSelectedPlace(null);
-                                  setPlaceSuggestions([]);
-                                  setAddressQuery('');
-                                  setEditingEntity(null);
-                                  setMemoryEntityId(null);
-                                  setPanelType('action'); 
-                                  setPanelMode('peek');
-                                }} style={{margin: 0}} />
-                                <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{margin: 0}} />
-                              </View>
+                              <IconButton icon="pencil" size={18} iconColor="#6200ee" onPress={() => {
+                                setActionEntity(item);
+                                setConfirmMode('none');
+                                setSearchQuery(item.title);
+                                fetchTopSuggestion(item);
+                                setSelectedPlace(null);
+                                setPlaceSuggestions([]);
+                                setAddressQuery('');
+                                setEditingEntity(null);
+                                setMemoryEntityId(null);
+                                setPanelType('action'); 
+                                setPanelMode('peek');
+                              }} style={{margin: -4}} />
+                              <IconButton icon="delete-outline" size={18} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{margin: -4}} />
                             </TouchableOpacity>
                           ))}
                         </View>
@@ -1017,8 +1018,8 @@ export default function AtlasScreen({ route, navigation }: any) {
             )}
 
             {panelType === 'action' && actionEntity && (
-              <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.actionPanel}>
-                <ScrollView keyboardShouldPersistTaps="handled">
+              <View style={{flex: 1}}>
+                <ScrollView keyboardShouldPersistTaps="handled" style={{flex: 1, padding: 15}}>
                   <Text style={{fontWeight: 'bold', fontSize: 16, marginBottom: 4}}>
                     Confirmar: {actionEntity.title}
                   </Text>
@@ -1026,48 +1027,43 @@ export default function AtlasScreen({ route, navigation }: any) {
                     El marcador rojo indica dónde se guardará este lugar.
                   </Text>
 
-                  {/* ── Address field (always visible) ── */}
-                  <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 12}}>
-                    <View style={{flex: 1}}>
-                      <TextInput
-                        mode="outlined"
-                        label="Dirección"
-                        value={addressQuery}
-                        onChangeText={setAddressQuery}
-                        onSubmitEditing={sendAddress}
-                        dense
-                        placeholder="Escribe una dirección para mover el marcador"
-                        style={{backgroundColor: 'white'}}
-                        returnKeyType="send"
-                      />
-                    </View>
-                    <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{marginLeft: 4}} />
-                  </View>
-
-                  {/* ── Auto suggestion ── */}
+                  {/* ── Auto suggestion (first, clickable to re-center) ── */}
                   {loadingAutoTop ? (
                     <View style={{ alignItems: 'center', padding: 10 }}>
                       <ActivityIndicator size="small" color="#6200ee" />
                       <Text style={{color: '#888', marginTop: 6, fontSize: 12}}>Buscando sugerencia automática...</Text>
                     </View>
                   ) : autoTopResult ? (
-                    <View style={{backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 12}}>
+                    <TouchableOpacity 
+                      onPress={() => {
+                        if (autoTopResult.location) {
+                          mapRef.current?.animateToRegion({
+                            latitude: autoTopResult.location.latitude,
+                            longitude: autoTopResult.location.longitude,
+                            latitudeDelta: 0.005, longitudeDelta: 0.005,
+                          }, 500);
+                        }
+                      }}
+                      style={{backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 12}}
+                    >
                       <Text style={{fontWeight: 'bold', fontSize: 14, color: '#2e7d32', marginBottom: 2}}>✨ Sugerencia</Text>
                       <Text style={{fontSize: 14, fontWeight: 'bold', color: '#333'}}>{autoTopResult.displayName?.text}</Text>
                       <Text style={{fontSize: 12, color: '#555'}}>{autoTopResult.formattedAddress}</Text>
-                    </View>
+                      <Text style={{fontSize: 11, color: '#2e7d32', marginTop: 6}}>Toca para centrar el marcador aquí</Text>
+                    </TouchableOpacity>
                   ) : null}
 
-                  {/* ── Search alternatives (expandable) ── */}
+                  {/* ── "Not the right place?" (prominent, expandable) ── */}
                   <TouchableOpacity
                     onPress={() => {
                       setConfirmMode(confirmMode === 'quick' ? 'none' : 'quick');
                       if (confirmMode !== 'quick') searchPlaces(searchQuery);
                     }}
-                    style={{paddingVertical: 8, alignItems: 'center', marginBottom: 6}}
+                    style={{backgroundColor: confirmMode === 'quick' ? '#EDE7F6' : '#F3E5F5', borderRadius: 10, padding: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center'}}
                   >
-                    <Text style={{color: '#6200ee', fontSize: 13, fontWeight: 'bold'}}>
-                      {confirmMode === 'quick' ? '▲ Ocultar alternativas' : '🔍 Buscar alternativas'}
+                    <Text style={{fontSize: 18, marginRight: 10}}>{confirmMode === 'quick' ? '▲' : '🔍'}</Text>
+                    <Text style={{color: '#6200ee', fontSize: 14, fontWeight: 'bold', flex: 1}}>
+                      {confirmMode === 'quick' ? 'Ocultar alternativas' : 'No es el lugar correcto?'}
                     </Text>
                   </TouchableOpacity>
 
@@ -1123,24 +1119,43 @@ export default function AtlasScreen({ route, navigation }: any) {
                     </View>
                   )}
 
-                  {/* ── Confirm button: ALWAYS saves current map center (red pin) ── */}
-                  <Button 
-                    mode="contained" 
-                    onPress={confirmPrecise} 
-                    style={{marginTop: 8}}
-                    icon="map-marker-check"
-                  >
-                    Guardar posición del marcador
-                  </Button>
+                  {/* ── Address field (last resort) ── */}
+                  <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 12}}>
+                    <View style={{flex: 1}}>
+                      <TextInput
+                        mode="outlined"
+                        label="Buscar por dirección"
+                        value={addressQuery}
+                        onChangeText={setAddressQuery}
+                        onSubmitEditing={sendAddress}
+                        dense
+                        placeholder="Escribe una dirección exacta"
+                        style={{backgroundColor: 'white'}}
+                        returnKeyType="send"
+                      />
+                    </View>
+                    <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{marginLeft: 4}} />
+                  </View>
 
                   <TouchableOpacity
                     onPress={() => deleteEntity(actionEntity.id)}
-                    style={{paddingVertical: 12, alignItems: 'center', marginTop: 8}}
+                    style={{paddingVertical: 8, alignItems: 'center'}}
                   >
                     <Text style={{color: '#B00020', fontSize: 13}}>Eliminar este lugar</Text>
                   </TouchableOpacity>
                 </ScrollView>
-              </KeyboardAvoidingView>
+
+                {/* ── Fixed confirm button at absolute bottom ── */}
+                <View style={{padding: 15, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#eee', backgroundColor: 'white'}}>
+                  <Button 
+                    mode="contained" 
+                    onPress={confirmPrecise} 
+                    icon="map-marker-check"
+                  >
+                    Guardar posición del marcador
+                  </Button>
+                </View>
+              </View>
             )}
 
             {panelType === 'memories' && memoryEntityId && (
