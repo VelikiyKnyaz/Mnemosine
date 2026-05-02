@@ -950,7 +950,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                   }}
                 >
                   {isCluster ? (
-                    <View style={{ padding: 8 }}>
+                    <View collapsable={false} style={{ width: size + 16, height: size + 16, justifyContent: 'center', alignItems: 'center' }}>
                       <View style={[styles.clusterMarker, { 
                         backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
                         width: size,
@@ -961,7 +961,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                       </View>
                     </View>
                   ) : (
-                    <View style={{ alignItems: 'center', padding: 8 }}>
+                    <View collapsable={false} style={{ width: 40, height: 44, alignItems: 'center', justifyContent: 'center' }}>
                       <View style={{
                         width: 24, height: 24, borderRadius: 12,
                         backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
