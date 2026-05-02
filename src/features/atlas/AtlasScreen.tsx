@@ -862,7 +862,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                     // For confirmed markers, let the Callout show natively
                   }}
                 >
-                  <View style={{ padding: 6 }}>
+                  <View style={{ width: size + 12, height: size + 12, justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' }}>
                     <View style={[styles.clusterMarker, {
                       backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
                       width: size,
