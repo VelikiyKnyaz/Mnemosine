@@ -5,6 +5,7 @@ import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
+import SmartDropdown from '../../components/SmartDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { generateTerritorialHierarchy } from '../../core/ai_processor';
 import { getConfig } from '../../core/config';
@@ -35,6 +36,8 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [placeSuggestions, setPlaceSuggestions] = useState<any[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<any | null>(null);
   const [searchingPlaces, setSearchingPlaces] = useState(false);
+  const [showParentAssign, setShowParentAssign] = useState(false);
+  const [allLocations, setAllLocations] = useState<any[]>([]);
   const searchDebounce = useRef<NodeJS.Timeout | null>(null);
 
   const isFocused = useIsFocused();
@@ -54,6 +57,9 @@ export default function AtlasScreen({ route, navigation }: any) {
     try {
       const db = await getDb();
       
+      // All locations for parent dropdown
+      const allRows = await db.getAllAsync<any>("SELECT id, name FROM entities WHERE type = 'LOCATION' AND is_confirmed = 1");
+      setAllLocations(allRows);
 
 
       // Unified Hierarchical Query (Markers + Top + Por Confirmar)
@@ -326,6 +332,46 @@ export default function AtlasScreen({ route, navigation }: any) {
     }
   };
 
+  const deleteEntity = async (entityId: string) => {
+    Alert.alert('Eliminar lugar', '¿Estás seguro de eliminar este lugar?', [
+      { text: 'Cancelar' },
+      { text: 'Eliminar', style: 'destructive', onPress: async () => {
+        try {
+          const db = await getDb();
+          await db.runAsync("DELETE FROM memory_entities WHERE entity_id = ?", entityId);
+          await db.runAsync("DELETE FROM entities WHERE id = ?", entityId);
+          loadLocations();
+        } catch (e) {
+          console.error(e);
+        }
+      }}
+    ]);
+  };
+
+  const assignParentToAction = async (parentId: string) => {
+    if (!actionEntity) return;
+    try {
+      const db = await getDb();
+      await db.runAsync("UPDATE entities SET parent_id = ?, is_confirmed = 1 WHERE id = ?", parentId, actionEntity.id);
+      
+      // Inherit coordinates from parent with jitter
+      const parent = await db.getFirstAsync<{latitude: number, longitude: number}>(
+        "SELECT latitude, longitude FROM entities WHERE id = ?", parentId
+      );
+      if (parent?.latitude) {
+        const jLat = parent.latitude + (Math.random() - 0.5) * 0.0004;
+        const jLon = parent.longitude + (Math.random() - 0.5) * 0.0004;
+        await db.runAsync("UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?", jLat, jLon, actionEntity.id);
+      }
+      
+      setShowParentAssign(false);
+      closePanel();
+      loadLocations();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const jumpTo = (coordinate: any) => {
     if (!coordinate) return;
     mapRef.current?.animateToRegion({
@@ -342,12 +388,11 @@ export default function AtlasScreen({ route, navigation }: any) {
     // Instead of depth (which varies wildly), height is consistent (0 = leaf).
     // A node "splits" (hides itself and shows its children) when delta drops below its threshold.
     let visibleHeight = 0;
-    if (delta <= 0.02) visibleHeight = 0;        // Max zoom, leaf nodes only
-    else if (delta <= 0.2) visibleHeight = 1;    // Neighborhood clusters
-    else if (delta <= 5) visibleHeight = 2;      // City clusters
-    else if (delta <= 20) visibleHeight = 3;     // State clusters
-    else if (delta <= 60) visibleHeight = 4;     // Country clusters
-    else visibleHeight = 5;                      // Continent clusters
+    if (delta <= 0.01) visibleHeight = 0;         // Max zoom, leaf nodes only
+    else if (delta <= 0.05) visibleHeight = 1;    // Neighborhood clusters
+    else if (delta <= 1) visibleHeight = 2;       // City clusters
+    else if (delta <= 10) visibleHeight = 3;      // State clusters
+    else visibleHeight = 4;                       // Country clusters
 
     return markers.filter(m => {
       // 1. Always show the marker being acted upon
@@ -497,7 +542,9 @@ export default function AtlasScreen({ route, navigation }: any) {
                    }} 
                  />
                )}
-               <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
+               {panelType !== 'action' && (
+                 <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
+               )}
              </View>
           </View>
           
@@ -511,8 +558,9 @@ export default function AtlasScreen({ route, navigation }: any) {
                     setSearchQuery(item.title);
                     setSelectedPlace(null);
                     setPlaceSuggestions([]);
+                    setShowParentAssign(false);
                     setPanelType('action'); 
-                    setPanelMode('full');
+                    setPanelMode('peek');
                     searchPlaces(item.title);
                   }} style={[styles.listItem, { backgroundColor: '#FFF8E1' }]}>
                     <Text style={styles.listIcon}>⚠️</Text>
@@ -520,6 +568,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                       <Text style={styles.listTitle}>{item.title}</Text>
                       <Text style={[styles.listSub, { color: '#F57C00' }]}>Toca para confirmar ubicación</Text>
                     </View>
+                    <IconButton icon="close" size={18} iconColor="#999" onPress={(e) => { e.stopPropagation?.(); deleteEntity(item.id); }} style={{margin: 0}} />
                   </TouchableOpacity>
                 ))}
 
@@ -613,6 +662,31 @@ export default function AtlasScreen({ route, navigation }: any) {
                     </Button>
                   )}
 
+                  {/* Assign to parent option */}
+                  <TouchableOpacity
+                    onPress={() => setShowParentAssign(!showParentAssign)}
+                    style={{paddingVertical: 8, alignItems: 'center', marginTop: 6}}
+                  >
+                    <Text style={{color: '#6200ee', fontSize: 13, fontWeight: 'bold'}}>
+                      {showParentAssign ? '▲ Ocultar' : '📎 Hace parte de otro lugar'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {showParentAssign && (
+                    <View style={{marginTop: 6}}>
+                      <SmartDropdown
+                        label="Seleccionar lugar padre"
+                        value=""
+                        items={allLocations}
+                        enablePlaces={false}
+                        onSelect={(item) => {
+                          if (item) assignParentToAction(item.id);
+                        }}
+                        placeholder="Buscar lugar existente..."
+                      />
+                    </View>
+                  )}
+
                   {/* Manual placement - secondary option */}
                   <TouchableOpacity
                     onPress={() => {
@@ -620,9 +694,9 @@ export default function AtlasScreen({ route, navigation }: any) {
                       closePanel();
                       startEditing(ent);
                     }}
-                    style={{paddingVertical: 10, alignItems: 'center'}}
+                    style={{paddingVertical: 8, alignItems: 'center'}}
                   >
-                    <Text style={{color: '#888', fontSize: 13}}>Ubicar manualmente en el mapa →</Text>
+                    <Text style={{color: '#aaa', fontSize: 12}}>Ubicar manualmente en el mapa →</Text>
                   </TouchableOpacity>
                 </ScrollView>
               </KeyboardAvoidingView>

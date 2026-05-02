@@ -3,6 +3,7 @@ import { View, StyleSheet, SectionList, Platform, Alert, TouchableOpacity, Activ
 import { Text, FAB, Appbar, IconButton, Button, TextInput } from 'react-native-paper';
 import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
+import { useIsFocused } from '@react-navigation/native';
 import BiographerCard from '../biographer/BiographerCard';
 import CaptureModal from '../capture/CaptureModal';
 import MemoryEditModal from '../../components/MemoryEditModal';
@@ -152,9 +153,21 @@ export default function TimelineScreen() {
     }
   };
 
+  const isFocused = useIsFocused();
+
   useEffect(() => {
     loadMemories();
   }, [modalVisible]);
+
+  // Auto-refresh while any memories are still processing
+  useEffect(() => {
+    if (!isFocused) return;
+    const hasProcessing = memories.some(m => m.sync_status !== 'PROCESSED_LOCAL');
+    if (!hasProcessing) return;
+    
+    const interval = setInterval(loadMemories, 5000);
+    return () => clearInterval(interval);
+  }, [isFocused, memories]);
 
   const handleQuestionPress = (q: string) => {
     setInitialQuestion(q);
@@ -276,7 +289,12 @@ export default function TimelineScreen() {
               <View style={styles.cardHeader}>
                 <Text variant="titleMedium" style={styles.titleText}>{item.title || 'Recuerdo'}</Text>
                 <View style={styles.dateContainer}>
-                  {hasNoDate ? (
+                  {item.sync_status !== 'PROCESSED_LOCAL' ? (
+                    <View style={[styles.dateAlert, { backgroundColor: '#E3F2FD' }]}>
+                      <ActivityIndicator size={12} color="#1976D2" />
+                      <Text style={{fontSize: 11, color: '#1976D2', marginLeft: 4}}>Procesando</Text>
+                    </View>
+                  ) : hasNoDate ? (
                     <TouchableOpacity onPress={() => handleResolveDate(item)} style={styles.dateAlert}>
                       <Text style={{fontSize: 16}}>⚠️</Text>
                       <Text style={{fontSize: 11, color: '#F57C00', marginLeft: 4}}>Sin fecha</Text>
