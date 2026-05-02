@@ -181,42 +181,33 @@ export default function AtlasScreen({ route, navigation }: any) {
           computeHeight(r.id);
         }
       });
-      // Compute centroid and total place_count for cluster nodes
-      const computeCentroidAndPlaces = (id: string) => {
+      // Compute centroid for cluster nodes (city/state/country) from children coordinates
+      const computeCentroid = (id: string) => {
         const node = entityMap.get(id);
-        if (!node) return;
+        if (!node || node.children.length === 0) return;
 
-        // First compute children recursively (bottom-up)
-        node.children.forEach((cid: string) => computeCentroidAndPlaces(cid));
+        // First compute children centroids recursively (bottom-up)
+        node.children.forEach((cid: string) => computeCentroid(cid));
 
         let sumLat = 0, sumLon = 0, count = 0;
-        let totalPlaces = 0;
-
         for (const cid of node.children) {
           const child = entityMap.get(cid);
-          if (child) {
-            totalPlaces += (child.place_count || 1); // Aggregate place count
-            if (child.latitude != null && child.longitude != null) {
-              sumLat += child.latitude;
-              sumLon += child.longitude;
-              count++;
-            }
+          if (child?.latitude != null && child?.longitude != null) {
+            sumLat += child.latitude;
+            sumLon += child.longitude;
+            count++;
           }
         }
-        
-        // If it has children, its count is the sum of their counts. If not, it's 1 (itself).
-        node.place_count = totalPlaces > 0 ? totalPlaces : 1;
-
-        if (count > 0 && node.children.length > 0) {
+        if (count > 0) {
           node.latitude = sumLat / count;
           node.longitude = sumLon / count;
         }
       };
 
-      // Apply centroid and place aggregation from roots down
+      // Apply centroid from roots down
       locatedRows.forEach(r => {
         if (!r.parent_id || !entityMap.has(r.parent_id)) {
-          computeCentroidAndPlaces(r.id);
+          computeCentroid(r.id);
         }
       });
 
@@ -229,7 +220,6 @@ export default function AtlasScreen({ route, navigation }: any) {
         // Use geo_level (geographic truth) if available, otherwise fall back to tree height
         height: node.geoLevel ?? node.treeHeight ?? 0,
         hasChildren: node.children.length > 0,
-        place_count: node.place_count || 1,
         mem_count: node.mem_count,
         coordinate: { latitude: node.latitude, longitude: node.longitude }
       }));
@@ -918,13 +908,18 @@ export default function AtlasScreen({ route, navigation }: any) {
             showsUserLocation={!editingEntity}
           >
             {!editingEntity && visibleMarkers.map(marker => {
-              const size = marker.hasChildren ? 48 : (marker.place_count > 1 ? 36 : 24);
+              const isEmptyPlace = marker.is_confirmed === 1 && marker.mem_count === 0 && !marker.hasChildren;
+              if (isEmptyPlace) return null; // "los lugares que no tienen nada sean ignorados y completamente borrados"
+
+              const isCluster = marker.hasChildren || marker.mem_count > 0;
+              const size = marker.hasChildren ? 48 : 36;
+              
               return (
                 <Marker
                   key={marker.id}
                   coordinate={marker.coordinate}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                  calloutAnchor={{ x: 0.5, y: 0 }}
+                  anchor={isCluster ? { x: 0.5, y: 0.5 } : { x: 0.5, y: 1 }}
+                  calloutAnchor={isCluster ? { x: 1, y: 0.5 } : { x: 0.5, y: 0 }}
                   tracksViewChanges={true}
                   onPress={(e) => {
                     if (e.stopPropagation) e.stopPropagation();
@@ -941,16 +936,36 @@ export default function AtlasScreen({ route, navigation }: any) {
                     }
                   }}
                 >
-                  <View style={{ padding: 4 }}>
-                    <View style={[styles.clusterMarker, { 
-                      backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                      width: size,
-                      height: size,
-                      borderRadius: size / 2,
-                    }]}>
-                      <Text style={styles.clusterText}>{marker.place_count}</Text>
+                  {isCluster ? (
+                    <View style={{ padding: 4 }}>
+                      <View style={[styles.clusterMarker, { 
+                        backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
+                        width: size,
+                        height: size,
+                        borderRadius: size / 2,
+                      }]}>
+                        <Text style={styles.clusterText}>{marker.mem_count}</Text>
+                      </View>
                     </View>
-                  </View>
+                  ) : (
+                    <View style={{ alignItems: 'center', padding: 2 }}>
+                      <View style={{
+                        width: 24, height: 24, borderRadius: 12,
+                        backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
+                        justifyContent: 'center', alignItems: 'center',
+                        borderWidth: 2, borderColor: 'white',
+                        shadowColor: '#000', shadowOffset: {width: 0, height: 1}, shadowOpacity: 0.3, shadowRadius: 1, elevation: 2
+                      }} />
+                      <View style={{
+                        width: 0, height: 0,
+                        borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 10,
+                        borderStyle: 'solid', backgroundColor: 'transparent',
+                        borderLeftColor: 'transparent', borderRightColor: 'transparent',
+                        borderTopColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
+                        marginTop: -2
+                      }} />
+                    </View>
+                  )}
 
                   {marker.is_confirmed !== 0 && (
                     <Callout tooltip onPress={() => {
