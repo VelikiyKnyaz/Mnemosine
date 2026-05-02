@@ -38,7 +38,10 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [searchingPlaces, setSearchingPlaces] = useState(false);
   const [showParentAssign, setShowParentAssign] = useState(false);
   const [allLocations, setAllLocations] = useState<any[]>([]);
+  const [confirmMode, setConfirmMode] = useState<'quick'|'precise'>('quick');
+  const [addressQuery, setAddressQuery] = useState('');
   const searchDebounce = useRef<NodeJS.Timeout | null>(null);
+  const addressDebounce = useRef<NodeJS.Timeout | null>(null);
 
   const isFocused = useIsFocused();
   const mapRef = useRef<MapView>(null);
@@ -47,6 +50,9 @@ export default function AtlasScreen({ route, navigation }: any) {
     setPanelMode('hidden');
     setActionEntity(null);
     setMemoryEntityId(null);
+    setConfirmMode('quick');
+    setAddressQuery('');
+    setEditingEntity(null);
   };
 
   const toggleExpand = () => {
@@ -306,12 +312,12 @@ export default function AtlasScreen({ route, navigation }: any) {
 
         const searchBody: any = { textQuery: query.trim(), maxResultCount: 5 };
         
-        // Add location bias from current map view for more relevant results
-        if (currentRegion) {
+        // Only add location bias at tight zoom to avoid blocking results at world view
+        if (currentRegion && currentRegion.latitudeDelta < 5) {
           searchBody.locationBias = {
             circle: {
               center: { latitude: currentRegion.latitude, longitude: currentRegion.longitude },
-              radius: Math.max(1000, currentRegion.latitudeDelta * 111000), // rough meters
+              radius: Math.max(5000, currentRegion.latitudeDelta * 111000),
             }
           };
         }
@@ -334,6 +340,41 @@ export default function AtlasScreen({ route, navigation }: any) {
         setSearchingPlaces(false);
       }
     }, 600);
+  };
+
+  // Geocode an address string and teleport map to it (for precise mode)
+  const geocodeAddress = (addr: string) => {
+    setAddressQuery(addr);
+    if (addressDebounce.current) clearTimeout(addressDebounce.current);
+    if (!addr.trim() || addr.trim().length < 4) return;
+
+    addressDebounce.current = setTimeout(async () => {
+      try {
+        const apiKey = await getConfig('GOOGLE_MAPS_KEY');
+        if (!apiKey) return;
+
+        const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask': 'places.location,places.addressComponents',
+          },
+          body: JSON.stringify({ textQuery: addr.trim(), maxResultCount: 1 }),
+        });
+        const data = await res.json();
+        const place = data.places?.[0];
+        if (place?.location) {
+          mapRef.current?.animateToRegion({
+            latitude: place.location.latitude,
+            longitude: place.location.longitude,
+            latitudeDelta: 0.005, longitudeDelta: 0.005,
+          }, 500);
+        }
+      } catch (e) {
+        console.error('Address geocode error:', e);
+      }
+    }, 800);
   };
 
   const selectPlaceSuggestion = (place: any) => {
@@ -403,23 +444,46 @@ export default function AtlasScreen({ route, navigation }: any) {
     if (!actionEntity) return;
     try {
       const db = await getDb();
-      await db.runAsync("UPDATE entities SET parent_id = ?, is_confirmed = 1 WHERE id = ?", parentId, actionEntity.id);
+      // Set parent, but don't confirm coordinates yet - let user adjust marker
+      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", parentId, actionEntity.id);
       
-      // Inherit coordinates from parent with jitter
+      // Teleport map to parent's location + small offset
       const parent = await db.getFirstAsync<{latitude: number, longitude: number}>(
         "SELECT latitude, longitude FROM entities WHERE id = ?", parentId
       );
       if (parent?.latitude) {
-        const jLat = parent.latitude + (Math.random() - 0.5) * 0.0004;
-        const jLon = parent.longitude + (Math.random() - 0.5) * 0.0004;
-        await db.runAsync("UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?", jLat, jLon, actionEntity.id);
+        const jLat = parent.latitude + (Math.random() - 0.5) * 0.0008;
+        const jLon = parent.longitude + (Math.random() - 0.5) * 0.0008;
+        mapRef.current?.animateToRegion({
+          latitude: jLat, longitude: jLon,
+          latitudeDelta: 0.005, longitudeDelta: 0.005,
+        }, 500);
       }
       
       setShowParentAssign(false);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Confirm location from precise mode: uses current map center
+  const confirmPrecise = async () => {
+    if (!actionEntity || !currentRegion) return;
+    try {
+      const db = await getDb();
+      await db.runAsync(
+        'UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 1 WHERE id = ?',
+        currentRegion.latitude, currentRegion.longitude, actionEntity.id
+      );
+      
+      Alert.alert('Confirmado', `"${actionEntity.title}" ubicado.`);
+      setEditingEntity(null);
+      setConfirmMode('quick');
       closePanel();
       loadLocations();
     } catch (e) {
       console.error(e);
+      Alert.alert('Error', 'No se pudo confirmar.');
     }
   };
 
@@ -532,8 +596,15 @@ export default function AtlasScreen({ route, navigation }: any) {
   return (
     <View style={styles.container}>
       <Appbar.Header>
-        <Appbar.Content title={editingEntity ? `Ubicar: ${editingEntity.title}` : "Atlas de Vida"} />
+        <Appbar.Content title={
+          editingEntity ? `Ubicar: ${editingEntity.title}` : 
+          (confirmMode === 'precise' && actionEntity) ? `📍 ${actionEntity.title}` :
+          'Atlas de Vida'
+        } />
         {editingEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
+        {confirmMode === 'precise' && actionEntity && !editingEntity && (
+          <Appbar.Action icon="close" onPress={() => { setConfirmMode('quick'); setEditingEntity(null); }} />
+        )}
       </Appbar.Header>
       
       {initialRegion ? (
@@ -587,7 +658,7 @@ export default function AtlasScreen({ route, navigation }: any) {
             <Text style={styles.debugText}>Marcadores Visibles: {visibleMarkers.length}</Text>
           </View>
 
-          {editingEntity && (
+          {(editingEntity || (confirmMode === 'precise' && actionEntity)) && (
             <View style={styles.staticPinContainer} pointerEvents="none">
               <IconButton icon="map-marker" iconColor="red" size={50} style={styles.staticPin} />
             </View>
@@ -663,6 +734,9 @@ export default function AtlasScreen({ route, navigation }: any) {
                     setSelectedPlace(null);
                     setPlaceSuggestions([]);
                     setShowParentAssign(false);
+                    setConfirmMode('quick');
+                    setAddressQuery('');
+                    setEditingEntity(null);
                     setPanelType('action'); 
                     setPanelMode('peek');
                     searchPlaces(item.title);
@@ -698,110 +772,143 @@ export default function AtlasScreen({ route, navigation }: any) {
             {panelType === 'action' && actionEntity && (
               <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.actionPanel}>
                 <ScrollView keyboardShouldPersistTaps="handled">
-                  <Text style={{fontWeight: 'bold', fontSize: 16, marginBottom: 4}}>
+                  <Text style={{fontWeight: 'bold', fontSize: 16, marginBottom: 8}}>
                     Confirmar: {actionEntity.title}
                   </Text>
-                  <Text style={{color: '#666', fontSize: 13, marginBottom: 12}}>
-                    Busca el lugar real y selecciona la opción correcta.
-                  </Text>
 
-                  <TextInput
-                    mode="outlined"
-                    label="Buscar lugar"
-                    value={searchQuery}
-                    onChangeText={searchPlaces}
-                    dense
-                    right={searchingPlaces ? <TextInput.Icon icon="loading" /> : <TextInput.Icon icon="magnify" />}
-                    style={{marginBottom: 10, backgroundColor: 'white'}}
-                  />
-
-                  {/* Suggestions list */}
-                  {placeSuggestions.map((place: any, idx: number) => {
-                    const isSelected = selectedPlace === place;
-                    return (
-                      <TouchableOpacity
-                        key={idx}
-                        style={[styles.suggestionItem, isSelected && styles.suggestionSelected]}
-                        onPress={() => selectPlaceSuggestion(place)}
-                      >
-                        <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                          <Text style={{fontSize: 18, marginRight: 10}}>
-                            {isSelected ? '✅' : '📍'}
-                          </Text>
-                          <View style={{flex: 1}}>
-                            <Text style={{fontWeight: 'bold', fontSize: 15, color: '#333'}}>
-                              {place.displayName?.text || ''}
-                            </Text>
-                            <Text style={{fontSize: 12, color: '#888'}} numberOfLines={2}>
-                              {place.formattedAddress || ''}
-                            </Text>
-                          </View>
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-
-                  {searchingPlaces && (
-                    <View style={{padding: 20, alignItems: 'center'}}>
-                      <ActivityIndicator size="small" />
-                      <Text style={{color: '#888', marginTop: 8}}>Buscando...</Text>
-                    </View>
-                  )}
-
-                  {!searchingPlaces && placeSuggestions.length === 0 && searchQuery.length > 2 && (
-                    <Text style={{color: '#888', textAlign: 'center', padding: 15}}>
-                      No se encontraron resultados. Intenta con otro término.
-                    </Text>
-                  )}
-
-                  {/* Confirm button */}
-                  {selectedPlace && (
-                    <Button 
-                      mode="contained" 
-                      onPress={confirmPlace} 
-                      style={{marginTop: 15, marginBottom: 8}}
-                      icon="check"
+                  {/* Mode tabs */}
+                  <View style={{flexDirection: 'row', marginBottom: 10, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#ddd'}}>
+                    <TouchableOpacity
+                      onPress={() => { setConfirmMode('quick'); setEditingEntity(null); }}
+                      style={{flex: 1, paddingVertical: 8, backgroundColor: confirmMode === 'quick' ? '#6200ee' : '#f5f5f5', alignItems: 'center'}}
                     >
-                      Confirmar Lugar
-                    </Button>
-                  )}
+                      <Text style={{color: confirmMode === 'quick' ? 'white' : '#666', fontWeight: 'bold', fontSize: 13}}>⚡ Rápida</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => { setConfirmMode('precise'); }}
+                      style={{flex: 1, paddingVertical: 8, backgroundColor: confirmMode === 'precise' ? '#6200ee' : '#f5f5f5', alignItems: 'center'}}
+                    >
+                      <Text style={{color: confirmMode === 'precise' ? 'white' : '#666', fontWeight: 'bold', fontSize: 13}}>🎯 Precisa</Text>
+                    </TouchableOpacity>
+                  </View>
 
-                  {/* Assign to parent option */}
-                  <TouchableOpacity
-                    onPress={() => setShowParentAssign(!showParentAssign)}
-                    style={{paddingVertical: 8, alignItems: 'center', marginTop: 6}}
-                  >
-                    <Text style={{color: '#6200ee', fontSize: 13, fontWeight: 'bold'}}>
-                      {showParentAssign ? '▲ Ocultar' : '📎 Hace parte de otro lugar'}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {showParentAssign && (
-                    <View style={{marginTop: 6}}>
-                      <SmartDropdown
-                        label="Seleccionar lugar padre"
-                        value=""
-                        items={allLocations}
-                        enablePlaces={false}
-                        onSelect={(item) => {
-                          if (item) assignParentToAction(item.id);
-                        }}
-                        placeholder="Buscar lugar existente..."
+                  {/* ═══ QUICK MODE ═══ */}
+                  {confirmMode === 'quick' && (
+                    <View>
+                      <TextInput
+                        mode="outlined"
+                        label="Buscar lugar"
+                        value={searchQuery}
+                        onChangeText={searchPlaces}
+                        dense
+                        right={searchingPlaces ? <TextInput.Icon icon="loading" /> : <TextInput.Icon icon="magnify" />}
+                        style={{marginBottom: 10, backgroundColor: 'white'}}
                       />
+
+                      {placeSuggestions.map((place: any, idx: number) => {
+                        const isSelected = selectedPlace === place;
+                        return (
+                          <TouchableOpacity
+                            key={idx}
+                            style={[styles.suggestionItem, isSelected && styles.suggestionSelected]}
+                            onPress={() => selectPlaceSuggestion(place)}
+                          >
+                            <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                              <Text style={{fontSize: 18, marginRight: 10}}>
+                                {isSelected ? '✅' : '📍'}
+                              </Text>
+                              <View style={{flex: 1}}>
+                                <Text style={{fontWeight: 'bold', fontSize: 15, color: '#333'}}>
+                                  {place.displayName?.text || ''}
+                                </Text>
+                                <Text style={{fontSize: 12, color: '#888'}} numberOfLines={2}>
+                                  {place.formattedAddress || ''}
+                                </Text>
+                              </View>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+
+                      {searchingPlaces && (
+                        <View style={{padding: 15, alignItems: 'center'}}>
+                          <ActivityIndicator size="small" />
+                          <Text style={{color: '#888', marginTop: 6}}>Buscando...</Text>
+                        </View>
+                      )}
+
+                      {!searchingPlaces && placeSuggestions.length === 0 && searchQuery.length > 2 && (
+                        <Text style={{color: '#888', textAlign: 'center', padding: 12, fontSize: 13}}>
+                          Sin resultados. Intenta con otro término.
+                        </Text>
+                      )}
+
+                      {selectedPlace && (
+                        <Button 
+                          mode="contained" 
+                          onPress={confirmPlace} 
+                          style={{marginTop: 12, marginBottom: 6}}
+                          icon="check"
+                        >
+                          Confirmar Lugar
+                        </Button>
+                      )}
                     </View>
                   )}
 
-                  {/* Manual placement - secondary option */}
-                  <TouchableOpacity
-                    onPress={() => {
-                      const ent = actionEntity;
-                      closePanel();
-                      startEditing(ent);
-                    }}
-                    style={{paddingVertical: 8, alignItems: 'center'}}
-                  >
-                    <Text style={{color: '#aaa', fontSize: 12}}>Ubicar manualmente en el mapa →</Text>
-                  </TouchableOpacity>
+                  {/* ═══ PRECISE MODE ═══ */}
+                  {confirmMode === 'precise' && (
+                    <View>
+                      <Text style={{color: '#666', fontSize: 12, marginBottom: 10}}>
+                        Arrastra el mapa para posicionar el marcador. Usa la dirección o un lugar padre para teletransportarte.
+                      </Text>
+
+                      <TextInput
+                        mode="outlined"
+                        label="Dirección (ciudad, país...)"
+                        value={addressQuery}
+                        onChangeText={geocodeAddress}
+                        dense
+                        placeholder="ej: Calle 10 #30-20, Medellín, Colombia"
+                        style={{marginBottom: 10, backgroundColor: 'white'}}
+                        right={<TextInput.Icon icon="map-search" />}
+                      />
+
+                      {/* Parent assignment */}
+                      <TouchableOpacity
+                        onPress={() => setShowParentAssign(!showParentAssign)}
+                        style={{paddingVertical: 6, alignItems: 'center'}}
+                      >
+                        <Text style={{color: '#6200ee', fontSize: 13, fontWeight: 'bold'}}>
+                          {showParentAssign ? '▲ Ocultar' : '📎 Hace parte de otro lugar'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      {showParentAssign && (
+                        <View style={{marginTop: 4}}>
+                          <SmartDropdown
+                            label="Lugar padre"
+                            value=""
+                            items={allLocations}
+                            enablePlaces={false}
+                            onSelect={(item) => {
+                              if (item) assignParentToAction(item.id);
+                            }}
+                            placeholder="Buscar lugar existente..."
+                          />
+                        </View>
+                      )}
+
+                      <Button 
+                        mode="contained" 
+                        onPress={confirmPrecise} 
+                        style={{marginTop: 12}}
+                        icon="check"
+                      >
+                        Confirmar Ubicación
+                      </Button>
+                    </View>
+                  )}
                 </ScrollView>
               </KeyboardAvoidingView>
             )}
