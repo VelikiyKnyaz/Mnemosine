@@ -933,6 +933,9 @@ export default function AtlasScreen({ route, navigation }: any) {
                       setPanelMode('peek');
                     } else {
                       setSelectedPlaceEntity(marker);
+                      setMemoryEntityId(marker.id);
+                      setPanelType('memories');
+                      setPanelMode('peek');
                     }
                   }}
                 >
@@ -964,19 +967,6 @@ export default function AtlasScreen({ route, navigation }: any) {
                         marginTop: -2
                       }} />
                     </View>
-                  )}
-
-                  {marker.is_confirmed !== 0 && (
-                    <Callout tooltip onPress={() => {
-                        setMemoryEntityId(marker.id);
-                        setPanelType('memories');
-                        setPanelMode('peek');
-                    }}>
-                      <View style={{ backgroundColor: '#1565C0', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, flexDirection: 'row', alignItems: 'center' }}>
-                         <Text style={{ fontWeight: 'bold', color: 'white', marginRight: 4 }}>Ver recuerdos</Text>
-                         <MaterialCommunityIcons name="chevron-right" size={16} color="white" />
-                      </View>
-                    </Callout>
                   )}
                 </Marker>
               );
