@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { Appbar, Text, Button, IconButton, Chip, Title, FAB, TextInput } from 'react-native-paper';
-import MapView, { Marker, Region } from 'react-native-maps';
+import MapView, { Marker, Region, Callout } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
@@ -14,23 +14,23 @@ import EntityMemoriesView from '../memories/EntityMemoriesView';
 export default function AtlasScreen({ route, navigation }: any) {
   const [markers, setMarkers] = useState<any[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
-  
+
   // Lists
   const [destacados, setDestacados] = useState<any[]>([]);
   const [porConfirmar, setPorConfirmar] = useState<any[]>([]);
 
-  
+
   // Panel State
-  const [panelMode, setPanelMode] = useState<'hidden'|'peek'|'full'>('hidden');
-  const [panelType, setPanelType] = useState<'destacados'|'action'|'memories'>('destacados');
+  const [panelMode, setPanelMode] = useState<'hidden' | 'peek' | 'full'>('hidden');
+  const [panelType, setPanelType] = useState<'destacados' | 'action' | 'memories'>('destacados');
   const [memoryEntityId, setMemoryEntityId] = useState<string | null>(null);
-  
+
   // Interaction States
   const [editingEntity, setEditingEntity] = useState<any | null>(null);
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
 
   const [actionEntity, setActionEntity] = useState<any | null>(null);
-  
+
   // Place confirmation states
   const [searchQuery, setSearchQuery] = useState('');
   const [placeSuggestions, setPlaceSuggestions] = useState<any[]>([]);
@@ -38,7 +38,7 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [searchingPlaces, setSearchingPlaces] = useState(false);
   const [showParentAssign, setShowParentAssign] = useState(false);
   const [allLocations, setAllLocations] = useState<any[]>([]);
-  const [confirmMode, setConfirmMode] = useState<'none'|'quick'|'precise'>('none');
+  const [confirmMode, setConfirmMode] = useState<'none' | 'quick' | 'precise'>('none');
   const [autoTopResult, setAutoTopResult] = useState<any | null>(null);
   const [loadingAutoTop, setLoadingAutoTop] = useState(false);
   const [addressQuery, setAddressQuery] = useState('');
@@ -64,7 +64,7 @@ export default function AtlasScreen({ route, navigation }: any) {
   const loadLocations = async () => {
     try {
       const db = await getDb();
-      
+
       // All locations for parent dropdown
       const allRows = await db.getAllAsync<any>("SELECT id, name FROM entities WHERE type = 'LOCATION' AND is_confirmed = 1");
       setAllLocations(allRows);
@@ -108,11 +108,11 @@ export default function AtlasScreen({ route, navigation }: any) {
             const meta = JSON.parse(r.metadata);
             if (meta.geo_level != null) geoLevel = meta.geo_level;
           }
-        } catch {}
+        } catch { }
         entityMap.set(r.id, { ...r, children: [], geoLevel });
       });
       // Load ALL parent_id relationships so we can bridge gaps in the visible tree
-      const allParents = await db.getAllAsync<{id: string, parent_id: string | null}>(
+      const allParents = await db.getAllAsync<{ id: string, parent_id: string | null }>(
         `SELECT id, parent_id FROM entities WHERE type = 'LOCATION'`
       );
       const fullParentLookup = new Map<string, string | null>();
@@ -142,10 +142,10 @@ export default function AtlasScreen({ route, navigation }: any) {
           entityMap.get(finalParent).children.push(r.id);
         }
       });
-      
+
       // Check DB for entities that are parents (have children, even those without coords)
       // This ensures territories always act as clusters, not leaves
-      const dbParents = await db.getAllAsync<{parent_id: string, child_count: number}>(
+      const dbParents = await db.getAllAsync<{ parent_id: string, child_count: number }>(
         `SELECT parent_id, COUNT(*) as child_count FROM entities 
          WHERE parent_id IS NOT NULL AND type = 'LOCATION' GROUP BY parent_id`
       );
@@ -157,7 +157,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           node.geoLevel = 2;
         }
       }
-      
+
       const computeHeight = (id: string): number => {
         const node = entityMap.get(id);
         if (!node) return 0;
@@ -170,7 +170,7 @@ export default function AtlasScreen({ route, navigation }: any) {
         node.treeHeight = maxChildHeight + 1;
         return node.treeHeight;
       };
-      
+
       // Find roots
       locatedRows.forEach(r => {
         if (!r.parent_id || !entityMap.has(r.parent_id)) {
@@ -181,10 +181,10 @@ export default function AtlasScreen({ route, navigation }: any) {
       const computeCentroid = (id: string) => {
         const node = entityMap.get(id);
         if (!node || node.children.length === 0) return;
-        
+
         // First compute children centroids recursively (bottom-up)
         node.children.forEach((cid: string) => computeCentroid(cid));
-        
+
         let sumLat = 0, sumLon = 0, count = 0;
         for (const cid of node.children) {
           const child = entityMap.get(cid);
@@ -199,7 +199,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           node.longitude = sumLon / count;
         }
       };
-      
+
       // Apply centroid from roots down
       locatedRows.forEach(r => {
         if (!r.parent_id || !entityMap.has(r.parent_id)) {
@@ -222,20 +222,20 @@ export default function AtlasScreen({ route, navigation }: any) {
 
       setMarkers(processedMarkers);
       setDestacados(processedMarkers);
-      
+
       // Por Confirmar: unconfirmed with coords + ALL unconfirmed locations without coords
       const noCoordRows = await db.getAllAsync<any>(
         `SELECT id, name as title, is_confirmed, parent_id, metadata, 0 as mem_count 
          FROM entities WHERE type = 'LOCATION' AND latitude IS NULL AND is_confirmed = 0`
       );
-      
+
       const isTerritory = (m: any) => {
         if (m.height >= 2 || m.hasChildren) return true;
         if (m.metadata) {
           try {
             const meta = JSON.parse(m.metadata);
             if (meta.geo_level >= 2) return true;
-          } catch {}
+          } catch { }
         }
         return false;
       };
@@ -322,10 +322,10 @@ export default function AtlasScreen({ route, navigation }: any) {
         'UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 1 WHERE id = ?',
         currentRegion.latitude, currentRegion.longitude, editingEntity.id
       );
-      
+
       // Propagate to unconfirmed children: if this entity is a parent, 
       // move its unconfirmed children near the new position
-      const unconfirmedChildren = await db.getAllAsync<{id: string}>(
+      const unconfirmedChildren = await db.getAllAsync<{ id: string }>(
         "SELECT id FROM entities WHERE parent_id = ? AND is_confirmed = 0",
         editingEntity.id
       );
@@ -337,7 +337,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           currentRegion.latitude + jitterLat, currentRegion.longitude + jitterLon, child.id
         );
       }
-      
+
       Alert.alert('Guardado', `Ubicación de "${editingEntity.title}" guardada.`);
       setEditingEntity(null);
       loadLocations();
@@ -419,7 +419,7 @@ export default function AtlasScreen({ route, navigation }: any) {
         data = await res.json();
         results = data.places || [];
       }
-      
+
       if (results.length > 0) {
         const topResult = results[0];
         setAutoTopResult(topResult);
@@ -442,7 +442,7 @@ export default function AtlasScreen({ route, navigation }: any) {
   const searchPlaces = async (query: string) => {
     setSearchQuery(query);
     if (searchDebounce.current) clearTimeout(searchDebounce.current);
-    
+
     if (!query.trim() || query.trim().length < 2) {
       setPlaceSuggestions([]);
       return;
@@ -468,7 +468,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           contextParts.push(currNode.title);
           currNode = markers.find(m => m.id === currNode.parent_id);
         }
-        
+
         if (contextParts.length === 0) {
           // No parent lineage. We used to fallback to profile.country here, 
           // but this overrides global footprint searches for international locations.
@@ -492,7 +492,7 @@ export default function AtlasScreen({ route, navigation }: any) {
         });
 
         const searchBody: any = { textQuery: contextQuery, maxResultCount: 5 };
-        
+
         if (validCoords) {
           // Generous padding (~500km) to bias search towards the user's existing map footprint
           searchBody.locationBias = {
@@ -558,7 +558,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       const encoded = encodeURIComponent(query);
       const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}&key=${apiKey}`);
       const data = await res.json();
-      
+
       if (data.status === 'OK' && data.results?.length > 0) {
         const loc = data.results[0].geometry.location;
         mapRef.current?.animateToRegion({
@@ -593,7 +593,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       const db = await getDb();
       const lat = selectedPlace.location.latitude;
       const lon = selectedPlace.location.longitude;
-      
+
       // Update entity with confirmed coordinates
       await db.runAsync(
         "UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 1 WHERE id = ?",
@@ -625,16 +625,18 @@ export default function AtlasScreen({ route, navigation }: any) {
   const deleteEntity = async (entityId: string) => {
     Alert.alert('Eliminar lugar', '¿Estás seguro de eliminar este lugar?', [
       { text: 'Cancelar' },
-      { text: 'Eliminar', style: 'destructive', onPress: async () => {
-        try {
-          const db = await getDb();
-          await db.runAsync("DELETE FROM memory_entities WHERE entity_id = ?", entityId);
-          await db.runAsync("DELETE FROM entities WHERE id = ?", entityId);
-          loadLocations();
-        } catch (e) {
-          console.error(e);
+      {
+        text: 'Eliminar', style: 'destructive', onPress: async () => {
+          try {
+            const db = await getDb();
+            await db.runAsync("DELETE FROM memory_entities WHERE entity_id = ?", entityId);
+            await db.runAsync("DELETE FROM entities WHERE id = ?", entityId);
+            loadLocations();
+          } catch (e) {
+            console.error(e);
+          }
         }
-      }}
+      }
     ]);
   };
 
@@ -644,11 +646,11 @@ export default function AtlasScreen({ route, navigation }: any) {
       const db = await getDb();
       // Set parent, but don't confirm coordinates yet - let user adjust marker
       await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", parentId, actionEntity.id);
-      
+
       // Teleport map to parent's location ONLY IF the actionEntity does not have its own location yet
       // Actually, per user request: "ni debe trasladarse un lugar a el si la ciudad es el padre."
       // So we remove the teleport map logic entirely to avoid confusing jumps.
-      
+
       setShowParentAssign(false);
     } catch (e) {
       console.error(e);
@@ -662,12 +664,12 @@ export default function AtlasScreen({ route, navigation }: any) {
       const db = await getDb();
       const lat = currentRegion.latitude;
       const lon = currentRegion.longitude;
-      
+
       await db.runAsync(
         'UPDATE entities SET latitude = ?, longitude = ?, is_confirmed = 1 WHERE id = ?',
         lat, lon, actionEntity.id
       );
-      
+
       // Reverse geocode to auto-assign territorial parent
       try {
         const apiKey = await getConfig('GOOGLE_MAPS_KEY');
@@ -688,7 +690,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       } catch (geoErr) {
         console.warn('Reverse geocode for parenting failed:', geoErr);
       }
-      
+
       Alert.alert('Confirmado', `"${actionEntity.title}" ubicado.`);
       setEditingEntity(null);
       setConfirmMode('none');
@@ -711,7 +713,7 @@ export default function AtlasScreen({ route, navigation }: any) {
 
   const visibleMarkers = React.useMemo(() => {
     const delta = currentRegion?.latitudeDelta || 100;
-    
+
     // Height thresholds (geo_level matches these: 0=leaf, 1=neighborhood, 2=city, 3=state, 4=country)
     let visibleHeight = 0;
     if (delta <= 0.05) visibleHeight = 0;
@@ -724,7 +726,7 @@ export default function AtlasScreen({ route, navigation }: any) {
     const markerMap = new Map<string, any>();
     const childrenOf = new Map<string, any[]>();
     const roots: any[] = [];
-    
+
     markers.forEach(m => {
       markerMap.set(m.id, m);
     });
@@ -743,7 +745,7 @@ export default function AtlasScreen({ route, navigation }: any) {
     const childSpread = (nodeId: string): number => {
       const children = childrenOf.get(nodeId);
       if (!children || children.length < 2) return 0;
-      
+
       let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
       let validCount = 0;
       for (const child of children) {
@@ -760,25 +762,25 @@ export default function AtlasScreen({ route, navigation }: any) {
     };
 
     const resultList: any[] = [];
-    
+
     // Always show actionEntity and editingEntity regardless of tree logic
     const specialIds = new Set<string>();
     if (editingEntity) specialIds.add(editingEntity.id);
     // Note: actionEntity is intentionally NOT added to specialIds because we want to hide it completely (avoids phantom pin)
-    
+
     const traverse = (node: any) => {
       if (specialIds.has(node.id)) {
         resultList.push(node);
         return; // Always show special nodes, no need to traverse them as clusters
       }
-      
+
       if (actionEntity && actionEntity.id === node.id) {
         // Explicitly hide the actionEntity marker
         return;
       }
-      
+
       let shouldDissolve = node.height > visibleHeight;
-      
+
       if (!shouldDissolve && node.hasChildren) {
         // If it shouldn't normally dissolve, but children are spread wide, force dissolve it
         const spread = childSpread(node.id);
@@ -786,9 +788,9 @@ export default function AtlasScreen({ route, navigation }: any) {
           shouldDissolve = true;
         }
       }
-      
+
       const children = childrenOf.get(node.id) || [];
-      
+
       if (shouldDissolve) {
         if (children.length > 0) {
           // Node is dissolved. Do not add it. Process children instead.
@@ -814,16 +816,16 @@ export default function AtlasScreen({ route, navigation }: any) {
     <View style={styles.container}>
       <Appbar.Header>
         <Appbar.Content title={
-          editingEntity ? `Ubicar: ${editingEntity.title}` : 
-          (confirmMode === 'precise' && actionEntity) ? `📍 ${actionEntity.title}` :
-          'Atlas de Vida'
+          editingEntity ? `Ubicar: ${editingEntity.title}` :
+            (confirmMode === 'precise' && actionEntity) ? `📍 ${actionEntity.title}` :
+              'Atlas de Vida'
         } />
         {editingEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
         {confirmMode === 'precise' && actionEntity && !editingEntity && (
           <Appbar.Action icon="close" onPress={() => { setConfirmMode('quick'); setEditingEntity(null); }} />
         )}
       </Appbar.Header>
-      
+
       {initialRegion ? (
         <View style={styles.mapContainer}>
           <MapView
@@ -837,36 +839,72 @@ export default function AtlasScreen({ route, navigation }: any) {
           >
             {!editingEntity && visibleMarkers.map(marker => {
               const size = marker.hasChildren ? 48 : (marker.mem_count > 0 ? 36 : 24);
+              const isTerritory = marker.height >= 2 || marker.hasChildren;
+              const isUnconfirmed = marker.is_confirmed === 0 && !isTerritory;
+
               return (
-              <Marker
-                key={marker.id}
-                coordinate={marker.coordinate}
-                anchor={{ x: 0.5, y: 0.5 }}
-                onPress={() => {
-                  const isTerritory = marker.height >= 2 || marker.hasChildren;
-                  if (marker.is_confirmed === 0 && !isTerritory) {
-                    setActionEntity(marker);
-                    setConfirmMode('none');
-                    setSearchQuery(marker.title);
-                    fetchTopSuggestion(marker);
-                    setPanelType('action');
-                    setPanelMode('peek');
-                  } else {
-                    setMemoryEntityId(marker.id);
-                    setPanelType('memories');
-                    setPanelMode('peek');
-                  }
-                }}
-              >
-                <View style={[styles.clusterMarker, { 
-                  backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                  width: size,
-                  height: size,
-                  borderRadius: size / 2,
-                }]}>
-                  <Text style={styles.clusterText}>{marker.mem_count || ''}</Text>
-                </View>
-              </Marker>
+                <Marker
+                  key={marker.id}
+                  coordinate={marker.coordinate}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  onPress={() => {
+                    // Mantenemos tu lógica para lugares sin confirmar
+                    if (isUnconfirmed) {
+                      setActionEntity(marker);
+                      setConfirmMode('none');
+                      setSearchQuery(marker.title);
+                      fetchTopSuggestion(marker);
+                      setPanelType('action');
+                      setPanelMode('peek');
+                    }
+                    // Si está confirmado, el toque abre el Callout (la burbuja) automáticamente
+                  }}
+                  onCalloutPress={() => {
+                    if (!isUnconfirmed) {
+                      Alert.alert(marker.title, '¿Qué deseas hacer?', [
+                        { text: 'Ver Recuerdos', onPress: () => { setMemoryEntityId(marker.id); setPanelType('memories'); setPanelMode('peek'); } },
+                        {
+                          text: 'Editar Ubicación', onPress: () => {
+                            setActionEntity(marker);
+                            setConfirmMode('none');
+                            setSearchQuery(marker.title);
+                            fetchTopSuggestion(marker);
+                            setPanelType('action');
+                            setPanelMode('peek');
+                          }
+                        },
+                        { text: 'Eliminar', style: 'destructive', onPress: () => deleteEntity(marker.id) },
+                        { text: 'Cancelar', style: 'cancel' }
+                      ]);
+                    }
+                  }}
+                >
+                  <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                    <View style={[styles.clusterMarker, {
+                      backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
+                      width: size,
+                      height: size,
+                      borderRadius: size / 2,
+                    }]}>
+                      {/* Arregla el problema del "0" vacío */}
+                      <Text style={styles.clusterText}>
+                        {marker.mem_count > 0 ? marker.mem_count : (marker.hasChildren ? '🗺️' : '0')}
+                      </Text>
+                    </View>
+                    {/* Arregla el problema del nombre que no se veía */}
+                    <Text style={styles.markerNameText}>{marker.title}</Text>
+                  </View>
+
+                  {/* Esta burbuja nativa reemplaza tener que ir al explorador para editar */}
+                  {!isUnconfirmed && (
+                    <Callout tooltip>
+                      <View style={styles.calloutBubble}>
+                        <Text style={styles.calloutTitle}>{marker.title}</Text>
+                        <Text style={styles.calloutSubtitle}>Toca para opciones ⚙️</Text>
+                      </View>
+                    </Callout>
+                  )}
+                </Marker>
               );
             })}
           </MapView>
@@ -892,10 +930,10 @@ export default function AtlasScreen({ route, navigation }: any) {
       {/* FAB for Places */}
       {!editingEntity && panelMode === 'hidden' && (
         <View style={styles.fabContainer}>
-          <FAB 
-            icon="map-marker-star" 
-            style={[styles.fabLeft, porConfirmar.length > 0 && { backgroundColor: '#FFF3E0' }]} 
-            onPress={() => { setPanelType('destacados'); setPanelMode('peek'); }} 
+          <FAB
+            icon="map-marker-star"
+            style={[styles.fabLeft, porConfirmar.length > 0 && { backgroundColor: '#FFF3E0' }]}
+            onPress={() => { setPanelType('destacados'); setPanelMode('peek'); }}
             label={porConfirmar.length > 0 ? `Lugares (${porConfirmar.length} ⚠️)` : 'Lugares'}
           />
         </View>
@@ -916,47 +954,47 @@ export default function AtlasScreen({ route, navigation }: any) {
         <View style={panelMode === 'full' ? styles.panelFull : styles.panelPeek}>
           {/* Header */}
           <View style={styles.panelHeader}>
-             <IconButton icon="close" onPress={closePanel} />
-             <Text style={styles.panelTitle}>
-               {panelType === 'destacados' ? `Lugares (${destacados.length + porConfirmar.length})` :
+            <IconButton icon="close" onPress={closePanel} />
+            <Text style={styles.panelTitle}>
+              {panelType === 'destacados' ? `Lugares (${destacados.length + porConfirmar.length})` :
                 panelType === 'action' ? actionEntity?.title :
-                panelType === 'memories' ? 'Explorador de Recuerdos' : ''}
-             </Text>
-             <View style={{flexDirection: 'row'}}>
-               {panelType === 'memories' && memoryEntityId && (
-                 <>
-                   <IconButton icon="pencil" size={22} iconColor="#6200ee" onPress={() => {
-                     const m = destacados.find(x => x.id === memoryEntityId);
-                     if (m) {
-                       setActionEntity(m);
-                       setConfirmMode('none');
-                       setSearchQuery(m.title);
-                       fetchTopSuggestion(m);
-                       setSelectedPlace(null);
-                       setPlaceSuggestions([]);
-                       setAddressQuery('');
-                       setEditingEntity(null);
-                       setMemoryEntityId(null);
-                       setPanelType('action');
-                       setPanelMode('peek');
-                     }
-                   }} />
-                   <IconButton icon="delete-outline" size={22} iconColor="#B00020" onPress={() => deleteEntity(memoryEntityId)} />
-                 </>
-               )}
-               {panelType !== 'action' && (
-                 <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
-               )}
-             </View>
+                  panelType === 'memories' ? 'Explorador de Recuerdos' : ''}
+            </Text>
+            <View style={{ flexDirection: 'row' }}>
+              {panelType === 'memories' && memoryEntityId && (
+                <>
+                  <IconButton icon="pencil" size={22} iconColor="#6200ee" onPress={() => {
+                    const m = destacados.find(x => x.id === memoryEntityId);
+                    if (m) {
+                      setActionEntity(m);
+                      setConfirmMode('none');
+                      setSearchQuery(m.title);
+                      fetchTopSuggestion(m);
+                      setSelectedPlace(null);
+                      setPlaceSuggestions([]);
+                      setAddressQuery('');
+                      setEditingEntity(null);
+                      setMemoryEntityId(null);
+                      setPanelType('action');
+                      setPanelMode('peek');
+                    }
+                  }} />
+                  <IconButton icon="delete-outline" size={22} iconColor="#B00020" onPress={() => deleteEntity(memoryEntityId)} />
+                </>
+              )}
+              {panelType !== 'action' && (
+                <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
+              )}
+            </View>
           </View>
-          
+
           <View style={{ flex: 1 }}>
             {panelType === 'destacados' && (
               <ScrollView style={styles.listArea}>
                 {/* Pending confirmation items first */}
                 {porConfirmar.map(item => (
-                  <TouchableOpacity key={item.id} onPress={() => { 
-                    setActionEntity(item); 
+                  <TouchableOpacity key={item.id} onPress={() => {
+                    setActionEntity(item);
                     setSearchQuery(item.title);
                     fetchTopSuggestion(item);
                     setSelectedPlace(null);
@@ -965,15 +1003,15 @@ export default function AtlasScreen({ route, navigation }: any) {
                     setConfirmMode('none');
                     setAddressQuery('');
                     setEditingEntity(null);
-                    setPanelType('action'); 
+                    setPanelType('action');
                     setPanelMode('peek');
                   }} style={[styles.listItem, { backgroundColor: '#FFF8E1' }]}>
                     <Text style={styles.listIcon}>⚠️</Text>
-                    <View style={{flex:1}}>
+                    <View style={{ flex: 1 }}>
                       <Text style={styles.listTitle}>{item.title}</Text>
                       <Text style={[styles.listSub, { color: '#F57C00' }]}>Toca para confirmar ubicación</Text>
                     </View>
-                    <IconButton icon="close" size={18} iconColor="#999" onPress={(e) => { e.stopPropagation?.(); deleteEntity(item.id); }} style={{margin: 0}} />
+                    <IconButton icon="close" size={18} iconColor="#999" onPress={(e) => { e.stopPropagation?.(); deleteEntity(item.id); }} style={{ margin: 0 }} />
                   </TouchableOpacity>
                 ))}
 
@@ -990,20 +1028,20 @@ export default function AtlasScreen({ route, navigation }: any) {
                     ].map((section, idx) => {
                       const items = destacados.filter(d => d.is_confirmed !== 0 && section.filter(d));
                       if (items.length === 0) return null;
-                      
+
                       return (
                         <View key={idx}>
                           <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#666', marginTop: 15, marginBottom: 8, marginLeft: 10 }}>
                             {section.title}
                           </Text>
                           {items.map(item => (
-                            <TouchableOpacity 
-                              key={item.id} 
-                              onPress={() => jumpTo(item.coordinate)} 
+                            <TouchableOpacity
+                              key={item.id}
+                              onPress={() => jumpTo(item.coordinate)}
                               style={styles.listItem}
                             >
                               <Text style={styles.listIcon}>{section.icon}</Text>
-                              <View style={{flex:1}}>
+                              <View style={{ flex: 1 }}>
                                 <Text style={styles.listTitle}>{item.title}</Text>
                                 <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
                               </View>
@@ -1017,10 +1055,10 @@ export default function AtlasScreen({ route, navigation }: any) {
                                 setAddressQuery('');
                                 setEditingEntity(null);
                                 setMemoryEntityId(null);
-                                setPanelType('action'); 
+                                setPanelType('action');
                                 setPanelMode('peek');
-                              }} style={{margin: -4}} />
-                              <IconButton icon="delete-outline" size={18} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{margin: -4}} />
+                              }} style={{ margin: -4 }} />
+                              <IconButton icon="delete-outline" size={18} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{ margin: -4 }} />
                             </TouchableOpacity>
                           ))}
                         </View>
@@ -1032,12 +1070,12 @@ export default function AtlasScreen({ route, navigation }: any) {
             )}
 
             {panelType === 'action' && actionEntity && (
-              <View style={{flex: 1}}>
-                <ScrollView keyboardShouldPersistTaps="handled" style={{flex: 1, padding: 15}}>
-                  <Text style={{fontWeight: 'bold', fontSize: 16, marginBottom: 4}}>
+              <View style={{ flex: 1 }}>
+                <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, padding: 15 }}>
+                  <Text style={{ fontWeight: 'bold', fontSize: 16, marginBottom: 4 }}>
                     Confirmar: {actionEntity.title}
                   </Text>
-                  <Text style={{color: '#888', fontSize: 12, marginBottom: 12}}>
+                  <Text style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>
                     El marcador rojo indica dónde se guardará este lugar.
                   </Text>
 
@@ -1045,10 +1083,10 @@ export default function AtlasScreen({ route, navigation }: any) {
                   {loadingAutoTop ? (
                     <View style={{ alignItems: 'center', padding: 10 }}>
                       <ActivityIndicator size="small" color="#6200ee" />
-                      <Text style={{color: '#888', marginTop: 6, fontSize: 12}}>Buscando sugerencia automática...</Text>
+                      <Text style={{ color: '#888', marginTop: 6, fontSize: 12 }}>Buscando sugerencia automática...</Text>
                     </View>
                   ) : autoTopResult ? (
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       onPress={() => {
                         if (autoTopResult.location) {
                           mapRef.current?.animateToRegion({
@@ -1058,12 +1096,12 @@ export default function AtlasScreen({ route, navigation }: any) {
                           }, 500);
                         }
                       }}
-                      style={{backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 12}}
+                      style={{ backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 12 }}
                     >
-                      <Text style={{fontWeight: 'bold', fontSize: 14, color: '#2e7d32', marginBottom: 2}}>✨ Sugerencia</Text>
-                      <Text style={{fontSize: 14, fontWeight: 'bold', color: '#333'}}>{autoTopResult.displayName?.text}</Text>
-                      <Text style={{fontSize: 12, color: '#555'}}>{autoTopResult.formattedAddress}</Text>
-                      <Text style={{fontSize: 11, color: '#2e7d32', marginTop: 6}}>Toca para centrar el marcador aquí</Text>
+                      <Text style={{ fontWeight: 'bold', fontSize: 14, color: '#2e7d32', marginBottom: 2 }}>✨ Sugerencia</Text>
+                      <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#333' }}>{autoTopResult.displayName?.text}</Text>
+                      <Text style={{ fontSize: 12, color: '#555' }}>{autoTopResult.formattedAddress}</Text>
+                      <Text style={{ fontSize: 11, color: '#2e7d32', marginTop: 6 }}>Toca para centrar el marcador aquí</Text>
                     </TouchableOpacity>
                   ) : null}
 
@@ -1073,16 +1111,16 @@ export default function AtlasScreen({ route, navigation }: any) {
                       setConfirmMode(confirmMode === 'quick' ? 'none' : 'quick');
                       if (confirmMode !== 'quick') searchPlaces(searchQuery);
                     }}
-                    style={{backgroundColor: confirmMode === 'quick' ? '#EDE7F6' : '#F3E5F5', borderRadius: 10, padding: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center'}}
+                    style={{ backgroundColor: confirmMode === 'quick' ? '#EDE7F6' : '#F3E5F5', borderRadius: 10, padding: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center' }}
                   >
-                    <Text style={{fontSize: 18, marginRight: 10}}>{confirmMode === 'quick' ? '▲' : '🔍'}</Text>
-                    <Text style={{color: '#6200ee', fontSize: 14, fontWeight: 'bold', flex: 1}}>
+                    <Text style={{ fontSize: 18, marginRight: 10 }}>{confirmMode === 'quick' ? '▲' : '🔍'}</Text>
+                    <Text style={{ color: '#6200ee', fontSize: 14, fontWeight: 'bold', flex: 1 }}>
                       {confirmMode === 'quick' ? 'Ocultar alternativas' : 'No es el lugar correcto?'}
                     </Text>
                   </TouchableOpacity>
 
                   {confirmMode === 'quick' && (
-                    <View style={{marginBottom: 10}}>
+                    <View style={{ marginBottom: 10 }}>
                       <TextInput
                         mode="outlined"
                         label="Buscar lugar"
@@ -1090,7 +1128,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                         onChangeText={searchPlaces}
                         dense
                         right={searchingPlaces ? <TextInput.Icon icon="loading" /> : <TextInput.Icon icon="magnify" />}
-                        style={{marginBottom: 10, backgroundColor: 'white'}}
+                        style={{ marginBottom: 10, backgroundColor: 'white' }}
                       />
 
                       {placeSuggestions.map((place: any, idx: number) => {
@@ -1101,15 +1139,15 @@ export default function AtlasScreen({ route, navigation }: any) {
                             style={[styles.suggestionItem, isSelected && styles.suggestionSelected]}
                             onPress={() => selectPlaceSuggestion(place)}
                           >
-                            <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                              <Text style={{fontSize: 18, marginRight: 10}}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                              <Text style={{ fontSize: 18, marginRight: 10 }}>
                                 {isSelected ? '✅' : '📍'}
                               </Text>
-                              <View style={{flex: 1}}>
-                                <Text style={{fontWeight: 'bold', fontSize: 15, color: '#333'}}>
+                              <View style={{ flex: 1 }}>
+                                <Text style={{ fontWeight: 'bold', fontSize: 15, color: '#333' }}>
                                   {place.displayName?.text || ''}
                                 </Text>
-                                <Text style={{fontSize: 12, color: '#888'}} numberOfLines={2}>
+                                <Text style={{ fontSize: 12, color: '#888' }} numberOfLines={2}>
                                   {place.formattedAddress || ''}
                                 </Text>
                               </View>
@@ -1119,14 +1157,14 @@ export default function AtlasScreen({ route, navigation }: any) {
                       })}
 
                       {searchingPlaces && (
-                        <View style={{padding: 15, alignItems: 'center'}}>
+                        <View style={{ padding: 15, alignItems: 'center' }}>
                           <ActivityIndicator size="small" />
-                          <Text style={{color: '#888', marginTop: 6}}>Buscando...</Text>
+                          <Text style={{ color: '#888', marginTop: 6 }}>Buscando...</Text>
                         </View>
                       )}
 
                       {!searchingPlaces && placeSuggestions.length === 0 && searchQuery.length > 2 && (
-                        <Text style={{color: '#888', textAlign: 'center', padding: 12, fontSize: 13}}>
+                        <Text style={{ color: '#888', textAlign: 'center', padding: 12, fontSize: 13 }}>
                           Sin resultados. Intenta con otro término.
                         </Text>
                       )}
@@ -1134,8 +1172,8 @@ export default function AtlasScreen({ route, navigation }: any) {
                   )}
 
                   {/* ── Address field (last resort) ── */}
-                  <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 12}}>
-                    <View style={{flex: 1}}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                    <View style={{ flex: 1 }}>
                       <TextInput
                         mode="outlined"
                         label="Buscar por dirección"
@@ -1144,26 +1182,26 @@ export default function AtlasScreen({ route, navigation }: any) {
                         onSubmitEditing={sendAddress}
                         dense
                         placeholder="Escribe una dirección exacta"
-                        style={{backgroundColor: 'white'}}
+                        style={{ backgroundColor: 'white' }}
                         returnKeyType="send"
                       />
                     </View>
-                    <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{marginLeft: 4}} />
+                    <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{ marginLeft: 4 }} />
                   </View>
 
                   <TouchableOpacity
                     onPress={() => deleteEntity(actionEntity.id)}
-                    style={{paddingVertical: 8, alignItems: 'center'}}
+                    style={{ paddingVertical: 8, alignItems: 'center' }}
                   >
-                    <Text style={{color: '#B00020', fontSize: 13}}>Eliminar este lugar</Text>
+                    <Text style={{ color: '#B00020', fontSize: 13 }}>Eliminar este lugar</Text>
                   </TouchableOpacity>
                 </ScrollView>
 
                 {/* ── Fixed confirm button at absolute bottom ── */}
-                <View style={{padding: 15, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#eee', backgroundColor: 'white'}}>
-                  <Button 
-                    mode="contained" 
-                    onPress={confirmPrecise} 
+                <View style={{ padding: 15, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#eee', backgroundColor: 'white' }}>
+                  <Button
+                    mode="contained"
+                    onPress={confirmPrecise}
                     icon="map-marker-check"
                   >
                     Guardar posición del marcador
@@ -1192,8 +1230,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  staticPin: { marginBottom: 50 },
-  
+  staticPin: { transform: [{ translateY: -25 }] },
+
   fabContainer: {
     position: 'absolute',
     bottom: 30,
@@ -1204,7 +1242,7 @@ const styles = StyleSheet.create({
   },
   fabLeft: { backgroundColor: 'white' },
   fabRight: { backgroundColor: 'white' },
-  
+
   panelPeek: {
     position: 'absolute',
     bottom: 0, left: 0, right: 0,
@@ -1242,11 +1280,11 @@ const styles = StyleSheet.create({
     height: 50,
   },
   panelTitle: { fontSize: 16, fontWeight: 'bold' },
-  
+
   editFooter: { padding: 15, flex: 1, justifyContent: 'center' },
   editHint: { textAlign: 'center', marginBottom: 10, color: '#666' },
   confirmBtn: { paddingVertical: 5 },
-  
+
   actionPanel: { padding: 15, flex: 1 },
   listArea: { padding: 10 },
   listItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
@@ -1254,7 +1292,7 @@ const styles = StyleSheet.create({
   listTitle: { fontSize: 15, fontWeight: 'bold', color: '#333' },
   listSub: { fontSize: 12, color: '#666' },
   emptyText: { textAlign: 'center', color: '#999', marginTop: 20, fontStyle: 'italic' },
-  
+
   suggestionItem: {
     padding: 12,
     borderWidth: 1,
@@ -1267,7 +1305,7 @@ const styles = StyleSheet.create({
     borderColor: '#4CAF50',
     backgroundColor: '#e8f5e9',
   },
-  
+
   debugHud: {
     position: 'absolute',
     top: 10,
@@ -1287,10 +1325,44 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 2,
     elevation: 4,
+    overflow: 'hidden',
   },
   clusterText: {
     color: 'white',
     fontWeight: 'bold',
     fontSize: 12,
+  },
+  markerNameText: {
+    color: '#333',
+    fontSize: 10,
+    fontWeight: 'bold',
+    backgroundColor: 'rgba(255, 255, 255, 0.75)',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginTop: 2,
+    textAlign: 'center',
+    maxWidth: 80,
+  },
+  calloutBubble: {
+    backgroundColor: 'white',
+    borderRadius: 8,
+    padding: 10,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    alignItems: 'center',
+  },
+  calloutTitle: {
+    fontWeight: 'bold',
+    fontSize: 14,
+    color: '#333'
+  },
+  calloutSubtitle: {
+    color: '#6200ee',
+    fontSize: 12,
+    marginTop: 4
   },
 });
