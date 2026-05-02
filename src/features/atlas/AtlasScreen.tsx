@@ -840,15 +840,33 @@ export default function AtlasScreen({ route, navigation }: any) {
       <Appbar.Header>
         <Appbar.Content title={
           editingEntity ? `Ubicar: ${editingEntity.title}` :
-            selectedPlaceEntity ? selectedPlaceEntity.title :
-              (confirmMode === 'precise' && actionEntity) ? `📍 ${actionEntity.title}` :
-                'Atlas de Vida'
+            (confirmMode === 'precise' && actionEntity) ? `📍 ${actionEntity.title}` :
+              'Atlas de Vida'
         } />
-        
-        {/* Actions for Selected Place */}
-        {selectedPlaceEntity && !editingEntity && (
-          <>
-            <Appbar.Action icon="pencil" onPress={() => {
+        {editingEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
+        {confirmMode === 'precise' && actionEntity && !editingEntity && (
+          <Appbar.Action icon="close" onPress={() => { setConfirmMode('quick'); setEditingEntity(null); }} />
+        )}
+      </Appbar.Header>
+
+      {/* Sub-header Contextual for Selected Place Actions */}
+      {selectedPlaceEntity && !editingEntity && (
+        <View style={{
+          backgroundColor: '#e3f2fd', 
+          paddingHorizontal: 16, 
+          paddingVertical: 10,
+          flexDirection: 'row', 
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottomWidth: 1,
+          borderBottomColor: '#bbdefb',
+          zIndex: 10
+        }}>
+          <View style={{ flex: 1, paddingRight: 10 }}>
+            <Text style={{ fontWeight: 'bold', fontSize: 16, color: '#1565C0' }} numberOfLines={1}>{selectedPlaceEntity.title}</Text>
+          </View>
+          <View style={{ flexDirection: 'row' }}>
+            <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
               setActionEntity(selectedPlaceEntity);
               setConfirmMode('none');
               setSearchQuery(selectedPlaceEntity.title);
@@ -861,24 +879,16 @@ export default function AtlasScreen({ route, navigation }: any) {
               setPanelType('action'); 
               setPanelMode('peek');
               setSelectedPlaceEntity(null);
-            }} />
-            <Appbar.Action icon="delete" iconColor="#B00020" onPress={() => {
+            }} style={{ margin: 0, backgroundColor: 'white' }} />
+            <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => {
               deleteEntity(selectedPlaceEntity.id);
               setSelectedPlaceEntity(null);
               setPanelMode('hidden');
-            }} />
-            <Appbar.Action icon="close" onPress={() => setSelectedPlaceEntity(null)} />
-          </>
-        )}
-
-        {/* Actions for Editing */}
-        {editingEntity && !selectedPlaceEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
-        
-        {/* Actions for Confirm Mode */}
-        {confirmMode === 'precise' && actionEntity && !editingEntity && !selectedPlaceEntity && (
-          <Appbar.Action icon="close" onPress={() => { setConfirmMode('quick'); setEditingEntity(null); }} />
-        )}
-      </Appbar.Header>
+            }} style={{ margin: 0, marginLeft: 8, backgroundColor: 'white' }} />
+            <IconButton icon="close" size={20} iconColor="#555" onPress={() => setSelectedPlaceEntity(null)} style={{ margin: 0, marginLeft: 8 }} />
+          </View>
+        </View>
+      )}
 
       {initialRegion ? (
         <View style={styles.mapContainer}>
@@ -927,7 +937,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                     }
                   }}
                 >
-                  <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+                  <View style={{ width: size + 10, height: size + 10, justifyContent: 'center', alignItems: 'center' }}>
                     <MaterialCommunityIcons 
                       name="circle" 
                       size={size} 
