@@ -331,9 +331,43 @@ export default function AtlasScreen({ route, navigation }: any) {
           'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.addressComponents',
         };
 
-        // First attempt: with location bias
-        const searchBody: any = { textQuery: query.trim(), maxResultCount: 5 };
-        if (currentRegion) {
+        // 1. Gather Context from Ancestors
+        let contextQuery = query.trim();
+        let contextParts: string[] = [];
+        let currNode = markers.find(m => m.id === actionEntity?.parent_id);
+        while (currNode) {
+          contextParts.push(currNode.title);
+          currNode = markers.find(m => m.id === currNode.parent_id);
+        }
+        if (contextParts.length > 0) {
+          contextQuery += ' ' + contextParts.join(' ');
+        }
+
+        // 2. Compute Global Bounding Box of all user's confirmed locations
+        let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+        let validCoords = false;
+        markers.forEach(m => {
+          if (m.coordinate && m.is_confirmed) {
+            validCoords = true;
+            if (m.coordinate.latitude < minLat) minLat = m.coordinate.latitude;
+            if (m.coordinate.latitude > maxLat) maxLat = m.coordinate.latitude;
+            if (m.coordinate.longitude < minLon) minLon = m.coordinate.longitude;
+            if (m.coordinate.longitude > maxLon) maxLon = m.coordinate.longitude;
+          }
+        });
+
+        const searchBody: any = { textQuery: contextQuery, maxResultCount: 5 };
+        
+        if (validCoords) {
+          // Generous padding (~500km) to bias search towards the user's existing map footprint
+          searchBody.locationBias = {
+            rectangle: {
+              low: { latitude: Math.max(-90, minLat - 5), longitude: Math.max(-180, minLon - 5) },
+              high: { latitude: Math.min(90, maxLat + 5), longitude: Math.min(180, maxLon + 5) }
+            }
+          };
+        } else if (currentRegion) {
+          // Fallback to viewport bias
           searchBody.locationBias = {
             circle: {
               center: { latitude: currentRegion.latitude, longitude: currentRegion.longitude },
@@ -348,11 +382,21 @@ export default function AtlasScreen({ route, navigation }: any) {
         let data = await res.json();
         let results = data.places || [];
 
-        // Retry without bias if no results
-        if (results.length === 0 && currentRegion) {
-          const fallbackBody = { textQuery: query.trim(), maxResultCount: 5 };
+        // Retry without bias if no results (using context query)
+        if (results.length === 0 && searchBody.locationBias) {
+          const fallbackBody = { textQuery: contextQuery, maxResultCount: 5 };
           res = await fetch('https://places.googleapis.com/v1/places:searchText', {
             method: 'POST', headers, body: JSON.stringify(fallbackBody),
+          });
+          data = await res.json();
+          results = data.places || [];
+        }
+
+        // Final retry without context query OR bias if still no results
+        if (results.length === 0 && contextQuery !== query.trim()) {
+          const nakedBody = { textQuery: query.trim(), maxResultCount: 5 };
+          res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+            method: 'POST', headers, body: JSON.stringify(nakedBody),
           });
           data = await res.json();
           results = data.places || [];
