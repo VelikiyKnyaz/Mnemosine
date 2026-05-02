@@ -353,7 +353,7 @@ export default function AtlasScreen({ route, navigation }: any) {
     }, 600);
   };
 
-  // Geocode an address: explicit action (called on submit)
+  // Geocode an address using Google Geocoding API
   const sendAddress = async () => {
     const query = addressQuery.trim();
     if (!query || query.length < 3) return;
@@ -361,29 +361,23 @@ export default function AtlasScreen({ route, navigation }: any) {
       const apiKey = await getConfig('GOOGLE_MAPS_KEY');
       if (!apiKey) { Alert.alert('Error', 'API key no configurada.'); return; }
 
-      // Use Places API with full address context
-      const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': apiKey,
-          'X-Goog-FieldMask': 'places.location,places.formattedAddress',
-        },
-        body: JSON.stringify({ textQuery: query, maxResultCount: 1 }),
-      });
+      const encoded = encodeURIComponent(query);
+      const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}&key=${apiKey}`);
       const data = await res.json();
-      const place = data.places?.[0];
-      if (place?.location) {
+      
+      if (data.status === 'OK' && data.results?.length > 0) {
+        const loc = data.results[0].geometry.location;
         mapRef.current?.animateToRegion({
-          latitude: place.location.latitude,
-          longitude: place.location.longitude,
+          latitude: loc.lat,
+          longitude: loc.lng,
           latitudeDelta: 0.003, longitudeDelta: 0.003,
         }, 500);
       } else {
-        Alert.alert('Sin resultados', `No se encontró: "${query}". Intenta ser más específico.`);
+        Alert.alert('Sin resultados', `No se encontró: "${query}".`);
       }
     } catch (e) {
-      console.error('Address geocode error:', e);
+      console.error('Geocode error:', e);
+      Alert.alert('Error', 'No se pudo geocodificar la dirección.');
     }
   };
 
