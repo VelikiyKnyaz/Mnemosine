@@ -836,13 +836,12 @@ export default function AtlasScreen({ route, navigation }: any) {
             showsUserLocation={!editingEntity}
           >
             {!editingEntity && visibleMarkers.map(marker => {
-              const isCluster = marker.hasChildren || marker.mem_count > 0;
+              const size = marker.hasChildren ? 48 : (marker.mem_count > 0 ? 36 : 24);
               return (
               <Marker
                 key={marker.id}
                 coordinate={marker.coordinate}
-                {...(isCluster ? { anchor: { x: 0.5, y: 0.5 } } : {})}
-                pinColor={!isCluster ? (marker.is_confirmed === 0 ? 'orange' : 'red') : undefined}
+                anchor={{ x: 0.5, y: 0.5 }}
                 onPress={() => {
                   const isTerritory = marker.height >= 2 || marker.hasChildren;
                   if (marker.is_confirmed === 0 && !isTerritory) {
@@ -859,16 +858,14 @@ export default function AtlasScreen({ route, navigation }: any) {
                   }
                 }}
               >
-                {isCluster ? (
-                  <View style={[styles.clusterMarker, { 
-                    backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                    width: marker.hasChildren ? 48 : 36,
-                    height: marker.hasChildren ? 48 : 36,
-                    borderRadius: marker.hasChildren ? 24 : 18,
-                  }]}>
-                    <Text style={styles.clusterText}>{marker.mem_count}</Text>
-                  </View>
-                ) : null}
+                <View style={[styles.clusterMarker, { 
+                  backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
+                  width: size,
+                  height: size,
+                  borderRadius: size / 2,
+                }]}>
+                  <Text style={styles.clusterText}>{marker.mem_count || ''}</Text>
+                </View>
               </Marker>
               );
             })}
