@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { Appbar, Text, Button, IconButton, Chip, Title, FAB, TextInput } from 'react-native-paper';
-import MapView, { Marker, Region, Callout } from 'react-native-maps';
+import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
@@ -645,7 +645,7 @@ export default function AtlasScreen({ route, navigation }: any) {
     try {
       const db = await getDb();
       // Set parent, but don't confirm coordinates yet - let user adjust marker
-      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", parentId, actionEntity.id);
+      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", actionEntity.id, actionEntity.id);
 
       // Teleport map to parent's location ONLY IF the actionEntity does not have its own location yet
       // Actually, per user request: "ni debe trasladarse un lugar a el si la ciudad es el padre."
@@ -839,71 +839,62 @@ export default function AtlasScreen({ route, navigation }: any) {
           >
             {!editingEntity && visibleMarkers.map(marker => {
               const size = marker.hasChildren ? 48 : (marker.mem_count > 0 ? 36 : 24);
-              const isTerritory = marker.height >= 2 || marker.hasChildren;
-              const isUnconfirmed = marker.is_confirmed === 0 && !isTerritory;
-
               return (
                 <Marker
                   key={marker.id}
                   coordinate={marker.coordinate}
                   anchor={{ x: 0.5, y: 0.5 }}
                   onPress={() => {
-                    // Mantenemos tu lógica para lugares sin confirmar
-                    if (isUnconfirmed) {
+                    const isTerritory = marker.height >= 2 || marker.hasChildren;
+                    if (marker.is_confirmed === 0 && !isTerritory) {
                       setActionEntity(marker);
                       setConfirmMode('none');
                       setSearchQuery(marker.title);
                       fetchTopSuggestion(marker);
                       setPanelType('action');
                       setPanelMode('peek');
-                    }
-                    // Si está confirmado, el toque abre el Callout (la burbuja) automáticamente
-                  }}
-                  onCalloutPress={() => {
-                    if (!isUnconfirmed) {
-                      Alert.alert(marker.title, '¿Qué deseas hacer?', [
-                        { text: 'Ver Recuerdos', onPress: () => { setMemoryEntityId(marker.id); setPanelType('memories'); setPanelMode('peek'); } },
-                        {
-                          text: 'Editar Ubicación', onPress: () => {
-                            setActionEntity(marker);
-                            setConfirmMode('none');
-                            setSearchQuery(marker.title);
-                            fetchTopSuggestion(marker);
-                            setPanelType('action');
-                            setPanelMode('peek');
-                          }
-                        },
-                        { text: 'Eliminar', style: 'destructive', onPress: () => deleteEntity(marker.id) },
-                        { text: 'Cancelar', style: 'cancel' }
-                      ]);
+                    } else {
+                      Alert.alert(
+                        marker.title,
+                        '¿Qué deseas hacer con este lugar?',
+                        [
+                          { text: 'Ver Recuerdos', onPress: () => {
+                              setMemoryEntityId(marker.id);
+                              setPanelType('memories');
+                              setPanelMode('peek');
+                            } 
+                          },
+                          { text: 'Editar Ubicación', onPress: () => {
+                              setActionEntity(marker);
+                              setConfirmMode('none');
+                              setSearchQuery(marker.title);
+                              fetchTopSuggestion(marker);
+                              setSelectedPlace(null);
+                              setPlaceSuggestions([]);
+                              setAddressQuery('');
+                              setEditingEntity(null);
+                              setMemoryEntityId(null);
+                              setPanelType('action'); 
+                              setPanelMode('peek');
+                            } 
+                          },
+                          { text: 'Eliminar', style: 'destructive', onPress: () => deleteEntity(marker.id) },
+                          { text: 'Cancelar', style: 'cancel' }
+                        ]
+                      );
                     }
                   }}
                 >
-                  <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <View style={{ padding: 6 }}>
                     <View style={[styles.clusterMarker, {
                       backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
                       width: size,
                       height: size,
                       borderRadius: size / 2,
                     }]}>
-                      {/* Arregla el problema del "0" vacío */}
-                      <Text style={styles.clusterText}>
-                        {marker.mem_count > 0 ? marker.mem_count : (marker.hasChildren ? '🗺️' : '0')}
-                      </Text>
+                      <Text style={styles.clusterText}>{marker.mem_count || ''}</Text>
                     </View>
-                    {/* Arregla el problema del nombre que no se veía */}
-                    <Text style={styles.markerNameText}>{marker.title}</Text>
                   </View>
-
-                  {/* Esta burbuja nativa reemplaza tener que ir al explorador para editar */}
-                  {!isUnconfirmed && (
-                    <Callout tooltip>
-                      <View style={styles.calloutBubble}>
-                        <Text style={styles.calloutTitle}>{marker.title}</Text>
-                        <Text style={styles.calloutSubtitle}>Toca para opciones ⚙️</Text>
-                      </View>
-                    </Callout>
-                  )}
                 </Marker>
               );
             })}
@@ -916,8 +907,8 @@ export default function AtlasScreen({ route, navigation }: any) {
           </View>
 
           {(editingEntity || (actionEntity && panelType === 'action')) && (
-            <View style={[styles.staticPinContainer, panelMode !== 'hidden' && { paddingBottom: '45%' }]} pointerEvents="none">
-              <IconButton icon="map-marker" iconColor="red" size={50} style={styles.staticPin} />
+            <View style={styles.staticPinContainer} pointerEvents="none">
+              <View style={[styles.clusterMarker, { backgroundColor: '#e53935', width: 36, height: 36, borderRadius: 18 }]} />
             </View>
           )}
         </View>
@@ -1230,7 +1221,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  staticPin: { transform: [{ translateY: -25 }] },
+  staticPin: { marginBottom: 50 },
 
   fabContainer: {
     position: 'absolute',
@@ -1325,44 +1316,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 2,
     elevation: 4,
-    overflow: 'hidden',
   },
   clusterText: {
     color: 'white',
     fontWeight: 'bold',
     fontSize: 12,
-  },
-  markerNameText: {
-    color: '#333',
-    fontSize: 10,
-    fontWeight: 'bold',
-    backgroundColor: 'rgba(255, 255, 255, 0.75)',
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 4,
-    marginTop: 2,
-    textAlign: 'center',
-    maxWidth: 80,
-  },
-  calloutBubble: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 10,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    alignItems: 'center',
-  },
-  calloutTitle: {
-    fontWeight: 'bold',
-    fontSize: 14,
-    color: '#333'
-  },
-  calloutSubtitle: {
-    color: '#6200ee',
-    fontSize: 12,
-    marginTop: 4
   },
 });
