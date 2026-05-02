@@ -397,7 +397,6 @@ export default function AtlasScreen({ route, navigation }: any) {
         const topResult = results[0];
         setAutoTopResult(topResult);
         setSelectedPlace(topResult);
-        setConfirmMode('quick');
         if (topResult.location) {
           mapRef.current?.animateToRegion({
             latitude: topResult.location.latitude,
@@ -849,7 +848,7 @@ export default function AtlasScreen({ route, navigation }: any) {
             <Text style={styles.debugText}>Marcadores Visibles: {visibleMarkers.length}</Text>
           </View>
 
-          {(editingEntity || ((confirmMode === 'quick' || confirmMode === 'precise') && actionEntity)) && (
+          {(editingEntity || ((confirmMode === 'none' && autoTopResult) || confirmMode === 'quick' || confirmMode === 'precise') && actionEntity) && (
             <View style={[styles.staticPinContainer, panelMode !== 'hidden' && { paddingBottom: '45%' }]} pointerEvents="none">
               <IconButton icon="map-marker" iconColor="red" size={50} style={styles.staticPin} />
             </View>
@@ -988,12 +987,29 @@ export default function AtlasScreen({ route, navigation }: any) {
                   {/* ═══ CHOOSE MODE ═══ */}
                   {confirmMode === 'none' && (
                     <View style={{gap: 10}}>
-                      {loadingAutoTop && (
+                      {loadingAutoTop ? (
                         <View style={{ alignItems: 'center', padding: 10 }}>
                           <ActivityIndicator size="small" color="#6200ee" />
                           <Text style={{color: '#888', marginTop: 6, fontSize: 12}}>Buscando sugerencia automática...</Text>
                         </View>
-                      )}
+                      ) : autoTopResult ? (
+                        <View style={{backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 10}}>
+                          <Text style={{fontWeight: 'bold', fontSize: 16, color: '#2e7d32', marginBottom: 4}}>✨ Sugerencia Automática</Text>
+                          <Text style={{fontSize: 14, fontWeight: 'bold', color: '#333'}}>{autoTopResult.displayName?.text}</Text>
+                          <Text style={{fontSize: 12, color: '#555', marginBottom: 12}}>{autoTopResult.formattedAddress}</Text>
+                          <Text style={{color: '#666', fontSize: 12, marginBottom: 10}}>
+                            El mapa se ha movido aquí. Ajusta el marcador rojo y confirma:
+                          </Text>
+                          <Button 
+                            mode="contained" 
+                            buttonColor="#4caf50"
+                            icon="check"
+                            onPress={confirmPrecise}
+                          >
+                            Confirmar Ubicación
+                          </Button>
+                        </View>
+                      ) : null}
 
                       <TouchableOpacity
                         onPress={() => { setConfirmMode('quick'); searchPlaces(searchQuery); }}
