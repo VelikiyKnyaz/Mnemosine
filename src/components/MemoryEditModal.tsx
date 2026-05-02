@@ -136,7 +136,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
       
       const newId = uuidv4();
       await db.runAsync(
-        "INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 0)",
+        "INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 1)",
         newId, name, lat, lon
       );
       

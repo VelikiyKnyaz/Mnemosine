@@ -115,6 +115,21 @@ export default function AtlasScreen({ route, navigation }: any) {
         }
       });
       
+      // Check DB for entities that are parents (have children, even those without coords)
+      // This ensures territories always act as clusters, not leaves
+      const dbParents = await db.getAllAsync<{parent_id: string, child_count: number}>(
+        `SELECT parent_id, COUNT(*) as child_count FROM entities 
+         WHERE parent_id IS NOT NULL AND type = 'LOCATION' GROUP BY parent_id`
+      );
+      for (const row of dbParents) {
+        const node = entityMap.get(row.parent_id);
+        if (node && node.geoLevel == null && node.children.length === 0) {
+          // This entity is a parent in DB but has no children in entityMap (all children lack coords)
+          // Give it minimum geo_level of 2 (city) so it doesn't appear at leaf zoom levels
+          node.geoLevel = 2;
+        }
+      }
+      
       const computeHeight = (id: string): number => {
         const node = entityMap.get(id);
         if (!node) return 0;
