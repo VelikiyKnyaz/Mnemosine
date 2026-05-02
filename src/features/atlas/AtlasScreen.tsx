@@ -21,7 +21,7 @@ export default function AtlasScreen({ route, navigation }: any) {
   
   // Panel State
   const [panelMode, setPanelMode] = useState<'hidden'|'peek'|'full'>('hidden');
-  const [panelType, setPanelType] = useState<'destacados'|'confirmar'|'action'|'memories'>('destacados');
+  const [panelType, setPanelType] = useState<'destacados'|'action'|'memories'>('destacados');
   const [memoryEntityId, setMemoryEntityId] = useState<string | null>(null);
   
   // Interaction States
@@ -450,21 +450,14 @@ export default function AtlasScreen({ route, navigation }: any) {
         </View>
       )}
 
-      {/* FABs for Lists */}
+      {/* FAB for Places */}
       {!editingEntity && panelMode === 'hidden' && (
         <View style={styles.fabContainer}>
           <FAB 
             icon="map-marker-star" 
-            style={styles.fabLeft} 
+            style={[styles.fabLeft, porConfirmar.length > 0 && { backgroundColor: '#FFF3E0' }]} 
             onPress={() => { setPanelType('destacados'); setPanelMode('peek'); }} 
-            label="Lugares"
-          />
-          <FAB 
-            icon="check-decagram" 
-            style={styles.fabRight} 
-            onPress={() => { setPanelType('confirmar'); setPanelMode('peek'); }} 
-            label="Confirmar"
-            color={porConfirmar.length > 0 ? "orange" : undefined}
+            label={porConfirmar.length > 0 ? `Lugares (${porConfirmar.length} ⚠️)` : 'Lugares'}
           />
         </View>
       )}
@@ -486,8 +479,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           <View style={styles.panelHeader}>
              <IconButton icon="close" onPress={closePanel} />
              <Text style={styles.panelTitle}>
-               {panelType === 'destacados' ? `Lugares (${destacados.length})` :
-                panelType === 'confirmar' ? `Por Confirmar (${porConfirmar.length})` :
+               {panelType === 'destacados' ? `Lugares (${destacados.length + porConfirmar.length})` :
                 panelType === 'action' ? actionEntity?.title :
                 panelType === 'memories' ? 'Explorador de Recuerdos' : ''}
              </Text>
@@ -512,24 +504,8 @@ export default function AtlasScreen({ route, navigation }: any) {
           <View style={{ flex: 1 }}>
             {panelType === 'destacados' && (
               <ScrollView style={styles.listArea}>
-                {destacados.length === 0 ? <Text style={styles.emptyText}>No hay lugares registrados aún.</Text> :
-                destacados.map(item => (
-                  <TouchableOpacity key={item.id} onPress={() => jumpTo(item.coordinate)} style={styles.listItem}>
-                    <Text style={styles.listIcon}>{item.mem_count > 0 ? '⭐️' : '📍'}</Text>
-                    <View style={{flex:1}}>
-                      <Text style={styles.listTitle}>{item.title}</Text>
-                      <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
-                    </View>
-                    <IconButton icon="folder-open" size={24} iconColor="#6200ee" onPress={() => { setMemoryEntityId(item.id); setPanelType('memories'); setPanelMode('peek'); }} />
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            )}
-
-            {panelType === 'confirmar' && (
-              <ScrollView style={styles.listArea}>
-                {porConfirmar.length === 0 ? <Text style={styles.emptyText}>No hay ubicaciones por confirmar.</Text> :
-                porConfirmar.map(item => (
+                {/* Pending confirmation items first */}
+                {porConfirmar.map(item => (
                   <TouchableOpacity key={item.id} onPress={() => { 
                     setActionEntity(item); 
                     setSearchQuery(item.title);
@@ -537,16 +513,32 @@ export default function AtlasScreen({ route, navigation }: any) {
                     setPlaceSuggestions([]);
                     setPanelType('action'); 
                     setPanelMode('full');
-                    // Trigger initial search
                     searchPlaces(item.title);
-                  }} style={styles.listItem}>
+                  }} style={[styles.listItem, { backgroundColor: '#FFF8E1' }]}>
                     <Text style={styles.listIcon}>⚠️</Text>
                     <View style={{flex:1}}>
                       <Text style={styles.listTitle}>{item.title}</Text>
-                      <Text style={styles.listSub}>Toca para confirmar ubicación</Text>
+                      <Text style={[styles.listSub, { color: '#F57C00' }]}>Toca para confirmar ubicación</Text>
                     </View>
                   </TouchableOpacity>
                 ))}
+
+                {/* Confirmed items */}
+                {destacados.length === 0 && porConfirmar.length === 0 ? (
+                  <Text style={styles.emptyText}>No hay lugares registrados aún.</Text>
+                ) : destacados.filter(d => d.is_confirmed !== 0).map(item => {
+                  const icon = item.height >= 4 ? '🏳️' : item.height >= 2 ? '🏙️' : item.mem_count > 0 ? '⭐️' : '📍';
+                  return (
+                    <TouchableOpacity key={item.id} onPress={() => jumpTo(item.coordinate)} style={styles.listItem}>
+                      <Text style={styles.listIcon}>{icon}</Text>
+                      <View style={{flex:1}}>
+                        <Text style={styles.listTitle}>{item.title}</Text>
+                        <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
+                      </View>
+                      <IconButton icon="folder-open" size={24} iconColor="#6200ee" onPress={() => { setMemoryEntityId(item.id); setPanelType('memories'); setPanelMode('peek'); }} />
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             )}
 

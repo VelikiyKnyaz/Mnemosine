@@ -1,16 +1,127 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, FlatList, Platform, Modal, KeyboardAvoidingView } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, StyleSheet, SectionList, Platform, Alert, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Text, FAB, Appbar, IconButton, Button, TextInput } from 'react-native-paper';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
 import BiographerCard from '../biographer/BiographerCard';
 import CaptureModal from '../capture/CaptureModal';
 import MemoryEditModal from '../../components/MemoryEditModal';
 import { getDb } from '../../core/database';
+import { calculateDatesFromMarkers } from '../../core/chrono_engine';
+import { getConfig } from '../../core/config';
 
-const toDateStr = (d: Date) => d.toISOString().split('T')[0];
-const parseDate = (s: string | null) => s ? new Date(s + 'T12:00:00') : new Date();
+// ── Helpers ──
+
+const parseYear = (dateStr: string | null): number | null => {
+  if (!dateStr) return null;
+  const y = parseInt(dateStr.split('-')[0]);
+  return isNaN(y) ? null : y;
+};
+
+const isFullYear = (start: string | null, end: string | null): boolean => {
+  if (!start || !end) return false;
+  return start.endsWith('-01-01') && end.endsWith('-12-31');
+};
+
+const formatSmartDate = (start: string | null, end: string | null): string | null => {
+  if (!start && !end) return null;
+  
+  // Same date or exact date
+  if (start && (!end || start === end)) {
+    if (start.endsWith('-01-01')) return null; // Year-only, shown in section header
+    const d = new Date(start + 'T12:00:00');
+    return d.toLocaleDateString('es', { day: 'numeric', month: 'short' });
+  }
+  
+  // Range within same year and both full-year → null (year header covers it)
+  if (isFullYear(start, end)) return null;
+  
+  // Range
+  if (start && end && start !== end) {
+    const s = new Date(start + 'T12:00:00');
+    const e = new Date(end + 'T12:00:00');
+    const sYear = s.getFullYear();
+    const eYear = e.getFullYear();
+    
+    if (sYear === eYear) {
+      if (start.endsWith('-01-01') && end.endsWith('-12-31')) return null;
+      return `${s.toLocaleDateString('es', { day: 'numeric', month: 'short' })} - ${e.toLocaleDateString('es', { day: 'numeric', month: 'short' })}`;
+    }
+    return null; // Cross-year range, placed at midpoint year
+  }
+  
+  return null;
+};
+
+const getMemoryYear = (mem: any): number | null => {
+  const startY = parseYear(mem.start_date);
+  const endY = parseYear(mem.end_date);
+  
+  if (startY && endY && startY !== endY) {
+    return Math.round((startY + endY) / 2);
+  }
+  return startY || endY;
+};
+
+// ── Local date parsing (regex first, AI fallback) ──
+
+const parseTimeMarkersLocal = (text: string): string[] => {
+  const markers: string[] = [];
+  const t = text.toLowerCase().trim();
+  
+  // "en 2018", "en el 2018", "año 2018"
+  const yearMatch = t.match(/(?:en(?:\s+el)?\s+|año\s+)(\d{4})/);
+  if (yearMatch) markers.push(`exact_year:${yearMatch[1]}`);
+  
+  // "a los 14 años", "cuando tenía 14", "tenía 14 años"
+  const ageMatch = t.match(/(?:a los|ten[ií]a|con)\s+(\d{1,2})\s*(?:años?)?/);
+  if (ageMatch) markers.push(`exact_age:${ageMatch[1]}`);
+  
+  // "hace 3 años"
+  const agoMatch = t.match(/hace\s+(\d{1,2})\s*años?/);
+  if (agoMatch) markers.push(`relative_years:-${agoMatch[1]}`);
+  
+  // "2015-06-20" or "20/06/2015"
+  const dateMatch = t.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (dateMatch) markers.push(`exact_date:${dateMatch[0]}`);
+  
+  const dateMatch2 = t.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (dateMatch2) markers.push(`exact_date:${dateMatch2[3]}-${dateMatch2[2].padStart(2,'0')}-${dateMatch2[1].padStart(2,'0')}`);
+  
+  // "infancia", "adolescencia"  
+  if (/infancia|niñez|childhood/.test(t)) markers.push('life_stage:childhood');
+  if (/adolescencia|teenage/.test(t)) markers.push('life_stage:teenage');
+  
+  return markers;
+};
+
+const resolveTimeMarkersWithAI = async (text: string): Promise<string[]> => {
+  const apiKey = await getConfig('OPENAI_API_KEY');
+  if (!apiKey) throw new Error('API Key no configurada');
+  
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'Extract time_markers from user text. Return JSON: {"time_markers": [...]}. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:childhood|teenage|adulthood".' },
+        { role: 'user', content: text },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+    }),
+  });
+  
+  const data = await res.json();
+  const parsed = JSON.parse(data.choices[0].message.content);
+  return parsed.time_markers || [];
+};
+
+// ── Component ──
 
 export default function TimelineScreen() {
   const setSession = useAuthStore((state) => state.setSession);
@@ -18,56 +129,13 @@ export default function TimelineScreen() {
   const [initialQuestion, setInitialQuestion] = useState<string | undefined>(undefined);
   const [memories, setMemories] = useState<any[]>([]);
 
-  // Date editing state
-  const [editingMemory, setEditingMemory] = useState<any>(null);
-  const [isExactDate, setIsExactDate] = useState(true);
-  const [startDate, setStartDate] = useState(new Date());
-  const [endDate, setEndDate] = useState(new Date());
-  const [pickingField, setPickingField] = useState<'start' | 'end' | null>(null);
+  // Date resolution state
+  const [resolvingMemory, setResolvingMemory] = useState<any>(null);
+  const [dateInput, setDateInput] = useState('');
+  const [resolving, setResolving] = useState(false);
 
   // Text editing state
   const [editingTextMemory, setEditingTextMemory] = useState<any>(null);
-
-  const handleEditDate = (memory: any) => {
-    setEditingMemory(memory);
-    const sd = parseDate(memory.start_date);
-    setStartDate(sd);
-
-    if (!memory.end_date || memory.start_date === memory.end_date) {
-      setIsExactDate(true);
-      setEndDate(sd);
-    } else {
-      setIsExactDate(false);
-      setEndDate(parseDate(memory.end_date));
-    }
-    setPickingField(null);
-  };
-
-  const handleSaveDate = async () => {
-    try {
-      const db = await getDb();
-      const sStr = toDateStr(startDate);
-      const eStr = isExactDate ? sStr : toDateStr(endDate);
-      await db.runAsync(
-        'UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?',
-        sStr, eStr, editingMemory.id
-      );
-      setEditingMemory(null);
-      loadMemories();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleEditText = (memory: any) => {
-    setEditingTextMemory(memory);
-  };
-
-  const renderDate = (start: string | null, end: string | null) => {
-    if (!start && !end) return '';
-    if (start && end && start !== end) return `${start} a ${end}`;
-    return start || end;
-  };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -77,7 +145,7 @@ export default function TimelineScreen() {
   const loadMemories = async () => {
     try {
       const db = await getDb();
-      const allRows = await db.getAllAsync('SELECT * FROM memories ORDER BY created_at DESC');
+      const allRows = await db.getAllAsync('SELECT * FROM memories ORDER BY start_date ASC, created_at DESC');
       setMemories(allRows);
     } catch (err) {
       console.error(err);
@@ -98,6 +166,89 @@ export default function TimelineScreen() {
     setModalVisible(true);
   };
 
+  // ── Date resolution ──
+
+  const handleResolveDate = (memory: any) => {
+    setResolvingMemory(memory);
+    setDateInput('');
+  };
+
+  const submitDateResolution = async () => {
+    if (!resolvingMemory || !dateInput.trim()) return;
+    setResolving(true);
+    
+    try {
+      // Try local regex first
+      let markers = parseTimeMarkersLocal(dateInput);
+      
+      // If no markers found locally, use AI
+      if (markers.length === 0) {
+        markers = await resolveTimeMarkersWithAI(dateInput);
+      }
+      
+      if (markers.length === 0) {
+        Alert.alert('No se pudo resolver', 'Intenta con algo como "en 2018", "a los 14 años", o "hace 5 años".');
+        setResolving(false);
+        return;
+      }
+      
+      const dates = await calculateDatesFromMarkers(markers);
+      
+      if (!dates.start_date) {
+        Alert.alert('No se pudo calcular', 'Verifica tu fecha de nacimiento en el perfil si usaste una edad.');
+        setResolving(false);
+        return;
+      }
+      
+      const db = await getDb();
+      await db.runAsync(
+        'UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?',
+        dates.start_date, dates.end_date, resolvingMemory.id
+      );
+      
+      setResolvingMemory(null);
+      setDateInput('');
+      loadMemories();
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert('Error', e.message || 'No se pudo resolver la fecha.');
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  // ── Build sections by year ──
+
+  const sections = React.useMemo(() => {
+    const noDate: any[] = [];
+    const byYear: Record<number, any[]> = {};
+    
+    for (const mem of memories) {
+      const year = getMemoryYear(mem);
+      if (!year) {
+        noDate.push(mem);
+      } else {
+        if (!byYear[year]) byYear[year] = [];
+        byYear[year].push(mem);
+      }
+    }
+    
+    const result: { title: string; data: any[] }[] = [];
+    
+    if (noDate.length > 0) {
+      result.push({ title: 'Sin Fecha', data: noDate });
+    }
+    
+    const years = Object.keys(byYear).map(Number).sort((a, b) => a - b);
+    for (const y of years) {
+      result.push({ title: String(y), data: byYear[y] });
+    }
+    
+    return result;
+  }, [memories]);
+
+  // ── Render ──
+
   return (
     <View style={styles.container}>
       <Appbar.Header>
@@ -105,38 +256,58 @@ export default function TimelineScreen() {
         <Appbar.Action icon="logout" onPress={handleLogout} />
       </Appbar.Header>
 
-      <FlatList
-        data={memories}
+      <SectionList
+        sections={sections}
         keyExtractor={(item) => item.id}
+        stickySectionHeadersEnabled={true}
         ListHeaderComponent={<BiographerCard onPressQuestion={handleQuestionPress} />}
-        renderItem={({ item }) => (
-          <View style={styles.memoryCard}>
-            <View style={styles.cardHeader}>
-              <Text variant="titleMedium" style={styles.titleText}>{item.title || 'Recuerdo'}</Text>
-              <View style={styles.dateContainer}>
-                {(item.start_date || item.end_date) && (
-                  <Text variant="labelSmall" style={styles.dateText}>
-                    {renderDate(item.start_date, item.end_date)}
-                  </Text>
-                )}
-                <IconButton icon="pencil" size={16} onPress={() => handleEditDate(item)} style={{margin: 0}} />
-              </View>
-            </View>
-            {item.raw_text ? (
-              <Text style={styles.bodyText} onPress={() => handleEditText(item)}>
-                {item.raw_text}
-              </Text>
-            ) : null}
-            
-            <View style={styles.cardFooter}>
-              {item.audio_uri ? <Text style={styles.audioHint}>🎤 Audio</Text> : <View />}
-              <Text style={styles.statusHint}>
-                {item.sync_status === 'PROCESSED_LOCAL' ? '✨ IA' : '⏳ Procesando'} 
-                {item.sentiment_score !== null && ` • Sentimiento: ${(item.sentiment_score > 0 ? '+' : '')}${item.sentiment_score}`}
-              </Text>
-            </View>
+        renderSectionHeader={({ section }) => (
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionYear}>{section.title}</Text>
+            <View style={styles.sectionLine} />
           </View>
         )}
+        renderItem={({ item }) => {
+          const smartDate = formatSmartDate(item.start_date, item.end_date);
+          const hasNoDate = !item.start_date && !item.end_date;
+          
+          return (
+            <View style={styles.memoryCard}>
+              <View style={styles.cardHeader}>
+                <Text variant="titleMedium" style={styles.titleText}>{item.title || 'Recuerdo'}</Text>
+                <View style={styles.dateContainer}>
+                  {hasNoDate ? (
+                    <TouchableOpacity onPress={() => handleResolveDate(item)} style={styles.dateAlert}>
+                      <Text style={{fontSize: 16}}>⚠️</Text>
+                      <Text style={{fontSize: 11, color: '#F57C00', marginLeft: 4}}>Sin fecha</Text>
+                    </TouchableOpacity>
+                  ) : smartDate ? (
+                    <TouchableOpacity onPress={() => handleResolveDate(item)}>
+                      <Text variant="labelSmall" style={styles.dateText}>{smartDate}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity onPress={() => handleResolveDate(item)}>
+                      <IconButton icon="pencil" size={14} style={{margin: 0}} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+              {item.raw_text ? (
+                <Text style={styles.bodyText} onPress={() => setEditingTextMemory(item)}>
+                  {item.raw_text}
+                </Text>
+              ) : null}
+              
+              <View style={styles.cardFooter}>
+                {item.audio_uri ? <Text style={styles.audioHint}>🎤 Audio</Text> : <View />}
+                <Text style={styles.statusHint}>
+                  {item.sync_status === 'PROCESSED_LOCAL' ? '✨ IA' : '⏳ Procesando'} 
+                  {item.sentiment_score !== null && ` • ${(item.sentiment_score > 0 ? '+' : '')}${item.sentiment_score}`}
+                </Text>
+              </View>
+            </View>
+          );
+        }}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text>No hay recuerdos aún. ¡Escribe el primero!</Text>
@@ -159,74 +330,39 @@ export default function TimelineScreen() {
         onSaved={loadMemories}
       />
 
-      {editingMemory && (
-        <View style={styles.editModalContainer}>
-          <View style={styles.editModal}>
-            <Text variant="titleMedium" style={{marginBottom: 5}}>Editar Fecha</Text>
+      {/* Date Resolution Modal */}
+      {resolvingMemory && (
+        <View style={styles.resolveOverlay}>
+          <View style={styles.resolveModal}>
+            <Text variant="titleMedium" style={{marginBottom: 4}}>¿Cuándo fue esto?</Text>
+            <Text style={{color: '#666', fontSize: 13, marginBottom: 12}} numberOfLines={2}>
+              "{resolvingMemory.title || resolvingMemory.raw_text?.substring(0, 60) || 'Recuerdo'}"
+            </Text>
             
-            <View style={styles.exactDateToggle}>
-              <Button 
-                mode={isExactDate ? "contained" : "outlined"} 
-                onPress={() => setIsExactDate(true)}
-                style={{flex: 1, marginRight: 5}}
-                compact
-              >Fecha Exacta</Button>
-              <Button 
-                mode={!isExactDate ? "contained" : "outlined"} 
-                onPress={() => setIsExactDate(false)}
-                style={{flex: 1, marginLeft: 5}}
-                compact
-              >Rango</Button>
-            </View>
-
-            <Button 
-              mode="outlined" 
-              onPress={() => setPickingField('start')} 
-              style={styles.dateBtn}
-              icon="calendar"
-            >
-              {isExactDate ? 'Fecha' : 'Inicio'}: {toDateStr(startDate)}
-            </Button>
-
-            {!isExactDate && (
-              <Button 
-                mode="outlined" 
-                onPress={() => setPickingField('end')} 
-                style={styles.dateBtn}
-                icon="calendar-range"
-              >
-                Fin: {toDateStr(endDate)}
+            <TextInput
+              mode="outlined"
+              label="Escribe una referencia temporal"
+              placeholder="ej: en 2018, a los 14 años, hace 5 años"
+              value={dateInput}
+              onChangeText={setDateInput}
+              dense
+              autoFocus
+              onSubmitEditing={submitDateResolution}
+              style={{marginBottom: 12, backgroundColor: 'white'}}
+            />
+            
+            {resolving && (
+              <View style={{alignItems: 'center', marginBottom: 10}}>
+                <ActivityIndicator size="small" />
+                <Text style={{color: '#888', fontSize: 12, marginTop: 4}}>Calculando...</Text>
+              </View>
+            )}
+            
+            <View style={{flexDirection: 'row', justifyContent: 'flex-end'}}>
+              <Button onPress={() => setResolvingMemory(null)}>Cancelar</Button>
+              <Button mode="contained" onPress={submitDateResolution} disabled={resolving || !dateInput.trim()}>
+                Resolver
               </Button>
-            )}
-
-            {pickingField && (
-              <DateTimePicker
-                value={pickingField === 'start' ? startDate : endDate}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                minimumDate={pickingField === 'end' ? startDate : undefined}
-                onChange={(event, selectedDate) => {
-                  if (event.type === 'dismissed') {
-                    setPickingField(null);
-                    return;
-                  }
-                  if (selectedDate) {
-                    if (pickingField === 'start') {
-                      setStartDate(selectedDate);
-                      // If end date is before new start, auto-adjust
-                      if (endDate < selectedDate) setEndDate(selectedDate);
-                    } else {
-                      setEndDate(selectedDate);
-                    }
-                  }
-                  if (Platform.OS === 'android') setPickingField(null);
-                }}
-              />
-            )}
-            
-            <View style={{flexDirection: 'row', justifyContent: 'flex-end', marginTop: 15}}>
-              <Button onPress={() => setEditingMemory(null)}>Cancelar</Button>
-              <Button mode="contained" onPress={handleSaveDate}>Guardar</Button>
             </View>
           </View>
         </View>
@@ -238,38 +374,58 @@ export default function TimelineScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   fab: { position: 'absolute', margin: 16, right: 0, bottom: 0 },
+  
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#f5f5f5',
+  },
+  sectionYear: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#6200ee',
+    marginRight: 12,
+  },
+  sectionLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: '#e0e0e0',
+    borderRadius: 1,
+  },
+  
   memoryCard: {
-    marginHorizontal: 16, marginVertical: 8, padding: 16,
-    backgroundColor: '#fff', borderRadius: 8, elevation: 1,
+    marginHorizontal: 16, marginVertical: 6, padding: 14,
+    backgroundColor: '#fff', borderRadius: 10, elevation: 1,
+    borderLeftWidth: 3, borderLeftColor: '#e0e0e0',
   },
   cardHeader: {
     flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 8,
+    alignItems: 'center', marginBottom: 6,
   },
-  titleText: { fontWeight: 'bold', flex: 1 },
-  dateText: { color: '#8b5cf6', fontWeight: 'bold', marginLeft: 8 },
-  bodyText: { color: '#333', lineHeight: 20 },
+  titleText: { fontWeight: 'bold', flex: 1, fontSize: 15 },
+  dateText: { color: '#8b5cf6', fontWeight: 'bold', fontSize: 12 },
+  dateContainer: { flexDirection: 'row', alignItems: 'center' },
+  dateAlert: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 2, backgroundColor: '#FFF3E0', borderRadius: 12 },
+  bodyText: { color: '#333', lineHeight: 20, fontSize: 14 },
   cardFooter: {
     flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginTop: 12, borderTopWidth: 1,
-    borderTopColor: '#f0f0f0', paddingTop: 8,
+    alignItems: 'center', marginTop: 10, borderTopWidth: 1,
+    borderTopColor: '#f0f0f0', paddingTop: 6,
   },
   audioHint: { color: '#0284c7', fontWeight: 'bold', fontSize: 12 },
-  statusHint: { fontSize: 12, color: '#888' },
+  statusHint: { fontSize: 11, color: '#888' },
   empty: { padding: 20, alignItems: 'center' },
-  dateContainer: { flexDirection: 'row', alignItems: 'center' },
-  editModalContainer: {
+  
+  resolveOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center', alignItems: 'center', zIndex: 10,
   },
-  editModal: {
+  resolveModal: {
     backgroundColor: 'white', padding: 20,
-    borderRadius: 8, width: '85%',
+    borderRadius: 12, width: '88%',
+    elevation: 5,
   },
-  exactDateToggle: { flexDirection: 'row', marginTop: 10, marginBottom: 10 },
-  dateBtn: { marginTop: 8 },
-  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: 'white', padding: 20, borderTopLeftRadius: 15, borderTopRightRadius: 15 },
 });
-
