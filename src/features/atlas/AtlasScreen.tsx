@@ -930,7 +930,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                   coordinate={marker.coordinate}
                   anchor={isCluster ? { x: 0.5, y: 0.5 } : { x: 0.5, y: 1 }}
                   calloutAnchor={isCluster ? { x: 1, y: 0.5 } : { x: 0.5, y: 0 }}
-                  tracksViewChanges={false}
+                  tracksViewChanges={true}
                   onPress={(e) => {
                     if (e.stopPropagation) e.stopPropagation();
                     const isTerritory = marker.height >= 2 || marker.hasChildren;
@@ -949,35 +949,26 @@ export default function AtlasScreen({ route, navigation }: any) {
                     }
                   }}
                 >
-                  {isCluster ? (
-                    <View collapsable={false} style={{ width: size + 16, height: size + 16, justifyContent: 'center', alignItems: 'center' }}>
-                      <View style={[styles.clusterMarker, { 
-                        backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                        width: size,
-                        height: size,
-                        borderRadius: size / 2,
-                      }]}>
-                        <Text style={styles.clusterText}>{marker.mem_count}</Text>
-                      </View>
-                    </View>
-                  ) : (
-                    <View collapsable={false} style={{ width: 40, height: 44, alignItems: 'center', justifyContent: 'center' }}>
-                      <View style={{
-                        width: 24, height: 24, borderRadius: 12,
-                        backgroundColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                        justifyContent: 'center', alignItems: 'center',
-                        borderWidth: 2, borderColor: 'white',
-                      }} />
-                      <View style={{
-                        width: 0, height: 0,
-                        borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 10,
-                        borderStyle: 'solid', backgroundColor: 'transparent',
-                        borderLeftColor: 'transparent', borderRightColor: 'transparent',
-                        borderTopColor: marker.is_confirmed === 0 ? '#ff9800' : '#e53935',
-                        marginTop: -2
-                      }} />
-                    </View>
-                  )}
+                  <View style={{ width: size + 4, height: size + 4, justifyContent: 'center', alignItems: 'center' }}>
+                    <MaterialCommunityIcons 
+                      name={isCluster ? "circle" : "map-marker"} 
+                      size={isCluster ? size : size + 4} 
+                      color={marker.is_confirmed === 0 ? '#ff9800' : '#e53935'} 
+                    />
+                    {isCluster && (
+                      <Text style={{
+                        position: 'absolute',
+                        color: 'white',
+                        fontWeight: 'bold',
+                        fontSize: size * 0.35,
+                        textShadowColor: 'rgba(0,0,0,0.3)',
+                        textShadowOffset: { width: 0, height: 1 },
+                        textShadowRadius: 1,
+                      }}>
+                        {marker.mem_count}
+                      </Text>
+                    )}
+                  </View>
                 </Marker>
               );
             })}
