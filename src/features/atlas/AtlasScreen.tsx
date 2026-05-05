@@ -949,7 +949,13 @@ export default function AtlasScreen({ route, navigation }: any) {
                     }
                   }}
                 >
-                  <View style={{ width: size + 4, height: size + 4, justifyContent: 'center', alignItems: 'center' }}>
+                  <View style={{ 
+                    width: size + 30, 
+                    height: size + 30, 
+                    justifyContent: 'center', 
+                    alignItems: 'center',
+                    backgroundColor: 'rgba(0,0,255,0.2)', // DEBUG: blue tint to see bitmap bounds
+                  }}>
                     <MaterialCommunityIcons 
                       name={isCluster ? "circle" : "map-marker"} 
                       size={isCluster ? size : size + 4} 
