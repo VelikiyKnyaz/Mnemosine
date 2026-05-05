@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Dimensions } from 'react-native';
 import { Appbar, Text, Button, IconButton, Chip, Title, FAB, TextInput } from 'react-native-paper';
-import MapView, { Marker, Region, Callout } from 'react-native-maps';
+import MapView, { Marker, Circle as MapCircle, Region, Callout } from 'react-native-maps';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { getDb } from '../../core/database';
@@ -912,72 +912,86 @@ export default function AtlasScreen({ route, navigation }: any) {
                  setSelectedPlaceEntity(null);
                }
             }}
+            onRegionChange={(region) => {
+              setCurrentRegion(region);
+            }}
             onRegionChangeComplete={(region) => {
               setCurrentRegion(region);
             }}
             showsUserLocation={!editingEntity}
           >
-            {!editingEntity && visibleMarkers.map(marker => {
-              const isEmptyPlace = marker.is_confirmed === 1 && marker.mem_count === 0 && !marker.hasChildren;
-              if (isEmptyPlace) return null; // "los lugares que no tienen nada sean ignorados y completamente borrados"
-
-              const isCluster = marker.hasChildren || marker.mem_count > 0;
-              const size = marker.hasChildren ? 48 : 36;
+            {!editingEntity && (() => {
+              const valid = visibleMarkers.filter(m => !(m.is_confirmed === 1 && m.mem_count === 0 && !m.hasChildren));
+              const counts = valid.map(m => m.mem_count || 1);
+              const maxCount = Math.max(...counts, 1);
+              // Calculate meters per pixel based on screen WIDTH to make it completely immune to vertical padding changes
+              const deltaX = currentRegion?.longitudeDelta || 0.05;
+              const lat = currentRegion?.latitude || 0;
+              const screenW = Dimensions.get('window').width || 400;
               
-              return (
-                <Marker
-                  key={marker.id}
-                  coordinate={marker.coordinate}
-                  anchor={isCluster ? { x: 0.5, y: 0.5 } : { x: 0.5, y: 1 }}
-                  calloutAnchor={isCluster ? { x: 1, y: 0.5 } : { x: 0.5, y: 0 }}
-                  tracksViewChanges={true}
-                  onPress={(e) => {
-                    if (e.stopPropagation) e.stopPropagation();
-                    const isTerritory = marker.height >= 2 || marker.hasChildren;
-                    if (marker.is_confirmed === 0 && !isTerritory) {
-                      setActionEntity(marker);
-                      setConfirmMode('none');
-                      setSearchQuery(marker.title);
-                      fetchTopSuggestion(marker);
-                      setPanelType('action');
-                      setPanelMode('peek');
-                    } else {
-                      setSelectedPlaceEntity(marker);
-                      setMemoryEntityId(marker.id);
-                      setPanelType('memories');
-                      setPanelMode('peek');
-                    }
-                  }}
-                >
-                  <View style={{ 
-                    width: size + 30, 
-                    height: size + 30, 
-                    justifyContent: 'center', 
-                    alignItems: 'center',
-                    backgroundColor: 'rgba(0,0,255,0.2)', // DEBUG: blue tint to see bitmap bounds
-                  }}>
-                    <MaterialCommunityIcons 
-                      name={isCluster ? "circle" : "map-marker"} 
-                      size={isCluster ? size : size + 4} 
-                      color={marker.is_confirmed === 0 ? '#ff9800' : '#e53935'} 
-                    />
-                    {isCluster && (
+              // Prevent 0 or negative values which crash Android MapView
+              const cosLat = Math.max(Math.abs(Math.cos(lat * Math.PI / 180)), 0.01);
+              const mPerPx = (deltaX * 111320 * cosLat) / screenW;
+              const minPx = 18; 
+              const maxPx = 35; 
+
+              return valid.flatMap(marker => {
+                const value = marker.mem_count || 1;
+                const px = minPx + (maxPx - minPx) * Math.sqrt(value / maxCount);
+                // Cap radius at 4000km to prevent geometry crashes on huge zoom outs
+                const radiusM = Math.max(1, Math.min(px * mPerPx, 4000000));
+                const fillColor = marker.is_confirmed === 0 ? 'rgba(255,152,0,0.45)' : 'rgba(229,57,53,0.45)';
+                const strokeColor = marker.is_confirmed === 0 ? '#e68900' : '#b71c1c';
+
+                return [
+                  <MapCircle
+                    key={`circle-${marker.id}`}
+                    center={marker.coordinate}
+                    radius={radiusM}
+                    fillColor={fillColor}
+                    strokeColor={strokeColor}
+                    strokeWidth={2}
+                    zIndex={1}
+                  />,
+                  <Marker
+                    key={marker.id}
+                    coordinate={marker.coordinate}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                    tracksViewChanges={true}
+                    onPress={(e) => {
+                      if (e.stopPropagation) e.stopPropagation();
+                      const isTerritory = marker.height >= 2 || marker.hasChildren;
+                      if (marker.is_confirmed === 0 && !isTerritory) {
+                        setActionEntity(marker);
+                        setConfirmMode('none');
+                        setSearchQuery(marker.title);
+                        fetchTopSuggestion(marker);
+                        setPanelType('action');
+                        setPanelMode('peek');
+                      } else {
+                        setSelectedPlaceEntity(marker);
+                        setMemoryEntityId(marker.id);
+                        setPanelType('memories');
+                        setPanelMode('peek');
+                      }
+                    }}
+                  >
+                    <View style={{ width: 36, height: 36 }}>
                       <Text style={{
-                        position: 'absolute',
-                        color: 'white',
-                        fontWeight: 'bold',
-                        fontSize: size * 0.35,
-                        textShadowColor: 'rgba(0,0,0,0.3)',
+                        width: 36, height: 36, lineHeight: 36,
+                        textAlign: 'center',
+                        color: 'white', fontWeight: 'bold', fontSize: 13,
+                        textShadowColor: 'rgba(0,0,0,0.7)',
                         textShadowOffset: { width: 0, height: 1 },
-                        textShadowRadius: 1,
+                        textShadowRadius: 2,
                       }}>
                         {marker.mem_count}
                       </Text>
-                    )}
-                  </View>
-                </Marker>
-              );
-            })}
+                    </View>
+                  </Marker>
+                ];
+              });
+            })()}
           </MapView>
 
           {/* Debug HUD for Zoom tweaks */}
