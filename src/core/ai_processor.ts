@@ -14,20 +14,38 @@ export const geocodeLocation = async (name: string, hometownContext: string): Pr
       return null;
     }
 
-    const textQuery = `${name}${hometownContext}`;
-    const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    // 1. First try: global clean search
+    const globalRes = await fetch('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': apiKey,
         'X-Goog-FieldMask': 'places.displayName,places.location,places.addressComponents',
       },
-      body: JSON.stringify({ textQuery, maxResultCount: 1 }),
+      body: JSON.stringify({ textQuery: name, maxResultCount: 1 }),
     });
 
-    const data = await res.json();
-    if (data.places && data.places.length > 0) {
-      const place = data.places[0];
+    let data = await globalRes.json();
+    let places = data.places || [];
+
+    // 2. Fallback: if no results, try with hometown context
+    if (places.length === 0 && hometownContext) {
+      const textQuery = `${name}${hometownContext}`;
+      const fallbackRes = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': 'places.displayName,places.location,places.addressComponents',
+        },
+        body: JSON.stringify({ textQuery, maxResultCount: 1 }),
+      });
+      data = await fallbackRes.json();
+      places = data.places || [];
+    }
+
+    if (places.length > 0) {
+      const place = places[0];
       const lat = place.location?.latitude;
       const lon = place.location?.longitude;
       if (lat == null || lon == null) return null;
@@ -41,7 +59,15 @@ export const geocodeLocation = async (name: string, hometownContext: string): Pr
         country: getComponent('country'),
       };
 
-      return { lat, lon, address };
+      return { 
+        lat, lon, address, 
+        placeData: {
+           displayName: place.displayName,
+           formattedAddress: place.formattedAddress,
+           types: place.types,
+           location: place.location
+        }
+      };
     }
   } catch (e) {
     console.log('Geocoding failed for:', name, e);
@@ -89,13 +115,13 @@ export async function generateTerritorialHierarchy(db: any, entityId: string, en
   // Check if the entity itself is the territory
   let isTerritory = false;
   if (cityName && currentChildName === cityName.toLowerCase()) {
-     await db.runAsync("UPDATE entities SET metadata = json_insert(COALESCE(metadata, '{}'), '$.geo_level', 2), is_confirmed = 1 WHERE id = ?", currentChildId);
+     await db.runAsync("UPDATE entities SET metadata = json_set(COALESCE(metadata, '{}'), '$.geo_level', 2) WHERE id = ?", currentChildId);
      isTerritory = true;
   } else if (stateName && currentChildName === stateName.toLowerCase()) {
-     await db.runAsync("UPDATE entities SET metadata = json_insert(COALESCE(metadata, '{}'), '$.geo_level', 3), is_confirmed = 1 WHERE id = ?", currentChildId);
+     await db.runAsync("UPDATE entities SET metadata = json_set(COALESCE(metadata, '{}'), '$.geo_level', 3) WHERE id = ?", currentChildId);
      isTerritory = true;
   } else if (countryName && currentChildName === countryName.toLowerCase()) {
-     await db.runAsync("UPDATE entities SET metadata = json_insert(COALESCE(metadata, '{}'), '$.geo_level', 4), is_confirmed = 1 WHERE id = ?", currentChildId);
+     await db.runAsync("UPDATE entities SET metadata = json_set(COALESCE(metadata, '{}'), '$.geo_level', 4) WHERE id = ?", currentChildId);
      isTerritory = true;
   }
 
@@ -213,8 +239,10 @@ export const processPendingMemories = async () => {
           }
           
           entityIdMap[entity.name] = entityId!;
+        }
 
-          // Link entity to memory
+        for (const entity of aiData.entities) {
+          const entityId = entityIdMap[entity.name];
           const pivotId = uuidv4();
           await db.runAsync(
             "INSERT INTO memory_entities (id, memory_id, entity_id, relationship_type) VALUES (?, ?, ?, ?)",
@@ -279,8 +307,8 @@ export const processPendingMemories = async () => {
         const coords = await geocodeLocation(loc.name, hometownContext);
         if (coords) {
           await db.runAsync(
-            "UPDATE entities SET latitude = ?, longitude = ? WHERE id = ?",
-            coords.lat, coords.lon, loc.id
+            "UPDATE entities SET latitude = ?, longitude = ?, metadata = json_set(COALESCE(metadata, '{}'), '$.original_ai_place', json(?)) WHERE id = ?",
+            coords.lat, coords.lon, JSON.stringify(coords.placeData), loc.id
           );
           await generateTerritorialHierarchy(db, loc.id, loc.name, coords);
           console.log(`Geocoded old location: ${loc.name}`);

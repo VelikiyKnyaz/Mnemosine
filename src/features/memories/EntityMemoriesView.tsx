@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, SectionList, KeyboardAvoidingView, Platform, Modal } from 'react-native';
+import { View, StyleSheet, SectionList, KeyboardAvoidingView, Platform, Modal, Alert } from 'react-native';
 import { Text, Card, TextInput, Button, IconButton } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { Audio } from 'expo-av';
@@ -115,8 +115,40 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
     setEditingMemory(memory);
   };
 
+  const confirmDelete = (memoryId: string) => {
+    Alert.alert(
+      "Eliminar Recuerdo",
+      "¿Estás seguro de eliminar este recuerdo permanentemente?",
+      [
+        { text: "Cancelar", style: "cancel" },
+        { 
+          text: "Eliminar", 
+          style: "destructive", 
+          onPress: async () => {
+            try {
+              const db = await getDb();
+              await db.runAsync("DELETE FROM inbox_tasks WHERE memory_id = ?", memoryId);
+              await db.runAsync("DELETE FROM memory_entities WHERE memory_id = ?", memoryId);
+              
+              let cleanupChanges = 1;
+              while (cleanupChanges > 0) {
+                const cleanupRes = await db.runAsync("DELETE FROM entities WHERE type = 'LOCATION' AND id NOT IN (SELECT entity_id FROM memory_entities) AND id NOT IN (SELECT parent_id FROM entities WHERE parent_id IS NOT NULL)");
+                cleanupChanges = cleanupRes.changes;
+              }
+              
+              await db.runAsync("DELETE FROM memories WHERE id = ?", memoryId);
+              loadMemories();
+            } catch(e) {
+              console.error(e);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const renderMemory = ({ item }: { item: any }) => (
-    <Card style={styles.card} onPress={() => openEdit(item)}>
+    <Card style={styles.card} onPress={() => openEdit(item)} onLongPress={() => confirmDelete(item.memory_id)}>
       <Card.Content>
         {item.fuzzy_date ? (
           <Text style={styles.date}>{item.fuzzy_date}</Text>

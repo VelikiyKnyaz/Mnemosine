@@ -71,7 +71,15 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
         const memId = memory.id || memory.memory_id;
         try {
           const db = await getDb();
+          await db.runAsync("DELETE FROM inbox_tasks WHERE memory_id = ?", memId);
           await db.runAsync("DELETE FROM memory_entities WHERE memory_id = ?", memId);
+          
+          let cleanupChanges = 1;
+          while (cleanupChanges > 0) {
+            const cleanupRes = await db.runAsync("DELETE FROM entities WHERE type = 'LOCATION' AND id NOT IN (SELECT entity_id FROM memory_entities) AND id NOT IN (SELECT parent_id FROM entities WHERE parent_id IS NOT NULL)");
+            cleanupChanges = cleanupRes.changes;
+          }
+          
           await db.runAsync("DELETE FROM memories WHERE id = ?", memId);
           onSaved();
           onClose();

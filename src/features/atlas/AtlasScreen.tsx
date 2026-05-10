@@ -37,11 +37,13 @@ export default function AtlasScreen({ route, navigation }: any) {
   // Place confirmation states
   const [searchQuery, setSearchQuery] = useState('');
   const [placeSuggestions, setPlaceSuggestions] = useState<any[]>([]);
+  const [suggestionLimit, setSuggestionLimit] = useState(4);
   const [selectedPlace, setSelectedPlace] = useState<any | null>(null);
   const [searchingPlaces, setSearchingPlaces] = useState(false);
   const [showParentAssign, setShowParentAssign] = useState(false);
   const [allLocations, setAllLocations] = useState<any[]>([]);
   const [confirmMode, setConfirmMode] = useState<'none' | 'quick' | 'precise'>('none');
+  const [targetGeoLevel, setTargetGeoLevel] = useState<number>(0); // 0=Point, 2=City, 3=Region, 4=Country
   const [autoTopResult, setAutoTopResult] = useState<any | null>(null);
   const [loadingAutoTop, setLoadingAutoTop] = useState(false);
   const [addressQuery, setAddressQuery] = useState('');
@@ -59,6 +61,7 @@ export default function AtlasScreen({ route, navigation }: any) {
     setAddressQuery('');
     setEditingEntity(null);
     setSelectedPlaceEntity(null);
+    setTargetGeoLevel(0);
   };
 
   const toggleExpand = () => {
@@ -92,7 +95,8 @@ export default function AtlasScreen({ route, navigation }: any) {
           e.is_confirmed,
           e.parent_id,
           e.metadata,
-          COUNT(me.memory_id) as mem_count
+          COUNT(me.memory_id) as mem_count,
+          SUM(CASE WHEN h.descendant_id = e.id AND me.memory_id IS NOT NULL THEN 1 ELSE 0 END) as direct_mem_count
         FROM entities e
         JOIN hierarchy h ON e.id = h.root_id
         LEFT JOIN memory_entities me ON me.entity_id = h.descendant_id
@@ -221,6 +225,7 @@ export default function AtlasScreen({ route, navigation }: any) {
         height: node.geoLevel ?? node.treeHeight ?? 0,
         hasChildren: node.children.length > 0,
         mem_count: node.mem_count,
+        direct_mem_count: node.direct_mem_count,
         coordinate: { latitude: node.latitude, longitude: node.longitude }
       }));
 
@@ -229,7 +234,7 @@ export default function AtlasScreen({ route, navigation }: any) {
 
       // Por Confirmar: unconfirmed with coords + ALL unconfirmed locations without coords
       const noCoordRows = await db.getAllAsync<any>(
-        `SELECT id, name as title, is_confirmed, parent_id, metadata, 0 as mem_count 
+        `SELECT id, name as title, is_confirmed, parent_id, metadata, 0 as mem_count, 0 as direct_mem_count
          FROM entities WHERE type = 'LOCATION' AND latitude IS NULL AND is_confirmed = 0`
       );
 
@@ -244,12 +249,22 @@ export default function AtlasScreen({ route, navigation }: any) {
         return false;
       };
 
-      const unconfirmedWithCoords = processedMarkers.filter(m => m.is_confirmed === 0 && !isTerritory(m));
-      const noCoordFormatted = noCoordRows.filter(m => !isTerritory(m)).map(r => ({
-        id: r.id, title: r.title, is_confirmed: 0, parent_id: r.parent_id,
-        height: 0, hasChildren: false, mem_count: r.mem_count,
-        coordinate: null,
-      }));
+      const unconfirmedWithCoords = processedMarkers.filter(m => m.is_confirmed === 0);
+      const noCoordFormatted = noCoordRows.map(r => {
+        let geoLevel = 0;
+        if (r.metadata) {
+          try {
+            const meta = JSON.parse(r.metadata);
+            if (meta.geo_level) geoLevel = meta.geo_level;
+          } catch (e) { }
+        }
+        return {
+          id: r.id, title: r.title, is_confirmed: 0, parent_id: r.parent_id,
+          height: geoLevel, hasChildren: false, mem_count: r.mem_count,
+          direct_mem_count: r.direct_mem_count,
+          coordinate: null,
+        };
+      });
       setPorConfirmar([...unconfirmedWithCoords, ...noCoordFormatted]);
 
       // Auto-start editing if requested from route
@@ -355,31 +370,64 @@ export default function AtlasScreen({ route, navigation }: any) {
 
   // ── Place Confirmation Flow ──
 
-  const fetchTopSuggestion = async (entity: any) => {
+  const filterPlacesByType = (places: any[], targetLevel: number) => {
+    return places.filter(p => {
+      const types = p.types || (p.placePrediction ? p.placePrediction.types : []) || [];
+      if (targetLevel === 4) return types.includes('country');
+      if (targetLevel === 3) return types.includes('administrative_area_level_1') || types.includes('administrative_area_level_2');
+      if (targetLevel === 2) return types.includes('locality') || types.includes('sublocality') || types.includes('administrative_area_level_3');
+      if (targetLevel === 0) {
+        const isTerritory = types.some((t: string) => ['country', 'administrative_area_level_1', 'administrative_area_level_2', 'locality', 'sublocality', 'administrative_area_level_3'].includes(t));
+        return !isTerritory;
+      }
+      return true;
+    });
+  };
+
+  const fetchPlaceDetails = async (placeId: string) => {
+    try {
+      const apiKey = await getConfig('GOOGLE_MAPS_KEY');
+      const res = await fetch(`https://places.googleapis.com/v1/places/${placeId}?fields=id,displayName,formattedAddress,location,addressComponents,types`, {
+        headers: { 'X-Goog-Api-Key': apiKey }
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('fetchPlaceDetails error:', e);
+      return null;
+    }
+  };
+
+  const fetchTopSuggestion = async (entity: any, level: number = targetGeoLevel) => {
     try {
       setLoadingAutoTop(true);
       setAutoTopResult(null);
+
+      if (entity.metadata) {
+        try {
+          const meta = typeof entity.metadata === 'string' ? JSON.parse(entity.metadata) : entity.metadata;
+          if (meta.original_ai_place) {
+            const cachedPlace = meta.original_ai_place;
+            const filtered = filterPlacesByType([cachedPlace], level);
+            if (filtered.length > 0) {
+              const topResult = filtered[0];
+              setAutoTopResult(topResult);
+              setSelectedPlace(topResult);
+              if (topResult.location) {
+                mapRef.current?.animateToRegion({
+                  latitude: topResult.location.latitude,
+                  longitude: topResult.location.longitude,
+                  latitudeDelta: 0.005, longitudeDelta: 0.005,
+                }, 500);
+              }
+              setLoadingAutoTop(false);
+              return;
+            }
+          }
+        } catch (e) { }
+      }
+
       const apiKey = await getConfig('GOOGLE_MAPS_KEY');
       if (!apiKey) { setLoadingAutoTop(false); return; }
-
-      const headers = {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': apiKey,
-        'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.addressComponents',
-      };
-
-      let contextQuery = entity.title.trim();
-      let contextParts: string[] = [];
-      let currNode = markers.find(m => m.id === entity.parent_id);
-      while (currNode) {
-        contextParts.push(currNode.title);
-        currNode = markers.find(m => m.id === currNode.parent_id);
-      }
-      if (contextParts.length === 0) {
-        // No parent lineage. We used to fallback to profile.country here, 
-        // but this overrides global footprint searches for international locations.
-      }
-      if (contextParts.length > 0) contextQuery += ' ' + contextParts.join(' ');
 
       let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
       let validCoords = false;
@@ -393,57 +441,85 @@ export default function AtlasScreen({ route, navigation }: any) {
         }
       });
 
-      const searchBody: any = { textQuery: contextQuery, maxResultCount: 1 };
+      const autoBody: any = { input: entity.title.trim() };
+      
+      let includedTypes: string[] = [];
+      if (level === 4) includedTypes = ['country'];
+      else if (level === 3) includedTypes = ['administrative_area_level_1', 'administrative_area_level_2'];
+      else if (level === 2) includedTypes = ['(cities)'];
+      
+      if (includedTypes.length > 0) {
+          autoBody.includedPrimaryTypes = includedTypes;
+      }
 
-      // If the entity already has confirmed coordinates, use them as a tight bias
-      const existingMarker = markers.find(m => m.id === entity.id);
-      if (existingMarker?.coordinate?.latitude && existingMarker?.is_confirmed) {
-        searchBody.locationBias = {
+      const unbiasedBody: any = { ...autoBody };
+      const biasedBody: any = { ...autoBody };
+
+      if (entity.coordinate?.latitude) {
+        biasedBody.locationBias = {
           circle: {
-            center: { latitude: existingMarker.coordinate.latitude, longitude: existingMarker.coordinate.longitude },
-            radius: 5000, // 5km radius - very tight to the existing location
+            center: { latitude: entity.coordinate.latitude, longitude: entity.coordinate.longitude },
+            radius: 10000, 
           }
         };
       } else if (validCoords) {
-        searchBody.locationBias = {
+        biasedBody.locationBias = {
           rectangle: {
             low: { latitude: Math.max(-90, minLat - 5), longitude: Math.max(-180, minLon - 5) },
             high: { latitude: Math.min(90, maxLat + 5), longitude: Math.min(180, maxLon + 5) }
           }
         };
-      } else if (currentRegion) {
-        searchBody.locationBias = {
-          circle: {
-            center: { latitude: currentRegion.latitude, longitude: currentRegion.longitude },
-            radius: Math.max(5000, currentRegion.latitudeDelta * 111000),
-          }
-        };
       }
 
-      let res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-        method: 'POST', headers, body: JSON.stringify(searchBody),
+      const unbiasedReq = fetch('https://places.googleapis.com/v1/places:autocomplete', {
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
+        body: JSON.stringify(unbiasedBody),
       });
-      let data = await res.json();
-      let results = data.places || [];
 
-      if (results.length === 0 && searchBody.locationBias) {
-        res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-          method: 'POST', headers, body: JSON.stringify({ textQuery: contextQuery, maxResultCount: 1 }),
-        });
-        data = await res.json();
-        results = data.places || [];
+      const biasedReq = fetch('https://places.googleapis.com/v1/places:autocomplete', {
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
+        body: JSON.stringify(biasedBody),
+      });
+
+      const [unbiasedRes, biasedRes] = await Promise.all([unbiasedReq, biasedReq]);
+      const unbiasedData = await unbiasedRes.json();
+      const biasedData = await biasedRes.json();
+
+      let unbiasedSuggestions = unbiasedData.suggestions || [];
+      let biasedSuggestions = biasedData.suggestions || [];
+
+      // We rely natively on Google's includedPrimaryTypes. JS filter is a safety net.
+      unbiasedSuggestions = filterPlacesByType(unbiasedSuggestions, level);
+      biasedSuggestions = filterPlacesByType(biasedSuggestions, level);
+
+      let finalSuggestions: any[] = [];
+      
+      // FOR AUTO TOP SUGGESTION: We strongly prefer the BIASED suggestion (the one at the marker).
+      if (biasedSuggestions.length > 0) {
+        finalSuggestions.push(biasedSuggestions[0]);
+      } else if (unbiasedSuggestions.length > 0) {
+        finalSuggestions.push(unbiasedSuggestions[0]);
       }
 
-      if (results.length > 0) {
-        const topResult = results[0];
-        setAutoTopResult(topResult);
-        setSelectedPlace(topResult);
-        if (topResult.location) {
-          mapRef.current?.animateToRegion({
-            latitude: topResult.location.latitude,
-            longitude: topResult.location.longitude,
-            latitudeDelta: 0.005, longitudeDelta: 0.005,
-          }, 500);
+      if (finalSuggestions.length > 0) {
+        const topSuggestion = finalSuggestions[0];
+        
+        const details = await fetchPlaceDetails(topSuggestion.placePrediction.placeId);
+        
+        if (details) {
+          const topResult = { ...topSuggestion, details };
+          setAutoTopResult(topResult);
+          setSelectedPlace(topResult);
+          
+          if (details.location) {
+            mapRef.current?.animateToRegion({
+              latitude: details.location.latitude,
+              longitude: details.location.longitude,
+              latitudeDelta: 0.005, longitudeDelta: 0.005,
+            }, 500);
+          }
         }
       }
     } catch (e) {
@@ -453,7 +529,7 @@ export default function AtlasScreen({ route, navigation }: any) {
     }
   };
 
-  const searchPlaces = async (query: string) => {
+  const searchPlaces = async (query: string, level: number = targetGeoLevel) => {
     setSearchQuery(query);
     if (searchDebounce.current) clearTimeout(searchDebounce.current);
 
@@ -471,28 +547,10 @@ export default function AtlasScreen({ route, navigation }: any) {
         const headers = {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': apiKey,
-          'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.addressComponents',
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.addressComponents,places.types',
         };
 
-        // 1. Gather Context from Ancestors or Profile
-        let contextQuery = query.trim();
-        let contextParts: string[] = [];
-        let currNode = markers.find(m => m.id === actionEntity?.parent_id);
-        while (currNode) {
-          contextParts.push(currNode.title);
-          currNode = markers.find(m => m.id === currNode.parent_id);
-        }
-
-        if (contextParts.length === 0) {
-          // No parent lineage. We used to fallback to profile.country here, 
-          // but this overrides global footprint searches for international locations.
-        }
-
-        if (contextParts.length > 0) {
-          contextQuery += ' ' + contextParts.join(' ');
-        }
-
-        // 2. Compute Global Bounding Box of all user's confirmed locations
+        // Compute Global Bounding Box of all user's confirmed locations
         let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
         let validCoords = false;
         markers.forEach(m => {
@@ -505,19 +563,36 @@ export default function AtlasScreen({ route, navigation }: any) {
           }
         });
 
-        const searchBody: any = { textQuery: contextQuery, maxResultCount: 5 };
+        const autoBody: any = { input: query.trim() };
+        
+        let includedTypes: string[] = [];
+        if (level === 4) includedTypes = ['country'];
+        else if (level === 3) includedTypes = ['administrative_area_level_1', 'administrative_area_level_2'];
+        else if (level === 2) includedTypes = ['(cities)'];
+        
+        if (includedTypes.length > 0) {
+            autoBody.includedPrimaryTypes = includedTypes;
+        }
 
-        if (validCoords) {
-          // Generous padding (~500km) to bias search towards the user's existing map footprint
-          searchBody.locationBias = {
+        const unbiasedBody: any = { ...autoBody };
+        const biasedBody: any = { ...autoBody };
+
+        if (actionEntity?.coordinate?.latitude) {
+          biasedBody.locationBias = {
+            circle: {
+              center: { latitude: actionEntity.coordinate.latitude, longitude: actionEntity.coordinate.longitude },
+              radius: 10000,
+            }
+          };
+        } else if (validCoords) {
+          biasedBody.locationBias = {
             rectangle: {
               low: { latitude: Math.max(-90, minLat - 5), longitude: Math.max(-180, minLon - 5) },
               high: { latitude: Math.min(90, maxLat + 5), longitude: Math.min(180, maxLon + 5) }
             }
           };
         } else if (currentRegion) {
-          // Fallback to viewport bias
-          searchBody.locationBias = {
+          biasedBody.locationBias = {
             circle: {
               center: { latitude: currentRegion.latitude, longitude: currentRegion.longitude },
               radius: Math.max(5000, currentRegion.latitudeDelta * 111000),
@@ -525,33 +600,53 @@ export default function AtlasScreen({ route, navigation }: any) {
           };
         }
 
-        let res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-          method: 'POST', headers, body: JSON.stringify(searchBody),
+        const unbiasedReq = fetch('https://places.googleapis.com/v1/places:autocomplete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
+          body: JSON.stringify(unbiasedBody),
         });
-        let data = await res.json();
-        let results = data.places || [];
 
-        // Retry without bias if no results (using context query)
-        if (results.length === 0 && searchBody.locationBias) {
-          const fallbackBody = { textQuery: contextQuery, maxResultCount: 5 };
-          res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-            method: 'POST', headers, body: JSON.stringify(fallbackBody),
-          });
-          data = await res.json();
-          results = data.places || [];
+        const biasedReq = fetch('https://places.googleapis.com/v1/places:autocomplete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
+          body: JSON.stringify(biasedBody),
+        });
+
+        const [unbiasedRes, biasedRes] = await Promise.all([unbiasedReq, biasedReq]);
+        const unbiasedData = await unbiasedRes.json();
+        const biasedData = await biasedRes.json();
+
+        let unbiasedSuggestions = unbiasedData.suggestions || [];
+        let biasedSuggestions = biasedData.suggestions || [];
+
+        unbiasedSuggestions = filterPlacesByType(unbiasedSuggestions, level);
+        biasedSuggestions = filterPlacesByType(biasedSuggestions, level);
+
+        let finalSuggestions: any[] = [];
+        let uIdx = 0; let bIdx = 0;
+        
+        while(uIdx < unbiasedSuggestions.length || bIdx < biasedSuggestions.length) {
+            // WE ADD BIASED FIRST to ensure the local match is at the top of the UI list
+            let bAdded = 0;
+            while(bIdx < biasedSuggestions.length && bAdded < 2) {
+                const bp = biasedSuggestions[bIdx++];
+                if(!finalSuggestions.some(r => r.placePrediction.placeId === bp.placePrediction.placeId)) {
+                   finalSuggestions.push(bp);
+                   bAdded++;
+                }
+            }
+            let uAdded = 0;
+            while(uIdx < unbiasedSuggestions.length && uAdded < 3) {
+                const up = unbiasedSuggestions[uIdx++];
+                if(!finalSuggestions.some(r => r.placePrediction.placeId === up.placePrediction.placeId)) {
+                    finalSuggestions.push(up);
+                    uAdded++;
+                }
+            }
         }
 
-        // Final retry without context query OR bias if still no results
-        if (results.length === 0 && contextQuery !== query.trim()) {
-          const nakedBody = { textQuery: query.trim(), maxResultCount: 5 };
-          res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-            method: 'POST', headers, body: JSON.stringify(nakedBody),
-          });
-          data = await res.json();
-          results = data.places || [];
-        }
-
-        setPlaceSuggestions(results);
+        setSuggestionLimit(5);
+        setPlaceSuggestions(finalSuggestions);
       } catch (e) {
         console.error('Places search error:', e);
         setPlaceSuggestions([]);
@@ -580,6 +675,7 @@ export default function AtlasScreen({ route, navigation }: any) {
           longitude: loc.lng,
           latitudeDelta: 0.003, longitudeDelta: 0.003,
         }, 500);
+        setSelectedPlace(null); // Clear selected place so the button switches to "Guardar posición del marcador"
       } else {
         Alert.alert('Sin resultados', `No se encontró: "${query}".`);
       }
@@ -589,9 +685,29 @@ export default function AtlasScreen({ route, navigation }: any) {
     }
   };
 
-  const selectPlaceSuggestion = (place: any) => {
+  const selectPlaceSuggestion = async (place: any) => {
     setSelectedPlace(place);
-    if (place.location) {
+    
+    // Check if it's an autocomplete prediction
+    if (place.placePrediction && place.placePrediction.placeId) {
+      setSearchingPlaces(true);
+      const details = await fetchPlaceDetails(place.placePrediction.placeId);
+      setSearchingPlaces(false);
+      
+      if (details) {
+        const fullPlace = { ...place, details };
+        setSelectedPlace(fullPlace);
+        if (details.location) {
+          mapRef.current?.animateToRegion({
+            latitude: details.location.latitude,
+            longitude: details.location.longitude,
+            latitudeDelta: 0.005,
+            longitudeDelta: 0.005,
+          }, 500);
+        }
+      }
+    } else if (place.location) {
+      // Legacy / cached object that already has details
       mapRef.current?.animateToRegion({
         latitude: place.location.latitude,
         longitude: place.location.longitude,
@@ -605,8 +721,17 @@ export default function AtlasScreen({ route, navigation }: any) {
     if (!actionEntity || !selectedPlace) return;
     try {
       const db = await getDb();
-      const lat = selectedPlace.location.latitude;
-      const lon = selectedPlace.location.longitude;
+      
+      const isAuto = !!selectedPlace.placePrediction;
+      const details = isAuto ? selectedPlace.details : selectedPlace;
+
+      if (!details || !details.location) {
+          Alert.alert("Error", "No se han cargado los detalles completos del lugar aún.");
+          return;
+      }
+      
+      const lat = details.location.latitude;
+      const lon = details.location.longitude;
 
       // Update entity with confirmed coordinates
       await db.runAsync(
@@ -615,7 +740,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       );
 
       // Generate territorial hierarchy automatically from addressComponents
-      const components = selectedPlace.addressComponents || [];
+      const components = details.addressComponents || [];
       const getComp = (type: string) => components.find((c: any) => c.types?.includes(type))?.longText || '';
       const address = {
         city: getComp('locality') || getComp('administrative_area_level_2'),
@@ -623,6 +748,23 @@ export default function AtlasScreen({ route, navigation }: any) {
         country: getComp('country'),
       };
       await generateTerritorialHierarchy(db, actionEntity.id, actionEntity.title, { lat, lon, address });
+
+      // FORCE geo_level if user explicitly selected a territory
+      if (targetGeoLevel > 0) {
+        await db.runAsync(
+          "UPDATE entities SET metadata = json_set(COALESCE(metadata, '{}'), '$.geo_level', ?) WHERE id = ?",
+          targetGeoLevel, actionEntity.id
+        );
+      }
+
+      // Cleanup orphaned territories that were left behind (e.g. old AI assumed parents)
+      let cleanupChanges = 1;
+      while (cleanupChanges > 0) {
+        const cleanupRes = await db.runAsync(
+          "DELETE FROM entities WHERE type = 'LOCATION' AND is_confirmed = 1 AND id NOT IN (SELECT entity_id FROM memory_entities) AND id NOT IN (SELECT parent_id FROM entities WHERE parent_id IS NOT NULL)"
+        );
+        cleanupChanges = cleanupRes.changes;
+      }
 
       // Reset state
       setSelectedPlace(null);
@@ -699,6 +841,15 @@ export default function AtlasScreen({ route, navigation }: any) {
               country: getComp('country'),
             };
             await generateTerritorialHierarchy(db, actionEntity.id, actionEntity.title, { lat, lon, address });
+            
+            // Cleanup orphaned territories that were left behind
+            let cleanupChanges = 1;
+            while (cleanupChanges > 0) {
+              const cleanupRes = await db.runAsync(
+                "DELETE FROM entities WHERE type = 'LOCATION' AND is_confirmed = 1 AND id NOT IN (SELECT entity_id FROM memory_entities) AND id NOT IN (SELECT parent_id FROM entities WHERE parent_id IS NOT NULL)"
+              );
+              cleanupChanges = cleanupRes.changes;
+            }
           }
         }
       } catch (geoErr) {
@@ -808,9 +959,12 @@ export default function AtlasScreen({ route, navigation }: any) {
         return;
       }
 
-      let shouldDissolve = node.height > visibleHeight;
+      const children = childrenOf.get(node.id) || [];
 
-      if (!shouldDissolve && node.hasChildren) {
+      // A node ONLY dissolves if it has renderable children to replace it
+      let shouldDissolve = node.height > visibleHeight && children.length > 0;
+
+      if (!shouldDissolve && children.length > 0) {
         // If it shouldn't normally dissolve, but children are spread wide, force dissolve it
         const spread = childSpread(node.id);
         if (spread > delta * 0.3) {
@@ -818,17 +972,9 @@ export default function AtlasScreen({ route, navigation }: any) {
         }
       }
 
-      const children = childrenOf.get(node.id) || [];
-
       if (shouldDissolve) {
-        if (children.length > 0) {
-          // Node is dissolved. Do not add it. Process children instead.
-          children.forEach(child => traverse(child));
-        }
-        // If shouldDissolve but no children to show, hide the node entirely.
-        // (A territory at leaf zoom with no visible children should vanish, not linger.)
+        children.forEach(child => traverse(child));
       } else {
-        // Node is NOT dissolved. Add it, and do not process children (they remain hidden inside).
         if (node.coordinate) {
           resultList.push(node);
         }
@@ -876,20 +1022,22 @@ export default function AtlasScreen({ route, navigation }: any) {
             <Text style={{ fontWeight: 'bold', fontSize: 16, color: '#1565C0' }} numberOfLines={1}>{selectedPlaceEntity.title}</Text>
           </View>
           <View style={{ flexDirection: 'row' }}>
-            <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
-              setActionEntity(selectedPlaceEntity);
-              setConfirmMode('none');
-              setSearchQuery(selectedPlaceEntity.title);
-              fetchTopSuggestion(selectedPlaceEntity);
-              setSelectedPlace(null);
-              setPlaceSuggestions([]);
-              setAddressQuery('');
-              setEditingEntity(null);
-              setMemoryEntityId(null);
-              setPanelType('action'); 
-              setPanelMode('peek');
-              setSelectedPlaceEntity(null);
-            }} style={{ margin: 0, backgroundColor: 'white' }} />
+            {!(selectedPlaceEntity.is_confirmed === 1 && selectedPlaceEntity.height >= 2 && selectedPlaceEntity.direct_mem_count === 0) && (
+              <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
+                setActionEntity(selectedPlaceEntity);
+                setConfirmMode('none');
+                setSearchQuery(selectedPlaceEntity.title);
+                fetchTopSuggestion(selectedPlaceEntity);
+                setSelectedPlace(null);
+                setPlaceSuggestions([]);
+                setAddressQuery('');
+                setEditingEntity(null);
+                setMemoryEntityId(null);
+                setPanelType('action'); 
+                setPanelMode('peek');
+                setSelectedPlaceEntity(null);
+              }} style={{ margin: 0, backgroundColor: 'white' }} />
+            )}
             <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => {
               deleteEntity(selectedPlaceEntity.id);
               setSelectedPlaceEntity(null);
@@ -917,6 +1065,9 @@ export default function AtlasScreen({ route, navigation }: any) {
             }}
             onRegionChangeComplete={(region) => {
               setCurrentRegion(region);
+            }}
+            onPanDrag={() => {
+              if (selectedPlace) setSelectedPlace(null);
             }}
             showsUserLocation={!editingEntity}
           >
@@ -960,12 +1111,12 @@ export default function AtlasScreen({ route, navigation }: any) {
                     tracksViewChanges={true}
                     onPress={(e) => {
                       if (e.stopPropagation) e.stopPropagation();
-                      const isTerritory = marker.height >= 2 || marker.hasChildren;
-                      if (marker.is_confirmed === 0 && !isTerritory) {
+                      if (marker.is_confirmed === 0) {
                         setActionEntity(marker);
                         setConfirmMode('none');
                         setSearchQuery(marker.title);
-                        fetchTopSuggestion(marker);
+                        setTargetGeoLevel(marker.height || 0);
+                        fetchTopSuggestion(marker, marker.height || 0);
                         setPanelType('action');
                         setPanelMode('peek');
                       } else {
@@ -1070,7 +1221,8 @@ export default function AtlasScreen({ route, navigation }: any) {
                       <TouchableOpacity onPress={() => {
                         setActionEntity(item);
                         setSearchQuery(item.title);
-                        fetchTopSuggestion(item);
+                        setTargetGeoLevel(item.height || 0);
+                        fetchTopSuggestion(item, item.height || 0);
                         setSelectedPlace(null);
                         setPlaceSuggestions([]);
                         setShowParentAssign(false);
@@ -1131,19 +1283,22 @@ export default function AtlasScreen({ route, navigation }: any) {
                                   </View>
                                 </TouchableOpacity>
                                 <View style={{ width: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-                                  <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
-                                    setActionEntity(item);
-                                    setConfirmMode('none');
-                                    setSearchQuery(item.title);
-                                    fetchTopSuggestion(item);
-                                    setSelectedPlace(null);
-                                    setPlaceSuggestions([]);
-                                    setAddressQuery('');
-                                    setEditingEntity(null);
-                                    setMemoryEntityId(null);
-                                    setPanelType('action');
-                                    setPanelMode('peek');
-                                  }} style={{ margin: 0, marginRight: 5, backgroundColor: '#e3f2fd' }} />
+                                  {!(item.is_confirmed === 1 && item.height >= 2 && item.direct_mem_count === 0) && (
+                                    <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
+                                      setActionEntity(item);
+                                      setConfirmMode('none');
+                                      setSearchQuery(item.title);
+                                      setTargetGeoLevel(item.height || 0);
+                                      fetchTopSuggestion(item, item.height || 0);
+                                      setSelectedPlace(null);
+                                      setPlaceSuggestions([]);
+                                      setAddressQuery('');
+                                      setEditingEntity(null);
+                                      setMemoryEntityId(null);
+                                      setPanelType('action');
+                                      setPanelMode('peek');
+                                    }} style={{ margin: 0, marginRight: 5, backgroundColor: '#e3f2fd' }} />
+                                  )}
                                   <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{ margin: 0, backgroundColor: '#ffebee' }} />
                                 </View>
                               </ScrollView>
@@ -1163,9 +1318,35 @@ export default function AtlasScreen({ route, navigation }: any) {
                   <Text style={{ fontWeight: 'bold', fontSize: 16, marginBottom: 4 }}>
                     Confirmar: {actionEntity.title}
                   </Text>
-                  <Text style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>
-                    El marcador rojo indica dónde se guardará este lugar.
-                  </Text>
+                  
+                  <View style={{ flexDirection: 'row', marginBottom: 12, backgroundColor: '#f5f5f5', borderRadius: 8, overflow: 'hidden' }}>
+                    {[
+                      { value: 0, label: '📍 Punto' },
+                      { value: 2, label: '🏙️ Ciudad' },
+                      { value: 3, label: '🗺️ Región' },
+                      { value: 4, label: '🏳️ País' },
+                    ].map((btn) => (
+                      <TouchableOpacity
+                        key={btn.value}
+                        style={{ flex: 1, paddingVertical: 10, alignItems: 'center', backgroundColor: targetGeoLevel === btn.value ? '#e3f2fd' : 'transparent' }}
+                        onPress={() => {
+                          setTargetGeoLevel(btn.value);
+                          if (searchQuery) searchPlaces(searchQuery, btn.value);
+                          fetchTopSuggestion(actionEntity, btn.value);
+                        }}
+                      >
+                        <Text style={{ fontSize: 13, color: targetGeoLevel === btn.value ? '#1565C0' : '#555', fontWeight: targetGeoLevel === btn.value ? 'bold' : 'normal' }}>
+                          {btn.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  {targetGeoLevel === 0 && (
+                    <Text style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>
+                      El marcador rojo indica dónde se guardará este lugar.
+                    </Text>
+                  )}
 
                   {/* ── Auto suggestion (first, clickable to re-center) ── */}
                   {loadingAutoTop ? (
@@ -1174,23 +1355,33 @@ export default function AtlasScreen({ route, navigation }: any) {
                       <Text style={{ color: '#888', marginTop: 6, fontSize: 12 }}>Buscando sugerencia automática...</Text>
                     </View>
                   ) : autoTopResult ? (
-                    <TouchableOpacity
-                      onPress={() => {
-                        if (autoTopResult.location) {
-                          mapRef.current?.animateToRegion({
-                            latitude: autoTopResult.location.latitude,
-                            longitude: autoTopResult.location.longitude,
-                            latitudeDelta: 0.005, longitudeDelta: 0.005,
-                          }, 500);
-                        }
-                      }}
-                      style={{ backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 12 }}
-                    >
-                      <Text style={{ fontWeight: 'bold', fontSize: 14, color: '#2e7d32', marginBottom: 2 }}>✨ Sugerencia</Text>
-                      <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#333' }}>{autoTopResult.displayName?.text}</Text>
-                      <Text style={{ fontSize: 12, color: '#555' }}>{autoTopResult.formattedAddress}</Text>
-                      <Text style={{ fontSize: 11, color: '#2e7d32', marginTop: 6 }}>Toca para centrar el marcador aquí</Text>
-                    </TouchableOpacity>
+                    (() => {
+                      const isAuto = !!autoTopResult.placePrediction;
+                      const mainText = isAuto ? autoTopResult.placePrediction.structuredFormat?.mainText?.text : autoTopResult.displayName?.text;
+                      const subText = isAuto ? autoTopResult.placePrediction.structuredFormat?.secondaryText?.text : autoTopResult.formattedAddress;
+                      const lat = isAuto ? autoTopResult.details?.location?.latitude : autoTopResult.location?.latitude;
+                      const lon = isAuto ? autoTopResult.details?.location?.longitude : autoTopResult.location?.longitude;
+
+                      return (
+                        <TouchableOpacity
+                          onPress={() => {
+                            if (lat && lon) {
+                              mapRef.current?.animateToRegion({
+                                latitude: lat,
+                                longitude: lon,
+                                latitudeDelta: 0.005, longitudeDelta: 0.005,
+                              }, 500);
+                            }
+                          }}
+                          style={{ backgroundColor: '#e8f5e9', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#c8e6c9', marginBottom: 12 }}
+                        >
+                          <Text style={{ fontWeight: 'bold', fontSize: 14, color: '#2e7d32', marginBottom: 2 }}>✨ Sugerencia</Text>
+                          <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#333' }}>{mainText || ''}</Text>
+                          <Text style={{ fontSize: 12, color: '#555' }}>{subText || ''}</Text>
+                          <Text style={{ fontSize: 11, color: '#2e7d32', marginTop: 6 }}>Toca para centrar el marcador aquí</Text>
+                        </TouchableOpacity>
+                      );
+                    })()
                   ) : null}
 
                   {/* ── "Not the right place?" (prominent, expandable) ── */}
@@ -1219,8 +1410,18 @@ export default function AtlasScreen({ route, navigation }: any) {
                         style={{ marginBottom: 10, backgroundColor: 'white' }}
                       />
 
-                      {placeSuggestions.map((place: any, idx: number) => {
-                        const isSelected = selectedPlace === place;
+                      {placeSuggestions.slice(0, suggestionLimit).map((place: any, idx: number) => {
+                        const isAuto = !!place.placePrediction;
+                        const placeId = isAuto ? place.placePrediction.placeId : place.id;
+                        
+                        const selectedIsAuto = !!selectedPlace?.placePrediction;
+                        const selectedId = selectedIsAuto ? selectedPlace.placePrediction.placeId : selectedPlace?.id;
+                        
+                        const isSelected = selectedPlace && selectedId === placeId;
+
+                        const mainText = isAuto ? place.placePrediction.structuredFormat?.mainText?.text : place.displayName?.text;
+                        const subText = isAuto ? place.placePrediction.structuredFormat?.secondaryText?.text : place.formattedAddress;
+
                         return (
                           <TouchableOpacity
                             key={idx}
@@ -1233,16 +1434,25 @@ export default function AtlasScreen({ route, navigation }: any) {
                               </Text>
                               <View style={{ flex: 1 }}>
                                 <Text style={{ fontWeight: 'bold', fontSize: 15, color: '#333' }}>
-                                  {place.displayName?.text || ''}
+                                  {mainText || ''}
                                 </Text>
                                 <Text style={{ fontSize: 12, color: '#888' }} numberOfLines={2}>
-                                  {place.formattedAddress || ''}
+                                  {subText || ''}
                                 </Text>
                               </View>
                             </View>
                           </TouchableOpacity>
                         );
                       })}
+
+                      {placeSuggestions.length > suggestionLimit && (
+                        <TouchableOpacity 
+                          onPress={() => setSuggestionLimit(prev => prev + 4)}
+                          style={{ padding: 12, alignItems: 'center', backgroundColor: '#e3f2fd', borderRadius: 8, marginTop: 4, marginBottom: 8 }}
+                        >
+                           <Text style={{ color: '#1565C0', fontWeight: 'bold' }}>Ver más resultados</Text>
+                        </TouchableOpacity>
+                      )}
 
                       {searchingPlaces && (
                         <View style={{ padding: 15, alignItems: 'center' }}>
@@ -1287,13 +1497,24 @@ export default function AtlasScreen({ route, navigation }: any) {
 
                 {/* ── Fixed confirm button at absolute bottom ── */}
                 <View style={{ padding: 15, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#eee', backgroundColor: 'white' }}>
-                  <Button
-                    mode="contained"
-                    onPress={confirmPrecise}
-                    icon="map-marker-check"
-                  >
-                    Guardar posición del marcador
-                  </Button>
+                  {selectedPlace ? (
+                    <Button
+                      mode="contained"
+                      onPress={confirmPlace}
+                      icon="map-marker-check"
+                      buttonColor="#4CAF50"
+                    >
+                      Guardar lugar seleccionado
+                    </Button>
+                  ) : (
+                    <Button
+                      mode="contained"
+                      onPress={confirmPrecise}
+                      icon="crosshairs-gps"
+                    >
+                      Guardar posición del marcador
+                    </Button>
+                  )}
                 </View>
               </View>
             )}
@@ -1304,6 +1525,23 @@ export default function AtlasScreen({ route, navigation }: any) {
           </View>
         </View>
       )}
+      
+      {showParentAssign && actionEntity && (
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 100 }]}>
+          <View style={{ backgroundColor: 'white', padding: 20, borderRadius: 10, width: '80%' }}>
+            <Text style={{ fontWeight: 'bold', marginBottom: 10 }}>¿A qué territorio pertenece "{actionEntity.title}"?</Text>
+            <SmartDropdown
+              data={allLocations.filter(loc => loc.id !== actionEntity.id)}
+              labelField="name"
+              valueField="id"
+              placeholder="Buscar territorio..."
+              onSelect={(item: any) => { if (item) assignParentToAction(item.id); }}
+            />
+            <Button onPress={() => setShowParentAssign(false)} style={{ marginTop: 15 }}>Cancelar</Button>
+          </View>
+        </View>
+      )}
+
     </View>
   );
 }
