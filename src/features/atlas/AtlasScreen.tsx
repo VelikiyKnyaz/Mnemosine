@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Dimensions } from 'react-native';
-import { Appbar, Text, Button, IconButton, Chip, Title, FAB, TextInput } from 'react-native-paper';
+import { View, StyleSheet, Alert, FlatList, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Dimensions, Keyboard } from 'react-native';
+import { Appbar, Text, Button, IconButton, Chip, Title, FAB, TextInput, Searchbar } from 'react-native-paper';
 import MapView, { Marker, Circle as MapCircle, Region, Callout } from 'react-native-maps';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -20,16 +20,22 @@ export default function AtlasScreen({ route, navigation }: any) {
   // Lists
   const [destacados, setDestacados] = useState<any[]>([]);
   const [porConfirmar, setPorConfirmar] = useState<any[]>([]);
+  const [expandedListItem, setExpandedListItem] = useState<string | null>(null);
+  
+  // Destacados List Mode
+  const [listMode, setListMode] = useState<'visible' | 'all'>('visible');
+  const [localSearchQuery, setLocalSearchQuery] = useState('');
+  const [categoryLimits, setCategoryLimits] = useState<Record<string, number>>({});
 
 
-  // Panel State
   const [panelMode, setPanelMode] = useState<'hidden' | 'peek' | 'full'>('hidden');
-  const [panelType, setPanelType] = useState<'destacados' | 'action' | 'memories'>('destacados');
+  const [panelType, setPanelType] = useState<'destacados' | 'action' | 'memories' | 'porConfirmar'>('destacados');
   const [memoryEntityId, setMemoryEntityId] = useState<string | null>(null);
 
   // Interaction States
   const [editingEntity, setEditingEntity] = useState<any | null>(null);
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
+  const [listRegion, setListRegion] = useState<Region | null>(null); // separate region for list filtering, not updated on programmatic moves
 
   const [actionEntity, setActionEntity] = useState<any | null>(null);
   const [selectedPlaceEntity, setSelectedPlaceEntity] = useState<any | null>(null);
@@ -52,12 +58,14 @@ export default function AtlasScreen({ route, navigation }: any) {
 
   const isFocused = useIsFocused();
   const mapRef = useRef<MapView>(null);
+  const isProgrammaticMove = useRef(false);
 
   const closePanel = () => {
     setPanelMode('hidden');
     setActionEntity(null);
     setMemoryEntityId(null);
     setConfirmMode('none');
+    setExpandedListItem(null);
     setAddressQuery('');
     setEditingEntity(null);
     setSelectedPlaceEntity(null);
@@ -67,6 +75,13 @@ export default function AtlasScreen({ route, navigation }: any) {
   const toggleExpand = () => {
     setPanelMode(prev => prev === 'peek' ? 'full' : 'peek');
   };
+
+  // Auto-switch back to destacados when all pending confirmations are resolved
+  React.useEffect(() => {
+    if (panelType === 'porConfirmar' && porConfirmar.length === 0) {
+      setPanelType('destacados');
+    }
+  }, [porConfirmar.length, panelType]);
 
   const loadLocations = async () => {
     try {
@@ -327,9 +342,11 @@ export default function AtlasScreen({ route, navigation }: any) {
         latitudeDelta: 0.01, longitudeDelta: 0.01,
       };
       setCurrentRegion(targetRegion);
+      setListRegion(targetRegion);
       mapRef.current?.animateToRegion(targetRegion);
     } else {
       setCurrentRegion(currentRegion || initialRegion);
+      setListRegion(currentRegion || initialRegion);
     }
   };
 
@@ -658,6 +675,7 @@ export default function AtlasScreen({ route, navigation }: any) {
 
   // Geocode an address using Google Geocoding API
   const sendAddress = async () => {
+    Keyboard.dismiss();
     const query = addressQuery.trim();
     if (!query || query.length < 3) return;
     try {
@@ -686,6 +704,7 @@ export default function AtlasScreen({ route, navigation }: any) {
   };
 
   const selectPlaceSuggestion = async (place: any) => {
+    Keyboard.dismiss();
     setSelectedPlace(place);
     
     // Check if it's an autocomplete prediction
@@ -787,6 +806,16 @@ export default function AtlasScreen({ route, navigation }: any) {
             const db = await getDb();
             await db.runAsync("DELETE FROM memory_entities WHERE entity_id = ?", entityId);
             await db.runAsync("DELETE FROM entities WHERE id = ?", entityId);
+            
+            // Cascading delete for orphaned parent territories
+            let cleanupChanges = 1;
+            while (cleanupChanges > 0) {
+              const cleanupRes = await db.runAsync(
+                "DELETE FROM entities WHERE type = 'LOCATION' AND is_confirmed = 1 AND id NOT IN (SELECT entity_id FROM memory_entities) AND id NOT IN (SELECT parent_id FROM entities WHERE parent_id IS NOT NULL)"
+              );
+              cleanupChanges = cleanupRes.changes;
+            }
+            
             loadLocations();
           } catch (e) {
             console.error(e);
@@ -883,6 +912,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       }
     }
 
+    isProgrammaticMove.current = true;
     mapRef.current?.animateToRegion({
       latitude: item.coordinate.latitude,
       longitude: item.coordinate.longitude,
@@ -890,6 +920,38 @@ export default function AtlasScreen({ route, navigation }: any) {
       longitudeDelta: latDelta,
     });
   };
+
+  const visibleNodesInList = React.useMemo(() => {
+    if (!listRegion || destacados.length === 0) return new Set<string>();
+    
+    const latMin = listRegion.latitude - listRegion.latitudeDelta / 2;
+    const latMax = listRegion.latitude + listRegion.latitudeDelta / 2;
+    const lonMin = listRegion.longitude - listRegion.longitudeDelta / 2;
+    const lonMax = listRegion.longitude + listRegion.longitudeDelta / 2;
+    
+    const parentMap = new Map<string, string>();
+    destacados.forEach(d => {
+      if (d.parent_id) parentMap.set(d.id, d.parent_id);
+    });
+
+    const visible = new Set<string>();
+    
+    destacados.forEach(d => {
+      if (d.coordinate) {
+        if (d.coordinate.latitude >= latMin && d.coordinate.latitude <= latMax &&
+            d.coordinate.longitude >= lonMin && d.coordinate.longitude <= lonMax) {
+          
+          let currentId = d.id;
+          while (currentId) {
+            visible.add(currentId);
+            currentId = parentMap.get(currentId) || '';
+          }
+        }
+      }
+    });
+    
+    return visible;
+  }, [destacados, listRegion]);
 
   const visibleMarkers = React.useMemo(() => {
     const delta = currentRegion?.latitudeDelta || 100;
@@ -993,59 +1055,18 @@ export default function AtlasScreen({ route, navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <Appbar.Header>
-        <Appbar.Content title={
-          editingEntity ? `Ubicar: ${editingEntity.title}` :
-            (confirmMode === 'precise' && actionEntity) ? `📍 ${actionEntity.title}` :
-              'Atlas de Vida'
-        } />
-        {editingEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
-        {confirmMode === 'precise' && actionEntity && !editingEntity && (
-          <Appbar.Action icon="close" onPress={() => { setConfirmMode('quick'); setEditingEntity(null); }} />
-        )}
-      </Appbar.Header>
-
-      {/* Sub-header Contextual for Selected Place Actions */}
-      {selectedPlaceEntity && !editingEntity && (
-        <View style={{
-          backgroundColor: '#e3f2fd', 
-          paddingHorizontal: 16, 
-          paddingVertical: 10,
-          flexDirection: 'row', 
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderBottomWidth: 1,
-          borderBottomColor: '#bbdefb',
-          zIndex: 10
-        }}>
-          <View style={{ flex: 1, paddingRight: 10 }}>
-            <Text style={{ fontWeight: 'bold', fontSize: 16, color: '#1565C0' }} numberOfLines={1}>{selectedPlaceEntity.title}</Text>
-          </View>
-          <View style={{ flexDirection: 'row' }}>
-            {!(selectedPlaceEntity.is_confirmed === 1 && selectedPlaceEntity.height >= 2 && selectedPlaceEntity.direct_mem_count === 0) && (
-              <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
-                setActionEntity(selectedPlaceEntity);
-                setConfirmMode('none');
-                setSearchQuery(selectedPlaceEntity.title);
-                fetchTopSuggestion(selectedPlaceEntity);
-                setSelectedPlace(null);
-                setPlaceSuggestions([]);
-                setAddressQuery('');
-                setEditingEntity(null);
-                setMemoryEntityId(null);
-                setPanelType('action'); 
-                setPanelMode('peek');
-                setSelectedPlaceEntity(null);
-              }} style={{ margin: 0, backgroundColor: 'white' }} />
-            )}
-            <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => {
-              deleteEntity(selectedPlaceEntity.id);
-              setSelectedPlaceEntity(null);
-              setPanelMode('hidden');
-            }} style={{ margin: 0, marginLeft: 8, backgroundColor: 'white' }} />
-            <IconButton icon="close" size={20} iconColor="#555" onPress={() => setSelectedPlaceEntity(null)} style={{ margin: 0, marginLeft: 8 }} />
-          </View>
-        </View>
+      {panelMode !== 'full' && (
+        <Appbar.Header>
+          <Appbar.Content title={
+            editingEntity ? `Ubicar: ${editingEntity.title}` :
+              (confirmMode === 'precise' && actionEntity) ? `📍 ${actionEntity.title}` :
+                'Atlas de Vida'
+          } />
+          {editingEntity && <Appbar.Action icon="close" onPress={() => setEditingEntity(null)} />}
+          {confirmMode === 'precise' && actionEntity && !editingEntity && (
+            <Appbar.Action icon="close" onPress={() => { setConfirmMode('quick'); setEditingEntity(null); }} />
+          )}
+        </Appbar.Header>
       )}
 
       {initialRegion ? (
@@ -1056,6 +1077,7 @@ export default function AtlasScreen({ route, navigation }: any) {
             initialRegion={initialRegion}
             mapPadding={{ top: 0, right: 0, bottom: activeMapPadding, left: 0 }}
             onPress={(e) => {
+               Keyboard.dismiss();
                if (e.nativeEvent.action !== 'marker-press') {
                  setSelectedPlaceEntity(null);
                }
@@ -1065,8 +1087,14 @@ export default function AtlasScreen({ route, navigation }: any) {
             }}
             onRegionChangeComplete={(region) => {
               setCurrentRegion(region);
+              if (!isProgrammaticMove.current) {
+                setListRegion(region);
+              } else {
+                isProgrammaticMove.current = false;
+              }
             }}
             onPanDrag={() => {
+              isProgrammaticMove.current = false;
               if (selectedPlace) setSelectedPlace(null);
             }}
             showsUserLocation={!editingEntity}
@@ -1169,7 +1197,12 @@ export default function AtlasScreen({ route, navigation }: any) {
           <FAB
             icon="map-marker-star"
             style={[styles.fabLeft, porConfirmar.length > 0 && { backgroundColor: '#FFF3E0' }]}
-            onPress={() => { setPanelType('destacados'); setPanelMode('peek'); }}
+            onPress={() => {
+              if (panelType !== 'porConfirmar') {
+                setPanelType('destacados');
+              }
+              setPanelMode('peek');
+            }}
             label={porConfirmar.length > 0 ? `Lugares (${porConfirmar.length} ⚠️)` : 'Lugares'}
           />
         </View>
@@ -1188,18 +1221,76 @@ export default function AtlasScreen({ route, navigation }: any) {
       )}
 
       {/* Bottom Sheet Panel */}
-      {panelMode !== 'hidden' && !editingEntity && (
-        <View style={panelMode === 'full' ? styles.panelFull : styles.panelPeek}>
-          {/* Header */}
+      <KeyboardAvoidingView 
+        behavior="padding"
+        style={[StyleSheet.absoluteFill, { zIndex: 100, elevation: 100 }]}
+        pointerEvents="box-none"
+      >
+        <View style={{ flex: 1, justifyContent: 'flex-end' }} pointerEvents="box-none">
+          {panelMode !== 'hidden' && !editingEntity && (
+            <View style={[
+              panelMode === 'full' ? styles.panelFull : styles.panelPeek,
+              { height: panelHeight }
+            ]}>
+              {/* Header */}
           <View style={styles.panelHeader}>
             <IconButton icon="close" onPress={closePanel} />
-            <Text style={styles.panelTitle}>
-              {panelType === 'destacados' ? `Lugares (${destacados.length + porConfirmar.length})` :
+            <Text style={[styles.panelTitle, { flex: 1 }]} numberOfLines={1}>
+              {panelType === 'destacados' ? `Lugares (${destacados.length})` :
+                panelType === 'porConfirmar' ? `Por Confirmar (${porConfirmar.length})` :
                 panelType === 'action' ? actionEntity?.title :
-                  panelType === 'memories' ? 'Explorador de Recuerdos' : ''}
+                  panelType === 'memories' ? (selectedPlaceEntity?.title || 'Explorador') : ''}
             </Text>
-            <View style={{ flexDirection: 'row' }}>
-
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {panelType === 'destacados' && porConfirmar.length > 0 && (
+                <Button 
+                  mode="text" 
+                  textColor="#F57C00" 
+                  icon="alert-circle-outline"
+                  onPress={() => setPanelType('porConfirmar')}
+                  style={{ marginRight: 5 }}
+                  labelStyle={{ marginHorizontal: 2, fontSize: 12 }}
+                  compact
+                >
+                  Resolver ({porConfirmar.length})
+                </Button>
+              )}
+              {panelType === 'porConfirmar' && (
+                <Button 
+                  mode="text" 
+                  onPress={() => setPanelType('destacados')}
+                  style={{ marginRight: 5 }}
+                >
+                  Volver
+                </Button>
+              )}
+              {panelType === 'memories' && selectedPlaceEntity && (
+                <>
+                  {!(selectedPlaceEntity.is_confirmed === 1 && selectedPlaceEntity.height >= 2 && selectedPlaceEntity.direct_mem_count === 0) && (
+                    <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
+                      setActionEntity(selectedPlaceEntity);
+                      setConfirmMode('none');
+                      setSearchQuery(selectedPlaceEntity.title);
+                      fetchTopSuggestion(selectedPlaceEntity);
+                      setSelectedPlace(null);
+                      setPlaceSuggestions([]);
+                      setAddressQuery('');
+                      setEditingEntity(null);
+                      setMemoryEntityId(null);
+                      setPanelType('action'); 
+                      setPanelMode('peek');
+                      setSelectedPlaceEntity(null);
+                    }} style={{ margin: 0, backgroundColor: '#e3f2fd' }} />
+                  )}
+                  {!(selectedPlaceEntity.is_confirmed === 1 && selectedPlaceEntity.height >= 2 && selectedPlaceEntity.direct_mem_count === 0) && (
+                    <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => {
+                      deleteEntity(selectedPlaceEntity.id);
+                      setSelectedPlaceEntity(null);
+                      setPanelMode('hidden');
+                    }} style={{ margin: 0, marginLeft: 4, backgroundColor: '#ffebee' }} />
+                  )}
+                </>
+              )}
               {panelType !== 'action' && (
                 <IconButton icon={panelMode === 'full' ? 'chevron-down' : 'chevron-up'} onPress={toggleExpand} />
               )}
@@ -1208,113 +1299,245 @@ export default function AtlasScreen({ route, navigation }: any) {
 
           <View style={{ flex: 1 }}>
             {panelType === 'destacados' && (
-              <ScrollView style={styles.listArea}>
-                {/* Pending confirmation items first */}
-                {porConfirmar.map(item => (
-                  <View key={item.id} style={{ width: '100%', overflow: 'hidden' }}>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      snapToOffsets={[0, 60]}
-                      decelerationRate="fast"
+              <View style={{ flex: 1 }}>
+                <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 5 }}>
+                  <View style={{ flexDirection: 'row', marginBottom: 10 }}>
+                    <Button 
+                      mode={listMode === 'visible' ? 'contained' : 'outlined'}
+                      icon="map-marker-radius"
+                      style={{ flex: 1, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+                      onPress={() => {
+                        setListMode('visible');
+                        setCategoryLimits({});
+                      }}
                     >
-                      <TouchableOpacity onPress={() => {
-                        setActionEntity(item);
-                        setSearchQuery(item.title);
-                        setTargetGeoLevel(item.height || 0);
-                        fetchTopSuggestion(item, item.height || 0);
-                        setSelectedPlace(null);
-                        setPlaceSuggestions([]);
-                        setShowParentAssign(false);
-                        setConfirmMode('none');
-                        setAddressQuery('');
-                        setEditingEntity(null);
-                        setPanelType('action');
-                        setPanelMode('peek');
-                      }} style={[styles.listItem, { backgroundColor: '#FFF8E1', width: windowHeight > 0 ? Dimensions.get('window').width - 20 : '100%' }]}>
-                        <Text style={styles.listIcon}>⚠️</Text>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.listTitle}>{item.title}</Text>
-                          <Text style={[styles.listSub, { color: '#F57C00' }]}>Toca para confirmar ubicación</Text>
-                        </View>
-                      </TouchableOpacity>
-                      <View style={{ width: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-                        <IconButton icon="close" size={24} iconColor="#999" onPress={(e) => { e.stopPropagation?.(); deleteEntity(item.id); }} style={{ margin: 0, backgroundColor: '#f0f0f0' }} />
-                      </View>
-                    </ScrollView>
+                      En Pantalla
+                    </Button>
+                    <Button 
+                      mode={listMode === 'all' ? 'contained' : 'outlined'}
+                      icon="format-list-bulleted"
+                      style={{ flex: 1, borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeftWidth: 0 }}
+                      onPress={() => {
+                        setListMode('all');
+                        setCategoryLimits({});
+                      }}
+                    >
+                      Ver Todos
+                    </Button>
                   </View>
-                ))}
+                  <Searchbar
+                    placeholder="Buscar lugar..."
+                    onChangeText={setLocalSearchQuery}
+                    value={localSearchQuery}
+                    style={{ height: 45, elevation: 0, backgroundColor: '#f0f0f0' }}
+                    inputStyle={{ minHeight: 45 }}
+                  />
+                </View>
+                <ScrollView style={styles.listArea}>
+                  {/* Confirmed items - Grouped */}
+                  {destacados.length === 0 ? (
+                    <Text style={styles.emptyText}>No hay lugares registrados aún.</Text>
+                  ) : (
+                    <>
+                      {(() => {
+                         const delta = (listRegion || currentRegion)?.latitudeDelta || 100;
+                         let currentHeight = 4;
+                         if (delta <= 0.5) currentHeight = 1; // Puntos/Barrios
+                         else if (delta <= 5) currentHeight = 2; // Ciudades
+                         else if (delta <= 25) currentHeight = 3; // Regiones
 
-                {/* Confirmed items - Grouped */}
-                {destacados.length === 0 && porConfirmar.length === 0 ? (
-                  <Text style={styles.emptyText}>No hay lugares registrados aún.</Text>
+                         const defaultSections = [
+                           { title: 'Países', filter: (d: any) => d.height >= 4, icon: '🏳️', height: 4 },
+                           { title: 'Regiones y Estados', filter: (d: any) => d.height === 3, icon: '🗺️', height: 3 },
+                           { title: 'Ciudades y Pueblos', filter: (d: any) => d.height === 2, icon: '🏙️', height: 2 },
+                           { title: 'Lugares Específicos', filter: (d: any) => d.height < 2, icon: '📍', height: 1 }
+                         ];
+                         
+                         const activeSections = [...defaultSections].sort((a, b) => {
+                           if (a.height === currentHeight) return -1;
+                           if (b.height === currentHeight) return 1;
+                           
+                           if (currentHeight >= 4) return b.height - a.height; // 4, 3, 2, 1
+                           if (currentHeight === 3) {
+                             const order = [3, 2, 1, 4];
+                             return order.indexOf(a.height) - order.indexOf(b.height);
+                           }
+                           if (currentHeight === 2) {
+                             const order = [2, 1, 3, 4];
+                             return order.indexOf(a.height) - order.indexOf(b.height);
+                           }
+                           return a.height - b.height; // 1, 2, 3, 4
+                         });
+                         
+                         let totalRendered = 0;
+
+                         const renderedSections = activeSections.map((section, idx) => {
+                           let items = destacados.filter(d => d.is_confirmed !== 0 && section.filter(d));
+                           
+                           if (listMode === 'visible') {
+                             items = items.filter(d => visibleNodesInList.has(d.id));
+                           }
+                           
+                           if (localSearchQuery.trim()) {
+                             const q = localSearchQuery.toLowerCase();
+                             items = items.filter(d => d.title.toLowerCase().includes(q));
+                           }
+                           
+                           if (items.length === 0) return null;
+                           
+                           const limit = categoryLimits[section.title] || 10;
+                           const displayedItems = items.slice(0, limit);
+                           const hasMore = items.length > limit;
+                           
+                           totalRendered += displayedItems.length;
+
+                           return (
+                             <View key={idx}>
+                               <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#666', marginTop: 15, marginBottom: 8, marginLeft: 10 }}>
+                                 {section.title}
+                               </Text>
+                               {displayedItems.map(item => (
+                                 <View key={item.id} style={{ width: '100%', overflow: 'hidden' }}>
+                                   <ScrollView
+                                     horizontal
+                                     showsHorizontalScrollIndicator={false}
+                                     snapToOffsets={[0, 100]}
+                                     decelerationRate="fast"
+                                   >
+                                     <TouchableOpacity
+                                       onPress={() => {
+                                         jumpTo(item);
+                                         setExpandedListItem(expandedListItem === item.id ? null : item.id);
+                                       }}
+                                       style={[styles.listItem, { width: windowHeight > 0 ? Dimensions.get('window').width - 20 : '100%', flexDirection: 'column', alignItems: 'flex-start' }]}
+                                     >
+                                       <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%' }}>
+                                         <Text style={styles.listIcon}>{section.icon}</Text>
+                                         <View style={{ flex: 1 }}>
+                                           <Text style={styles.listTitle}>{item.title}</Text>
+                                           <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
+                                         </View>
+                                       </View>
+                                       {expandedListItem === item.id && (
+                                         <Button 
+                                           mode="contained-tonal" 
+                                           icon="image-multiple" 
+                                           style={{ marginTop: 10, alignSelf: 'flex-start', marginLeft: 45 }}
+                                           onPress={(e) => {
+                                             e.stopPropagation?.();
+                                             setSelectedPlaceEntity(item);
+                                             setMemoryEntityId(item.id);
+                                             setPanelType('memories');
+                                             setPanelMode('peek');
+                                           }}
+                                         >
+                                           Ver recuerdos
+                                         </Button>
+                                       )}
+                                     </TouchableOpacity>
+                                     <View style={{ width: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                                       {!(item.is_confirmed === 1 && item.height >= 2 && item.direct_mem_count === 0) && (
+                                         <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
+                                           setActionEntity(item);
+                                           setConfirmMode('none');
+                                           setSearchQuery(item.title);
+                                           setTargetGeoLevel(item.height || 0);
+                                           fetchTopSuggestion(item, item.height || 0);
+                                           setSelectedPlace(null);
+                                           setPlaceSuggestions([]);
+                                           setAddressQuery('');
+                                           setEditingEntity(null);
+                                           setMemoryEntityId(null);
+                                           setPanelType('action');
+                                           setPanelMode('peek');
+                                         }} style={{ margin: 0, marginRight: 5, backgroundColor: '#e3f2fd' }} />
+                                       )}
+                                       {!(item.is_confirmed === 1 && item.height >= 2 && item.direct_mem_count === 0) && (
+                                         <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{ margin: 0, backgroundColor: '#ffebee' }} />
+                                       )}
+                                     </View>
+                                   </ScrollView>
+                                 </View>
+                               ))}
+                               
+                               {hasMore && (
+                                 <TouchableOpacity 
+                                   style={{ paddingVertical: 10, alignItems: 'center', backgroundColor: '#fafafa', marginHorizontal: 10, borderRadius: 8, marginTop: 5 }}
+                                   onPress={() => {
+                                      setCategoryLimits(prev => ({
+                                        ...prev,
+                                        [section.title]: limit + 10
+                                      }));
+                                   }}
+                                 >
+                                   <Text style={{ color: '#1565C0', fontWeight: 'bold' }}>Ver más (+{items.length - limit})</Text>
+                                 </TouchableOpacity>
+                               )}
+                             </View>
+                           );
+                         });
+                         
+                         if (totalRendered === 0 && listMode === 'visible') {
+                           return <Text style={styles.emptyText}>No se encontraron lugares en la vista actual del mapa. Intenta ajustar el zoom o usa "Ver Todos".</Text>;
+                         }
+                         if (totalRendered === 0 && localSearchQuery) {
+                           return <Text style={styles.emptyText}>No se encontraron resultados para "{localSearchQuery}".</Text>;
+                         }
+                         
+                         return renderedSections;
+                      })()}
+                    </>
+                  )}
+                </ScrollView>
+              </View>
+            )}
+
+            {panelType === 'porConfirmar' && (
+              <ScrollView style={styles.listArea}>
+                {porConfirmar.length === 0 ? (
+                  <Text style={styles.emptyText}>No hay lugares por confirmar.</Text>
                 ) : (
-                  <>
-                    {[
-                      { title: 'Países', filter: (d: any) => d.height >= 4, icon: '🏳️' },
-                      { title: 'Regiones y Estados', filter: (d: any) => d.height === 3, icon: '🗺️' },
-                      { title: 'Ciudades y Pueblos', filter: (d: any) => d.height === 2, icon: '🏙️' },
-                      { title: 'Lugares Específicos', filter: (d: any) => d.height < 2, icon: '📍' }
-                    ].map((section, idx) => {
-                      const items = destacados.filter(d => d.is_confirmed !== 0 && section.filter(d));
-                      if (items.length === 0) return null;
-
-                      return (
-                        <View key={idx}>
-                          <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#666', marginTop: 15, marginBottom: 8, marginLeft: 10 }}>
-                            {section.title}
-                          </Text>
-                          {items.map(item => (
-                            <View key={item.id} style={{ width: '100%', overflow: 'hidden' }}>
-                              <ScrollView
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                snapToOffsets={[0, 100]}
-                                decelerationRate="fast"
-                              >
-                                <TouchableOpacity
-                                  onPress={() => jumpTo(item)}
-                                  style={[styles.listItem, { width: windowHeight > 0 ? Dimensions.get('window').width - 20 : '100%' }]}
-                                >
-                                  <Text style={styles.listIcon}>{section.icon}</Text>
-                                  <View style={{ flex: 1 }}>
-                                    <Text style={styles.listTitle}>{item.title}</Text>
-                                    <Text style={styles.listSub}>{item.mem_count > 0 ? `${item.mem_count} recuerdos` : 'Sin recuerdos'}</Text>
-                                  </View>
-                                </TouchableOpacity>
-                                <View style={{ width: 100, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-                                  {!(item.is_confirmed === 1 && item.height >= 2 && item.direct_mem_count === 0) && (
-                                    <IconButton icon="pencil" size={20} iconColor="#1565C0" onPress={() => {
-                                      setActionEntity(item);
-                                      setConfirmMode('none');
-                                      setSearchQuery(item.title);
-                                      setTargetGeoLevel(item.height || 0);
-                                      fetchTopSuggestion(item, item.height || 0);
-                                      setSelectedPlace(null);
-                                      setPlaceSuggestions([]);
-                                      setAddressQuery('');
-                                      setEditingEntity(null);
-                                      setMemoryEntityId(null);
-                                      setPanelType('action');
-                                      setPanelMode('peek');
-                                    }} style={{ margin: 0, marginRight: 5, backgroundColor: '#e3f2fd' }} />
-                                  )}
-                                  <IconButton icon="delete-outline" size={20} iconColor="#B00020" onPress={() => deleteEntity(item.id)} style={{ margin: 0, backgroundColor: '#ffebee' }} />
-                                </View>
-                              </ScrollView>
-                            </View>
-                          ))}
+                  porConfirmar.map(item => (
+                    <View key={item.id} style={{ width: '100%', overflow: 'hidden' }}>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        snapToOffsets={[0, 60]}
+                        decelerationRate="fast"
+                      >
+                        <TouchableOpacity onPress={() => {
+                          setActionEntity(item);
+                          setSearchQuery(item.title);
+                          setTargetGeoLevel(item.height || 0);
+                          fetchTopSuggestion(item, item.height || 0);
+                          setSelectedPlace(null);
+                          setPlaceSuggestions([]);
+                          setShowParentAssign(false);
+                          setConfirmMode('none');
+                          setAddressQuery('');
+                          setEditingEntity(null);
+                          setPanelType('action');
+                          setPanelMode('peek');
+                        }} style={[styles.listItem, { backgroundColor: '#FFF8E1', width: windowHeight > 0 ? Dimensions.get('window').width - 20 : '100%' }]}>
+                          <Text style={styles.listIcon}>⚠️</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.listTitle}>{item.title}</Text>
+                            <Text style={[styles.listSub, { color: '#F57C00' }]}>Toca para confirmar ubicación</Text>
+                          </View>
+                        </TouchableOpacity>
+                        <View style={{ width: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                          <IconButton icon="close" size={24} iconColor="#999" onPress={(e) => { e.stopPropagation?.(); deleteEntity(item.id); }} style={{ margin: 0, backgroundColor: '#f0f0f0' }} />
                         </View>
-                      );
-                    })}
-                  </>
+                      </ScrollView>
+                    </View>
+                  ))
                 )}
               </ScrollView>
             )}
 
             {panelType === 'action' && actionEntity && (
               <View style={{ flex: 1 }}>
-                <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, padding: 15 }}>
+                <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, padding: 15 }} contentContainerStyle={{ paddingBottom: 80 }}>
                   <Text style={{ fontWeight: 'bold', fontSize: 16, marginBottom: 4 }}>
                     Confirmar: {actionEntity.title}
                   </Text>
@@ -1384,27 +1607,31 @@ export default function AtlasScreen({ route, navigation }: any) {
                     })()
                   ) : null}
 
-                  {/* ── "Not the right place?" (prominent, expandable) ── */}
-                  <TouchableOpacity
-                    onPress={() => {
-                      setConfirmMode(confirmMode === 'quick' ? 'none' : 'quick');
-                      if (confirmMode !== 'quick') searchPlaces(searchQuery);
-                    }}
-                    style={{ backgroundColor: confirmMode === 'quick' ? '#EDE7F6' : '#F3E5F5', borderRadius: 10, padding: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center' }}
-                  >
-                    <Text style={{ fontSize: 18, marginRight: 10 }}>{confirmMode === 'quick' ? '▲' : '🔍'}</Text>
-                    <Text style={{ color: '#6200ee', fontSize: 14, fontWeight: 'bold', flex: 1 }}>
-                      {confirmMode === 'quick' ? 'Ocultar alternativas' : 'No es el lugar correcto?'}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {confirmMode === 'quick' && (
+                  {/* ── "Not the right place?" (Permanent Section) ── */}
+                  {confirmMode !== 'quick' ? (
+                    <TouchableOpacity
+                      onPress={() => {
+                        setConfirmMode('quick');
+                        searchPlaces(searchQuery);
+                      }}
+                      style={{ backgroundColor: '#F3E5F5', borderRadius: 10, padding: 14, marginBottom: 15, flexDirection: 'row', alignItems: 'center' }}
+                    >
+                      <Text style={{ fontSize: 20, marginRight: 12 }}>🔍</Text>
+                      <Text style={{ color: '#6200ee', fontSize: 15, fontWeight: 'bold', flex: 1 }}>
+                        ¿No es el lugar correcto?
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
                     <View style={{ marginBottom: 10 }}>
+                      <Text style={{ fontWeight: 'bold', fontSize: 15, color: '#444', marginBottom: 8, marginTop: 5 }}>
+                        ✨ Búsqueda Inteligente
+                      </Text>
                       <TextInput
                         mode="outlined"
                         label="Buscar lugar"
                         value={searchQuery}
                         onChangeText={searchPlaces}
+                        onSubmitEditing={() => Keyboard.dismiss()}
                         dense
                         right={searchingPlaces ? <TextInput.Icon icon="loading" /> : <TextInput.Icon icon="magnify" />}
                         style={{ marginBottom: 10, backgroundColor: 'white' }}
@@ -1466,33 +1693,42 @@ export default function AtlasScreen({ route, navigation }: any) {
                           Sin resultados. Intenta con otro término.
                         </Text>
                       )}
+
+                      {/* ── Address field (last resort, ONLY FOR POINTS) ── */}
+                      {targetGeoLevel === 0 && (
+                        <View style={{ marginTop: 15 }}>
+                          <Text style={{ fontWeight: 'bold', fontSize: 15, color: '#444', marginBottom: 8 }}>
+                            📍 Dirección Exacta
+                          </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                            <View style={{ flex: 1 }}>
+                              <TextInput
+                                mode="outlined"
+                                label="Buscar por dirección"
+                                value={addressQuery}
+                                onChangeText={setAddressQuery}
+                                onSubmitEditing={sendAddress}
+                                dense
+                                placeholder="Escribe una dirección exacta"
+                                style={{ backgroundColor: 'white' }}
+                                returnKeyType="send"
+                              />
+                            </View>
+                            <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{ marginLeft: 4 }} />
+                          </View>
+                        </View>
+                      )}
                     </View>
                   )}
 
-                  {/* ── Address field (last resort) ── */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                    <View style={{ flex: 1 }}>
-                      <TextInput
-                        mode="outlined"
-                        label="Buscar por dirección"
-                        value={addressQuery}
-                        onChangeText={setAddressQuery}
-                        onSubmitEditing={sendAddress}
-                        dense
-                        placeholder="Escribe una dirección exacta"
-                        style={{ backgroundColor: 'white' }}
-                        returnKeyType="send"
-                      />
-                    </View>
-                    <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{ marginLeft: 4 }} />
-                  </View>
-
-                  <TouchableOpacity
-                    onPress={() => deleteEntity(actionEntity.id)}
-                    style={{ paddingVertical: 8, alignItems: 'center' }}
-                  >
-                    <Text style={{ color: '#B00020', fontSize: 13 }}>Eliminar este lugar</Text>
-                  </TouchableOpacity>
+                  {!(actionEntity.is_confirmed === 1 && actionEntity.height >= 2 && actionEntity.direct_mem_count === 0) && (
+                    <TouchableOpacity
+                      onPress={() => deleteEntity(actionEntity.id)}
+                      style={{ paddingVertical: 8, alignItems: 'center' }}
+                    >
+                      <Text style={{ color: '#B00020', fontSize: 13 }}>Eliminar este lugar</Text>
+                    </TouchableOpacity>
+                  )}
                 </ScrollView>
 
                 {/* ── Fixed confirm button at absolute bottom ── */}
@@ -1506,7 +1742,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                     >
                       Guardar lugar seleccionado
                     </Button>
-                  ) : (
+                  ) : targetGeoLevel === 0 ? (
                     <Button
                       mode="contained"
                       onPress={confirmPrecise}
@@ -1514,7 +1750,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                     >
                       Guardar posición del marcador
                     </Button>
-                  )}
+                  ) : null}
                 </View>
               </View>
             )}
@@ -1525,6 +1761,8 @@ export default function AtlasScreen({ route, navigation }: any) {
           </View>
         </View>
       )}
+      </View>
+      </KeyboardAvoidingView>
       
       {showParentAssign && actionEntity && (
         <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 100 }]}>
@@ -1570,9 +1808,6 @@ const styles = StyleSheet.create({
   fabRight: { backgroundColor: 'white' },
 
   panelPeek: {
-    position: 'absolute',
-    bottom: 0, left: 0, right: 0,
-    height: '45%',
     backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -1591,8 +1826,6 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.2, shadowRadius: 5,
   },
   panelFull: {
-    position: 'absolute',
-    top: 0, bottom: 0, left: 0, right: 0,
     backgroundColor: 'white',
     elevation: 20,
   },

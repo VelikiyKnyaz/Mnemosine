@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Modal, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, StyleSheet, Modal, KeyboardAvoidingView, Platform, ScrollView, Alert, TouchableOpacity } from 'react-native';
 import { Text, TextInput, Button, IconButton, Chip } from 'react-native-paper';
 import { getDb } from '../core/database';
-import SmartDropdown, { PlaceSuggestion } from './SmartDropdown';
 import { v4 as uuidv4 } from 'uuid';
-import { geocodeLocation, generateTerritorialHierarchy } from '../core/ai_processor';
+import { generateTerritorialHierarchy } from '../core/ai_processor';
 
 interface MemoryEditModalProps {
   memory: any; // Requires at least { id/memory_id, raw_text }
@@ -20,11 +19,20 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
   
   // Dropdown states
   const [showDropdown, setShowDropdown] = useState(false);
+  const [newTagQuery, setNewTagQuery] = useState('');
+  const [newTagType, setNewTagType] = useState('PERSON');
+  const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     if (visible && memory) {
       setEditText(memory.raw_text || '');
+      setShowDropdown(false);
+      setNewTagQuery('');
+      setNewTagType('PERSON');
       loadEntities();
+    } else if (!visible) {
+      setShowDropdown(false);
+      setNewTagQuery('');
     }
   }, [visible, memory]);
 
@@ -122,41 +130,12 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     }
   };
 
-  const createNewEntity = async (name: string) => {
+  const createNewEntity = async (name: string, type: string) => {
     try {
       const db = await getDb();
       const newId = uuidv4();
-      // Assume 'PERSON' or 'OBJECT' if not nominatim? Let's default to OBJECT to be safe, 
-      // or PERSON if it looks like a name. We will just use 'OBJECT' as fallback.
-      await db.runAsync("INSERT INTO entities (id, type, name, is_confirmed) VALUES (?, 'OBJECT', ?, 1)", newId, name);
-      await addEntityRelation(newId);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const createFromPlace = async (suggestion: PlaceSuggestion) => {
-    try {
-      const db = await getDb();
-      const name = suggestion.displayName;
-      const lat = suggestion.lat;
-      const lon = suggestion.lon;
-      
-      const newId = uuidv4();
-      await db.runAsync(
-        "INSERT INTO entities (id, type, name, latitude, longitude, is_confirmed) VALUES (?, 'LOCATION', ?, ?, ?, 1)",
-        newId, name, lat, lon
-      );
-      
-      // Build address for territorial hierarchy
-      const components = suggestion.addressComponents || [];
-      const getComp = (type: string) => components.find((c: any) => c.types?.includes(type))?.longText || '';
-      const address = {
-        city: getComp('locality') || getComp('administrative_area_level_2'),
-        state: getComp('administrative_area_level_1'),
-        country: getComp('country'),
-      };
-      await generateTerritorialHierarchy(db, newId, name, { lat, lon, address });
+      const isConfirmed = type === 'LOCATION' ? 0 : 1;
+      await db.runAsync("INSERT INTO entities (id, type, name, is_confirmed) VALUES (?, ?, ?, ?)", newId, type, name, isConfirmed);
       await addEntityRelation(newId);
     } catch (e) {
       console.error(e);
@@ -164,6 +143,9 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
   };
 
   if (!memory) return null;
+
+  const filteredEntities = allEntities.filter(e => e.name.toLowerCase().includes(newTagQuery.toLowerCase())).slice(0, 5);
+  const exactMatch = allEntities.find(e => e.name.toLowerCase() === newTagQuery.trim().toLowerCase());
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
@@ -174,7 +156,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             <IconButton icon="close" onPress={onClose} />
           </View>
           
-          <ScrollView style={{maxHeight: 400}}>
+          <ScrollView ref={scrollRef} style={{maxHeight: 400}}>
             <TextInput
               mode="outlined"
               multiline
@@ -197,7 +179,10 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
               ))}
               
               {!showDropdown && (
-                <Chip icon="plus" onPress={() => setShowDropdown(true)} style={styles.addChip}>
+                <Chip icon="plus" onPress={() => {
+                  setShowDropdown(true);
+                  setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+                }} style={styles.addChip}>
                   Añadir
                 </Chip>
               )}
@@ -205,19 +190,63 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
 
             {showDropdown && (
               <View style={styles.dropdownContainer}>
-                <SmartDropdown
-                  label="Buscar o crear elemento..."
-                  value=""
-                  items={allEntities}
-                  enablePlaces={true}
-                  onSelect={(item) => {
-                    if (item) addEntityRelation(item.id);
-                  }}
-                  onCreateNew={createNewEntity}
-                  onSelectPlace={createFromPlace}
-                  placeholder="Escribe el nombre..."
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+                  {[
+                    { id: 'LOCATION', label: '📍 Lugar' },
+                    { id: 'PERSON', label: '👤 Persona' },
+                    { id: 'EVENT', label: '📅 Evento' },
+                    { id: 'OBJECT', label: '🏷️ Objeto' },
+                  ].map(t => (
+                    <Chip 
+                      key={t.id} 
+                      selected={newTagType === t.id}
+                      onPress={() => setNewTagType(t.id)}
+                      style={{ backgroundColor: newTagType === t.id ? '#e3f2fd' : '#f5f5f5' }}
+                    >
+                      {t.label}
+                    </Chip>
+                  ))}
+                </View>
+
+                <TextInput
+                  mode="outlined"
+                  label="Nombre de la etiqueta"
+                  value={newTagQuery}
+                  onChangeText={setNewTagQuery}
+                  onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100)}
+                  autoFocus
+                  dense
+                  style={{ marginBottom: 10, backgroundColor: 'white' }}
                 />
-                <Button onPress={() => setShowDropdown(false)} style={{marginTop: 5}}>Cancelar Añadir</Button>
+
+                <ScrollView style={{ maxHeight: 150 }} keyboardShouldPersistTaps="handled">
+                   {filteredEntities.map(item => (
+                     <TouchableOpacity 
+                       key={item.id}
+                       style={styles.suggestionItem}
+                       onPress={() => {
+                         addEntityRelation(item.id);
+                         setNewTagQuery('');
+                       }}
+                     >
+                       <Text>{item.name}</Text>
+                     </TouchableOpacity>
+                   ))}
+                   
+                   {newTagQuery.trim().length > 0 && !exactMatch && (
+                     <TouchableOpacity
+                       style={[styles.suggestionItem, { backgroundColor: '#f0f4ff' }]}
+                       onPress={() => {
+                         createNewEntity(newTagQuery.trim(), newTagType);
+                         setNewTagQuery('');
+                       }}
+                     >
+                       <Text style={{ color: '#6200ee', fontWeight: 'bold' }}>+ Crear "{newTagQuery.trim()}"</Text>
+                     </TouchableOpacity>
+                   )}
+                </ScrollView>
+
+                <Button onPress={() => { setShowDropdown(false); setNewTagQuery(''); }} style={{marginTop: 5}}>Cancelar Añadir</Button>
               </View>
             )}
           </ScrollView>
@@ -240,5 +269,10 @@ const styles = StyleSheet.create({
   chipsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 },
   chip: { backgroundColor: '#eef2ff' },
   addChip: { backgroundColor: '#f0f0f0', borderStyle: 'dashed', borderWidth: 1, borderColor: '#ccc' },
-  dropdownContainer: { marginTop: 10, padding: 10, backgroundColor: '#f9f9f9', borderRadius: 8 },
+  dropdownContainer: { marginTop: 10, padding: 10, backgroundColor: '#f9f9f9', borderRadius: 8, borderWidth: 1, borderColor: '#eee' },
+  suggestionItem: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
 });
