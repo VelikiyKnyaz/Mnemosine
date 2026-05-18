@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, SectionList, KeyboardAvoidingView, Platform, Modal, Alert } from 'react-native';
+import { View, StyleSheet, SectionList, KeyboardAvoidingView, Platform, Modal, Alert, TouchableOpacity } from 'react-native';
 import { Text, Card, TextInput, Button, IconButton } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { Audio } from 'expo-av';
@@ -11,6 +11,56 @@ interface EntityMemoriesViewProps {
   style?: any;
 }
 
+const MemoryCardItem = ({ item, onEdit, onPlay, playingId, onLongPress, expanded, onToggleExpand, styles }: any) => {
+  const [entities, setEntities] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (expanded) {
+      getDb().then(db => {
+        db.getAllAsync<any>(
+          "SELECT e.name, e.type FROM entities e JOIN memory_entities me ON e.id = me.entity_id WHERE me.memory_id = ?",
+          item.memory_id || item.id
+        ).then(setEntities);
+      });
+    }
+  }, [expanded, item.id, item.memory_id]);
+
+  return (
+    <TouchableOpacity activeOpacity={0.8} onPress={onToggleExpand} onLongPress={() => onLongPress(item.memory_id)} style={styles.card}>
+      <Card.Content style={{ paddingTop: 10 }}>
+        <Text style={styles.text}>{item.raw_text}</Text>
+        
+        {expanded && (
+          <View style={{ marginTop: 12 }}>
+            {entities.length > 0 && (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+                {entities.map((e, idx) => (
+                  <Text key={idx} style={{ fontSize: 12, color: '#6200ee', backgroundColor: '#f0f4ff', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                    #{e.name}
+                  </Text>
+                ))}
+              </View>
+            )}
+            <Button mode="outlined" onPress={() => onEdit(item)} compact icon="pencil" style={{ alignSelf: 'flex-start' }}>
+              Editar Recuerdo
+            </Button>
+          </View>
+        )}
+      </Card.Content>
+      {item.audio_uri ? (
+        <Card.Actions>
+          <Button 
+            icon={playingId === item.memory_id ? 'stop' : 'play'} 
+            onPress={() => onPlay(item.audio_uri, item.memory_id)}
+          >
+            {playingId === item.memory_id ? 'Detener' : 'Escuchar Original'}
+          </Button>
+        </Card.Actions>
+      ) : null}
+    </TouchableOpacity>
+  );
+};
+
 export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }: EntityMemoriesViewProps) {
   const [rootEntityName, setRootEntityName] = useState('');
   const [sections, setSections] = useState<any[]>([]);
@@ -21,6 +71,7 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
 
   // Edit state
   const [editingMemory, setEditingMemory] = useState<any>(null);
+  const [expandedMemoryId, setExpandedMemoryId] = useState<string | null>(null);
 
   const loadMemories = async () => {
     try {
@@ -130,6 +181,7 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
               await db.runAsync("DELETE FROM inbox_tasks WHERE memory_id = ?", memoryId);
               await db.runAsync("DELETE FROM memory_entities WHERE memory_id = ?", memoryId);
               
+              // Cascade cleanup: delete orphaned location ancestors up the tree
               let cleanupChanges = 1;
               while (cleanupChanges > 0) {
                 const cleanupRes = await db.runAsync("DELETE FROM entities WHERE type = 'LOCATION' AND id NOT IN (SELECT entity_id FROM memory_entities) AND id NOT IN (SELECT parent_id FROM entities WHERE parent_id IS NOT NULL)");
@@ -148,24 +200,16 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
   };
 
   const renderMemory = ({ item }: { item: any }) => (
-    <Card style={styles.card} onPress={() => openEdit(item)} onLongPress={() => confirmDelete(item.memory_id)}>
-      <Card.Content>
-        {item.fuzzy_date ? (
-          <Text style={styles.date}>{item.fuzzy_date}</Text>
-        ) : null}
-        <Text style={styles.text}>{item.raw_text}</Text>
-      </Card.Content>
-      {item.audio_uri ? (
-        <Card.Actions>
-          <Button 
-            icon={playingId === item.memory_id ? 'stop' : 'play'} 
-            onPress={() => playAudio(item.audio_uri, item.memory_id)}
-          >
-            {playingId === item.memory_id ? 'Detener' : 'Escuchar Original'}
-          </Button>
-        </Card.Actions>
-      ) : null}
-    </Card>
+    <MemoryCardItem 
+      item={item} 
+      onEdit={openEdit} 
+      onPlay={playAudio} 
+      playingId={playingId} 
+      onLongPress={confirmDelete}
+      expanded={expandedMemoryId === (item.memory_id || item.id)}
+      onToggleExpand={() => setExpandedMemoryId(expandedMemoryId === (item.memory_id || item.id) ? null : (item.memory_id || item.id))}
+      styles={styles} 
+    />
   );
 
   return (

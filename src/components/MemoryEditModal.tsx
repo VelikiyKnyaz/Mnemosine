@@ -3,7 +3,8 @@ import { View, StyleSheet, Modal, KeyboardAvoidingView, Platform, ScrollView, Al
 import { Text, TextInput, Button, IconButton, Chip } from 'react-native-paper';
 import { getDb } from '../core/database';
 import { v4 as uuidv4 } from 'uuid';
-import { generateTerritorialHierarchy } from '../core/ai_processor';
+import TimeCascadeSelector from './TimeCascadeSelector';
+import CustomTimePeriodsScreen from '../features/profile/CustomTimePeriodsScreen';
 
 interface MemoryEditModalProps {
   memory: any; // Requires at least { id/memory_id, raw_text }
@@ -17,21 +18,23 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
   const [entities, setEntities] = useState<any[]>([]);
   const [allEntities, setAllEntities] = useState<any[]>([]);
   
-  // Dropdown states
-  const [showDropdown, setShowDropdown] = useState(false);
+  // Tagging states
+  const [addingType, setAddingType] = useState<string | null>(null);
   const [newTagQuery, setNewTagQuery] = useState('');
-  const [newTagType, setNewTagType] = useState('PERSON');
   const scrollRef = useRef<ScrollView>(null);
+  
+  // Custom Time Selector States
+  const [timeSelectorVisible, setTimeSelectorVisible] = useState(false);
+  const [customPeriodsVisible, setCustomPeriodsVisible] = useState(false);
 
   useEffect(() => {
     if (visible && memory) {
       setEditText(memory.raw_text || '');
-      setShowDropdown(false);
+      setAddingType(null);
       setNewTagQuery('');
-      setNewTagType('PERSON');
       loadEntities();
     } else if (!visible) {
-      setShowDropdown(false);
+      setAddingType(null);
       setNewTagQuery('');
     }
   }, [visible, memory]);
@@ -41,7 +44,6 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     const memId = memory.id || memory.memory_id;
     try {
       const db = await getDb();
-      // Fetch associated entities
       const associated = await db.getAllAsync<any>(
         `SELECT e.id, e.name, e.type 
          FROM entities e 
@@ -51,8 +53,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
       );
       setEntities(associated);
 
-      // Fetch all entities for dropdown
-      const all = await db.getAllAsync<any>("SELECT id, name FROM entities");
+      const all = await db.getAllAsync<any>("SELECT id, name, type FROM entities");
       setAllEntities(all);
     } catch (e) {
       console.error(e);
@@ -105,7 +106,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
       const db = await getDb();
       await db.runAsync("DELETE FROM memory_entities WHERE memory_id = ? AND entity_id = ?", memId, entityId);
       loadEntities();
-      onSaved(); // Trigger refresh in parent list
+      onSaved();
     } catch (e) {
       console.error(e);
     }
@@ -116,13 +117,12 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     const memId = memory.id || memory.memory_id;
     try {
       const db = await getDb();
-      // Check if already exists
       const existing = await db.getFirstAsync("SELECT 1 FROM memory_entities WHERE memory_id = ? AND entity_id = ?", memId, entityId);
       if (!existing) {
         const pivotId = uuidv4();
         await db.runAsync("INSERT INTO memory_entities (id, memory_id, entity_id) VALUES (?, ?, ?)", pivotId, memId, entityId);
       }
-      setShowDropdown(false);
+      setAddingType(null);
       loadEntities();
       onSaved();
     } catch (e) {
@@ -134,7 +134,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     try {
       const db = await getDb();
       const newId = uuidv4();
-      const isConfirmed = type === 'LOCATION' ? 0 : 1;
+      const isConfirmed = (type === 'LOCATION') ? 0 : 1;
       await db.runAsync("INSERT INTO entities (id, type, name, is_confirmed) VALUES (?, ?, ?, ?)", newId, type, name, isConfirmed);
       await addEntityRelation(newId);
     } catch (e) {
@@ -142,10 +142,86 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     }
   };
 
-  if (!memory) return null;
+  const renderSection = (title: string, type: string, icon: string, isSingle: boolean) => {
+    const items = entities.filter(e => e.type === type);
+    const canAdd = !isSingle || items.length === 0;
 
-  const filteredEntities = allEntities.filter(e => e.name.toLowerCase().includes(newTagQuery.toLowerCase())).slice(0, 5);
-  const exactMatch = allEntities.find(e => e.name.toLowerCase() === newTagQuery.trim().toLowerCase());
+    const filteredSuggestions = allEntities
+      .filter(e => e.type === type && e.name.toLowerCase().includes(newTagQuery.toLowerCase()))
+      .slice(0, 5);
+    const exactMatch = allEntities.find(e => e.type === type && e.name.toLowerCase() === newTagQuery.trim().toLowerCase());
+
+    return (
+      <View style={{ marginBottom: 15 }} key={type}>
+        <Text style={styles.sectionTitle}>{icon} {title}</Text>
+        <View style={styles.chipsContainer}>
+          {items.map(e => (
+            <Chip key={e.id} onClose={() => removeEntity(e.id)} style={styles.chip}>
+              {e.name}
+            </Chip>
+          ))}
+          {canAdd && addingType !== type && (
+            <Chip icon="plus" onPress={() => {
+              if (type === 'TIME') {
+                setTimeSelectorVisible(true);
+              } else {
+                setAddingType(type);
+                setNewTagQuery('');
+                setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+              }
+            }} style={styles.addChip}>
+              Añadir
+            </Chip>
+          )}
+        </View>
+
+        {addingType === type && (
+          <View style={styles.dropdownContainer}>
+            <TextInput
+              mode="outlined"
+              label={`Nombre (${title})`}
+              value={newTagQuery}
+              onChangeText={setNewTagQuery}
+              autoFocus
+              dense
+              style={{ marginBottom: 10, backgroundColor: 'white' }}
+            />
+            <ScrollView style={{ maxHeight: 150 }} keyboardShouldPersistTaps="handled">
+               {filteredSuggestions.map(item => (
+                 <TouchableOpacity 
+                   key={item.id}
+                   style={styles.suggestionItem}
+                   onPress={() => {
+                     addEntityRelation(item.id);
+                     setAddingType(null);
+                     setNewTagQuery('');
+                   }}
+                 >
+                   <Text>{item.name}</Text>
+                 </TouchableOpacity>
+               ))}
+               
+               {newTagQuery.trim().length > 0 && !exactMatch && (
+                 <TouchableOpacity
+                   style={[styles.suggestionItem, { backgroundColor: '#f0f4ff' }]}
+                   onPress={() => {
+                     createNewEntity(newTagQuery.trim(), type);
+                     setAddingType(null);
+                     setNewTagQuery('');
+                   }}
+                 >
+                   <Text style={{ color: '#6200ee', fontWeight: 'bold' }}>+ Crear "{newTagQuery.trim()}"</Text>
+                 </TouchableOpacity>
+               )}
+            </ScrollView>
+            <Button onPress={() => { setAddingType(null); setNewTagQuery(''); }} style={{marginTop: 5}}>Cancelar Añadir</Button>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  if (!memory) return null;
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
@@ -156,99 +232,21 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             <IconButton icon="close" onPress={onClose} />
           </View>
           
-          <ScrollView ref={scrollRef} style={{maxHeight: 400}}>
+          <ScrollView ref={scrollRef} style={{maxHeight: 500}}>
             <TextInput
               mode="outlined"
               multiline
               value={editText}
               onChangeText={setEditText}
-              style={{minHeight: 100, marginBottom: 15}}
+              style={{minHeight: 100, marginBottom: 20}}
             />
             
-            <Text style={styles.sectionTitle}>Etiquetas (Elementos)</Text>
-            <View style={styles.chipsContainer}>
-              {entities.map(e => (
-                <Chip 
-                  key={e.id} 
-                  onClose={() => removeEntity(e.id)} 
-                  style={styles.chip}
-                  icon={e.type === 'LOCATION' ? 'map-marker' : e.type === 'PERSON' ? 'account' : 'tag'}
-                >
-                  {e.name}
-                </Chip>
-              ))}
-              
-              {!showDropdown && (
-                <Chip icon="plus" onPress={() => {
-                  setShowDropdown(true);
-                  setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
-                }} style={styles.addChip}>
-                  Añadir
-                </Chip>
-              )}
-            </View>
+            {renderSection('Personas', 'PERSON', '👤', false)}
+            {renderSection('Eventos', 'EVENT', '🎯', false)}
+            {renderSection('Objetos', 'OBJECT', '📦', false)}
+            {renderSection('Lugar', 'LOCATION', '📍', true)}
+            {renderSection('Momento/Fecha', 'TIME', '⏳', true)}
 
-            {showDropdown && (
-              <View style={styles.dropdownContainer}>
-                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-                  {[
-                    { id: 'LOCATION', label: '📍 Lugar' },
-                    { id: 'PERSON', label: '👤 Persona' },
-                    { id: 'EVENT', label: '📅 Evento' },
-                    { id: 'OBJECT', label: '🏷️ Objeto' },
-                  ].map(t => (
-                    <Chip 
-                      key={t.id} 
-                      selected={newTagType === t.id}
-                      onPress={() => setNewTagType(t.id)}
-                      style={{ backgroundColor: newTagType === t.id ? '#e3f2fd' : '#f5f5f5' }}
-                    >
-                      {t.label}
-                    </Chip>
-                  ))}
-                </View>
-
-                <TextInput
-                  mode="outlined"
-                  label="Nombre de la etiqueta"
-                  value={newTagQuery}
-                  onChangeText={setNewTagQuery}
-                  onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100)}
-                  autoFocus
-                  dense
-                  style={{ marginBottom: 10, backgroundColor: 'white' }}
-                />
-
-                <ScrollView style={{ maxHeight: 150 }} keyboardShouldPersistTaps="handled">
-                   {filteredEntities.map(item => (
-                     <TouchableOpacity 
-                       key={item.id}
-                       style={styles.suggestionItem}
-                       onPress={() => {
-                         addEntityRelation(item.id);
-                         setNewTagQuery('');
-                       }}
-                     >
-                       <Text>{item.name}</Text>
-                     </TouchableOpacity>
-                   ))}
-                   
-                   {newTagQuery.trim().length > 0 && !exactMatch && (
-                     <TouchableOpacity
-                       style={[styles.suggestionItem, { backgroundColor: '#f0f4ff' }]}
-                       onPress={() => {
-                         createNewEntity(newTagQuery.trim(), newTagType);
-                         setNewTagQuery('');
-                       }}
-                     >
-                       <Text style={{ color: '#6200ee', fontWeight: 'bold' }}>+ Crear "{newTagQuery.trim()}"</Text>
-                     </TouchableOpacity>
-                   )}
-                </ScrollView>
-
-                <Button onPress={() => { setShowDropdown(false); setNewTagQuery(''); }} style={{marginTop: 5}}>Cancelar Añadir</Button>
-              </View>
-            )}
           </ScrollView>
 
           <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 15}}>
@@ -256,6 +254,55 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             <Button mode="contained" onPress={handleSaveText}>Guardar Texto</Button>
           </View>
         </View>
+        
+        {/* Modales de Tiempo */}
+        <TimeCascadeSelector
+          visible={timeSelectorVisible}
+          onClose={() => setTimeSelectorVisible(false)}
+          onManageCustom={() => {
+            setTimeSelectorVisible(false);
+            setCustomPeriodsVisible(true);
+          }}
+          onSelectTime={async (timeEntity) => {
+             // If selected, add relation and update memory dates
+             let finalEntityId = timeEntity.id;
+             try {
+               const db = await getDb();
+               if (!finalEntityId) {
+                 // It's a generated time (Year, Month, Day) that doesn't exist in DB yet
+                 finalEntityId = uuidv4();
+                 const metadata = JSON.stringify({
+                   start_date: timeEntity.start_date,
+                   end_date: timeEntity.end_date,
+                   is_custom_period: 0
+                 });
+                 await db.runAsync(
+                   "INSERT INTO entities (id, type, name, metadata, is_confirmed) VALUES (?, ?, ?, ?, 1)",
+                   finalEntityId, 'TIME', timeEntity.name, metadata
+                 );
+               }
+               
+               // Update Memory start/end dates
+               await db.runAsync(
+                 "UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?",
+                 timeEntity.start_date, timeEntity.end_date, memory.id || memory.memory_id
+               );
+
+               await addEntityRelation(finalEntityId);
+             } catch (e) {
+               console.error('Error saving selected time:', e);
+             }
+             setTimeSelectorVisible(false);
+          }}
+        />
+        <CustomTimePeriodsScreen
+          visible={customPeriodsVisible}
+          onClose={() => {
+            setCustomPeriodsVisible(false);
+            setTimeSelectorVisible(true);
+          }}
+        />
+
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -265,8 +312,8 @@ const styles = StyleSheet.create({
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: 'white', padding: 20, borderTopLeftRadius: 15, borderTopRightRadius: 15 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  sectionTitle: { fontWeight: 'bold', marginBottom: 8, color: '#555' },
-  chipsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 },
+  sectionTitle: { fontWeight: 'bold', marginBottom: 8, color: '#555', fontSize: 14 },
+  chipsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { backgroundColor: '#eef2ff' },
   addChip: { backgroundColor: '#f0f0f0', borderStyle: 'dashed', borderWidth: 1, borderColor: '#ccc' },
   dropdownContainer: { marginTop: 10, padding: 10, backgroundColor: '#f9f9f9', borderRadius: 8, borderWidth: 1, borderColor: '#eee' },

@@ -110,3 +110,43 @@ export const calculateDatesFromMarkers = async (timeMarkers: string[]): Promise<
   return { start_date: startDate, end_date: endDate };
 };
 
+export const generateLifecycleStages = async (birthYear: number) => {
+  if (!birthYear) return;
+  const db = await getDb();
+  const currentYear = new Date().getFullYear();
+
+  const stages = [
+    { name: 'Infancia', startOffset: 0, endOffset: 11, type: 'TIME', is_custom_period: 0 },
+    { name: 'Adolescencia', startOffset: 12, endOffset: 17, type: 'TIME', is_custom_period: 0 },
+    { name: 'Adultez Temprana', startOffset: 18, endOffset: 29, type: 'TIME', is_custom_period: 0 },
+    { name: 'Adultez', startOffset: 30, endOffset: 59, type: 'TIME', is_custom_period: 0 },
+    { name: 'Tercera Edad', startOffset: 60, endOffset: 120, type: 'TIME', is_custom_period: 0 },
+  ];
+
+  for (const stage of stages) {
+    const startY = birthYear + stage.startOffset;
+    const endY = birthYear + stage.endOffset;
+    if (startY > currentYear) continue; // Skip future stages
+    
+    const actualEndY = endY > currentYear ? currentYear : endY;
+    
+    // Check if it already exists
+    const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'TIME' AND name = ?", stage.name);
+    
+    const metadata = JSON.stringify({
+      start_date: `${startY}-01-01`,
+      end_date: `${actualEndY}-12-31`,
+      is_custom_period: stage.is_custom_period
+    });
+
+    if (existing) {
+      await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", metadata, existing.id);
+    } else {
+      const { v4: uuidv4 } = require('uuid');
+      await db.runAsync(
+        "INSERT INTO entities (id, type, name, metadata, is_confirmed) VALUES (?, ?, ?, ?, 1)",
+        uuidv4(), stage.type, stage.name, metadata
+      );
+    }
+  }
+};

@@ -5,7 +5,7 @@ export interface AICategorization {
   title: string;
   sentiment: number;
   time_markers: string[];
-  entities: { name: string; type: 'PERSON' | 'LOCATION' | 'EVENT' | 'OBJECT'; parent_name?: string }[];
+  entities: { name: string; type: 'PERSON' | 'LOCATION' | 'EVENT' | 'OBJECT' | 'TIME'; parent_name?: string }[];
   ambiguities: string[];
 }
 
@@ -52,8 +52,8 @@ export const extractMemoryData = async (text: string, existingEntitiesContext: s
 KNOWN: [${existingEntitiesContext}]
 
 OUTPUT:
-- time_markers: Extract all temporal references. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:childhood|teenage|adulthood", "fuzzy:TEXT". Prefer exact_age over life_stage. Add "DATE_UNCLEAR" to ambiguities only if no temporal information exists.
-- entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT. IMPORTANT: Retain complete proper nouns including their descriptive prefixes/suffixes (e.g. keep identifiers like "Hotel", "Museum", "Park", "Mount" if they are part of the recognized place name). If a reference matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
+- time_markers: Extract all temporal references. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:childhood|teenage|adulthood", "fuzzy:TEXT". Prefer exact_age over life_stage.
+- entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT, TIME. IMPORTANT: Retain complete proper nouns including their descriptive prefixes/suffixes (e.g. keep identifiers like "Hotel", "Museum", "Park", "Mount" if they are part of the recognized place name). For TIME entities, use the descriptive time period (e.g., "Navidad de 1998", "Verano del 2005", "Juventud"). If a reference matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
 - parent_name: Infer and set parent locations based on textual containment. If uncertain, add "ENTITY_AMBIGUOUS" to ambiguities.
 - sentiment: Float from -1.0 to 1.0.
 - title: Max 5 words.

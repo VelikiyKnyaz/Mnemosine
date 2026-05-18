@@ -51,16 +51,32 @@ function MainTabs() {
 export default function RootNavigator() {
   const { session, setSession, isLoading, setIsLoading } = useAuthStore();
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🔧 DEBUG BYPASS: Auto-login as admin. 
+  // To restore normal auth, comment this useEffect and uncomment the one below.
+  // ═══════════════════════════════════════════════════════════════
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setIsLoading(false);
-    });
+    setSession({
+      user: { id: 'admin', email: 'admin@debug.local', role: 'admin' },
+      access_token: 'debug',
+      refresh_token: 'debug',
+    } as any);
+    setIsLoading(false);
+  }, [setSession, setIsLoading]);
 
-    supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-  }, [setIsLoading, setSession]);
+  // ═══════════════════════════════════════════════════════════════
+  // 🔐 ORIGINAL AUTH LOGIC — Uncomment to restore login flow:
+  // ═══════════════════════════════════════════════════════════════
+  // useEffect(() => {
+  //   supabase.auth.getSession().then(({ data: { session } }) => {
+  //     setSession(session);
+  //     setIsLoading(false);
+  //   });
+  //
+  //   supabase.auth.onAuthStateChange((_event, session) => {
+  //     setSession(session);
+  //   });
+  // }, [setIsLoading, setSession]);
 
   if (isLoading) {
     return (

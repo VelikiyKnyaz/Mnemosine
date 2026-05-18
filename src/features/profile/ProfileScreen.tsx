@@ -5,6 +5,7 @@ import { getDb } from '../../core/database';
 import { v4 as uuidv4 } from 'uuid';
 import 'react-native-get-random-values';
 import SmartDropdown from '../../components/SmartDropdown';
+import { generateLifecycleStages } from '../../core/chrono_engine';
 
 const COUNTRIES = [
   { id: 'ar', name: 'Argentina' },
@@ -75,6 +76,14 @@ export default function ProfileScreen() {
         );
         setProfileId(newId);
       }
+
+      if (birthDate.trim()) {
+        const year = parseInt(birthDate.trim().split('-')[0]);
+        if (!isNaN(year)) {
+          await generateLifecycleStages(year);
+        }
+      }
+
       Alert.alert('Guardado', 'Perfil actualizado exitosamente. Esto ayudará a la IA a calcular mejor las fechas.');
     } catch (e) {
       console.error(e);

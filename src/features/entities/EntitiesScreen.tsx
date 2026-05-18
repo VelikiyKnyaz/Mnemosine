@@ -6,11 +6,11 @@ import { useIsFocused } from '@react-navigation/native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
-const TYPES = ['PERSON', 'LOCATION', 'EVENT', 'OBJECT'] as const;
+const TYPES = ['PERSON', 'LOCATION', 'EVENT', 'OBJECT', 'TIME'] as const;
 type EntityType = typeof TYPES[number];
 
 const typeEmoji: Record<string, string> = {
-  PERSON: '👤', LOCATION: '📍', EVENT: '🎯', OBJECT: '📦',
+  PERSON: '👤', LOCATION: '📍', EVENT: '🎯', OBJECT: '📦', TIME: '⏳'
 };
 
 export default function EntitiesScreen() {

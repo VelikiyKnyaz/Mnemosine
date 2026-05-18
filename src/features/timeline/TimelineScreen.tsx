@@ -124,19 +124,79 @@ const resolveTimeMarkersWithAI = async (text: string): Promise<string[]> => {
 
 // ── Component ──
 
+const MemoryCardItem = ({ item, onEdit, expanded, onToggleExpand, styles }: any) => {
+  const [entities, setEntities] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (expanded) {
+      getDb().then(db => {
+        db.getAllAsync<any>(
+          "SELECT e.name, e.type FROM entities e JOIN memory_entities me ON e.id = me.entity_id WHERE me.memory_id = ?",
+          item.id || item.memory_id
+        ).then(setEntities);
+      });
+    }
+  }, [expanded, item.id, item.memory_id]);
+
+  const hasNoDate = !item.start_date && !item.end_date;
+
+  return (
+    <TouchableOpacity activeOpacity={0.8} onPress={onToggleExpand} style={styles.memoryCard}>
+      <View style={styles.cardHeader}>
+        <Text variant="titleMedium" style={styles.titleText}>{item.title || 'Recuerdo'}</Text>
+        <View style={styles.dateContainer}>
+          {item.sync_status !== 'PROCESSED_LOCAL' && (
+            <View style={[styles.dateAlert, { backgroundColor: '#E3F2FD' }]}>
+              <ActivityIndicator size={12} color="#1976D2" />
+              <Text style={{fontSize: 11, color: '#1976D2', marginLeft: 4}}>Procesando</Text>
+            </View>
+          )}
+        </View>
+      </View>
+      
+      {item.raw_text ? (
+        <Text style={styles.bodyText}>
+          {item.raw_text}
+        </Text>
+      ) : null}
+
+      {expanded && (
+        <View style={{ marginTop: 12 }}>
+          {entities.length > 0 && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+              {entities.map((e, idx) => (
+                <Text key={idx} style={{ fontSize: 12, color: '#6200ee', backgroundColor: '#f0f4ff', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                  #{e.name}
+                </Text>
+              ))}
+            </View>
+          )}
+          <Button mode="outlined" onPress={() => onEdit(item)} compact icon="pencil" style={{ alignSelf: 'flex-start' }}>
+            Editar Recuerdo
+          </Button>
+        </View>
+      )}
+      
+      <View style={styles.cardFooter}>
+        {item.audio_uri ? <Text style={styles.audioHint}>🎤 Audio</Text> : <View />}
+        <Text style={styles.statusHint}>
+          {item.sync_status === 'PROCESSED_LOCAL' ? '✨ IA' : '⏳ Procesando'} 
+          {item.sentiment_score !== null && ` • ${(item.sentiment_score > 0 ? '+' : '')}${item.sentiment_score}`}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+};
+
 export default function TimelineScreen() {
   const setSession = useAuthStore((state) => state.setSession);
   const [modalVisible, setModalVisible] = useState(false);
   const [initialQuestion, setInitialQuestion] = useState<string | undefined>(undefined);
   const [memories, setMemories] = useState<any[]>([]);
 
-  // Date resolution state
-  const [resolvingMemory, setResolvingMemory] = useState<any>(null);
-  const [dateInput, setDateInput] = useState('');
-  const [resolving, setResolving] = useState(false);
-
   // Text editing state
   const [editingTextMemory, setEditingTextMemory] = useState<any>(null);
+  const [expandedMemoryId, setExpandedMemoryId] = useState<string | null>(null);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -179,56 +239,6 @@ export default function TimelineScreen() {
     setModalVisible(true);
   };
 
-  // ── Date resolution ──
-
-  const handleResolveDate = (memory: any) => {
-    setResolvingMemory(memory);
-    setDateInput('');
-  };
-
-  const submitDateResolution = async () => {
-    if (!resolvingMemory || !dateInput.trim()) return;
-    setResolving(true);
-    
-    try {
-      // Try local regex first
-      let markers = parseTimeMarkersLocal(dateInput);
-      
-      // If no markers found locally, use AI
-      if (markers.length === 0) {
-        markers = await resolveTimeMarkersWithAI(dateInput);
-      }
-      
-      if (markers.length === 0) {
-        Alert.alert('No se pudo resolver', 'Intenta con algo como "en 2018", "a los 14 años", o "hace 5 años".');
-        setResolving(false);
-        return;
-      }
-      
-      const dates = await calculateDatesFromMarkers(markers);
-      
-      if (!dates.start_date) {
-        Alert.alert('No se pudo calcular', 'Verifica tu fecha de nacimiento en el perfil si usaste una edad.');
-        setResolving(false);
-        return;
-      }
-      
-      const db = await getDb();
-      await db.runAsync(
-        'UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?',
-        dates.start_date, dates.end_date, resolvingMemory.id
-      );
-      
-      setResolvingMemory(null);
-      setDateInput('');
-      loadMemories();
-    } catch (e: any) {
-      console.error(e);
-      Alert.alert('Error', e.message || 'No se pudo resolver la fecha.');
-    } finally {
-      setResolving(false);
-    }
-  };
 
   // ── Build sections by year ──
 
@@ -280,52 +290,15 @@ export default function TimelineScreen() {
             <View style={styles.sectionLine} />
           </View>
         )}
-        renderItem={({ item }) => {
-          const smartDate = formatSmartDate(item.start_date, item.end_date);
-          const hasNoDate = !item.start_date && !item.end_date;
-          
-          return (
-            <View style={styles.memoryCard}>
-              <View style={styles.cardHeader}>
-                <Text variant="titleMedium" style={styles.titleText}>{item.title || 'Recuerdo'}</Text>
-                <View style={styles.dateContainer}>
-                  {item.sync_status !== 'PROCESSED_LOCAL' ? (
-                    <View style={[styles.dateAlert, { backgroundColor: '#E3F2FD' }]}>
-                      <ActivityIndicator size={12} color="#1976D2" />
-                      <Text style={{fontSize: 11, color: '#1976D2', marginLeft: 4}}>Procesando</Text>
-                    </View>
-                  ) : hasNoDate ? (
-                    <TouchableOpacity onPress={() => handleResolveDate(item)} style={styles.dateAlert}>
-                      <Text style={{fontSize: 16}}>⚠️</Text>
-                      <Text style={{fontSize: 11, color: '#F57C00', marginLeft: 4}}>Sin fecha</Text>
-                    </TouchableOpacity>
-                  ) : smartDate ? (
-                    <TouchableOpacity onPress={() => handleResolveDate(item)}>
-                      <Text variant="labelSmall" style={styles.dateText}>{smartDate}</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity onPress={() => handleResolveDate(item)}>
-                      <IconButton icon="pencil" size={14} style={{margin: 0}} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </View>
-              {item.raw_text ? (
-                <Text style={styles.bodyText} onPress={() => setEditingTextMemory(item)}>
-                  {item.raw_text}
-                </Text>
-              ) : null}
-              
-              <View style={styles.cardFooter}>
-                {item.audio_uri ? <Text style={styles.audioHint}>🎤 Audio</Text> : <View />}
-                <Text style={styles.statusHint}>
-                  {item.sync_status === 'PROCESSED_LOCAL' ? '✨ IA' : '⏳ Procesando'} 
-                  {item.sentiment_score !== null && ` • ${(item.sentiment_score > 0 ? '+' : '')}${item.sentiment_score}`}
-                </Text>
-              </View>
-            </View>
-          );
-        }}
+        renderItem={({ item }) => (
+          <MemoryCardItem 
+            item={item} 
+            onEdit={setEditingTextMemory} 
+            expanded={expandedMemoryId === (item.id || item.memory_id)}
+            onToggleExpand={() => setExpandedMemoryId(expandedMemoryId === (item.id || item.memory_id) ? null : (item.id || item.memory_id))}
+            styles={styles} 
+          />
+        )}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text>No hay recuerdos aún. ¡Escribe el primero!</Text>
@@ -348,43 +321,7 @@ export default function TimelineScreen() {
         onSaved={loadMemories}
       />
 
-      {/* Date Resolution Modal */}
-      {resolvingMemory && (
-        <View style={styles.resolveOverlay}>
-          <View style={styles.resolveModal}>
-            <Text variant="titleMedium" style={{marginBottom: 4}}>¿Cuándo fue esto?</Text>
-            <Text style={{color: '#666', fontSize: 13, marginBottom: 12}} numberOfLines={2}>
-              "{resolvingMemory.title || resolvingMemory.raw_text?.substring(0, 60) || 'Recuerdo'}"
-            </Text>
-            
-            <TextInput
-              mode="outlined"
-              label="Escribe una referencia temporal"
-              placeholder="ej: en 2018, a los 14 años, hace 5 años"
-              value={dateInput}
-              onChangeText={setDateInput}
-              dense
-              autoFocus
-              onSubmitEditing={submitDateResolution}
-              style={{marginBottom: 12, backgroundColor: 'white'}}
-            />
-            
-            {resolving && (
-              <View style={{alignItems: 'center', marginBottom: 10}}>
-                <ActivityIndicator size="small" />
-                <Text style={{color: '#888', fontSize: 12, marginTop: 4}}>Calculando...</Text>
-              </View>
-            )}
-            
-            <View style={{flexDirection: 'row', justifyContent: 'flex-end'}}>
-              <Button onPress={() => setResolvingMemory(null)}>Cancelar</Button>
-              <Button mode="contained" onPress={submitDateResolution} disabled={resolving || !dateInput.trim()}>
-                Resolver
-              </Button>
-            </View>
-          </View>
-        </View>
-      )}
+
     </View>
   );
 }

@@ -12,6 +12,16 @@ import { generateTerritorialHierarchy } from '../../core/ai_processor';
 import { getConfig } from '../../core/config';
 import EntityMemoriesView from '../memories/EntityMemoriesView';
 
+const getDeltaForGeoLevel = (level: number) => {
+  switch (level) {
+    case 4: return 15.0;
+    case 3: return 5.0;
+    case 2: return 0.2;
+    case 1: return 0.05;
+    default: return 0.005;
+  }
+};
+
 export default function AtlasScreen({ route, navigation }: any) {
   const [markers, setMarkers] = useState<any[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
@@ -23,7 +33,7 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [expandedListItem, setExpandedListItem] = useState<string | null>(null);
   
   // Destacados List Mode
-  const [listMode, setListMode] = useState<'visible' | 'all'>('visible');
+  const [listMode, setListMode] = useState<'visible' | 'all'>('all');
   const [localSearchQuery, setLocalSearchQuery] = useState('');
   const [categoryLimits, setCategoryLimits] = useState<Record<string, number>>({});
 
@@ -430,10 +440,11 @@ export default function AtlasScreen({ route, navigation }: any) {
               setAutoTopResult(topResult);
               setSelectedPlace(topResult);
               if (topResult.location) {
+                const delta = getDeltaForGeoLevel(level);
                 mapRef.current?.animateToRegion({
                   latitude: topResult.location.latitude,
                   longitude: topResult.location.longitude,
-                  latitudeDelta: 0.005, longitudeDelta: 0.005,
+                  latitudeDelta: delta, longitudeDelta: delta,
                 }, 500);
               }
               setLoadingAutoTop(false);
@@ -531,10 +542,11 @@ export default function AtlasScreen({ route, navigation }: any) {
           setSelectedPlace(topResult);
           
           if (details.location) {
+            const delta = getDeltaForGeoLevel(level);
             mapRef.current?.animateToRegion({
               latitude: details.location.latitude,
               longitude: details.location.longitude,
-              latitudeDelta: 0.005, longitudeDelta: 0.005,
+              latitudeDelta: delta, longitudeDelta: delta,
             }, 500);
           }
         }
@@ -717,21 +729,23 @@ export default function AtlasScreen({ route, navigation }: any) {
         const fullPlace = { ...place, details };
         setSelectedPlace(fullPlace);
         if (details.location) {
+          const delta = getDeltaForGeoLevel(targetGeoLevel);
           mapRef.current?.animateToRegion({
             latitude: details.location.latitude,
             longitude: details.location.longitude,
-            latitudeDelta: 0.005,
-            longitudeDelta: 0.005,
+            latitudeDelta: delta,
+            longitudeDelta: delta,
           }, 500);
         }
       }
     } else if (place.location) {
       // Legacy / cached object that already has details
+      const delta = getDeltaForGeoLevel(targetGeoLevel);
       mapRef.current?.animateToRegion({
         latitude: place.location.latitude,
         longitude: place.location.longitude,
-        latitudeDelta: 0.005,
-        longitudeDelta: 0.005,
+        latitudeDelta: delta,
+        longitudeDelta: delta,
       }, 500);
     }
   };
@@ -1095,7 +1109,10 @@ export default function AtlasScreen({ route, navigation }: any) {
             }}
             onPanDrag={() => {
               isProgrammaticMove.current = false;
-              if (selectedPlace) setSelectedPlace(null);
+              // Only clear selectedPlace for Point-level (targetGeoLevel === 0) entities.
+              // For territories (city/region/country), moving the map should NOT clear the selection
+              // since the marker is just a visual tool and doesn't affect where the territory is saved.
+              if (selectedPlace && targetGeoLevel === 0) setSelectedPlace(null);
             }}
             showsUserLocation={!editingEntity}
           >
@@ -1243,17 +1260,15 @@ export default function AtlasScreen({ route, navigation }: any) {
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               {panelType === 'destacados' && porConfirmar.length > 0 && (
-                <Button 
-                  mode="text" 
-                  textColor="#F57C00" 
-                  icon="alert-circle-outline"
+                <TouchableOpacity 
                   onPress={() => setPanelType('porConfirmar')}
-                  style={{ marginRight: 5 }}
-                  labelStyle={{ marginHorizontal: 2, fontSize: 12 }}
-                  compact
+                  style={{ marginRight: 5, flexDirection: 'row', alignItems: 'center', backgroundColor: '#D32F2F', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6 }}
                 >
-                  Resolver ({porConfirmar.length})
-                </Button>
+                  <MaterialCommunityIcons name="alert-circle-outline" size={16} color="#FFFFFF" style={{ marginRight: 4 }} />
+                  <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>
+                    Resolver ({porConfirmar.length})
+                  </Text>
+                </TouchableOpacity>
               )}
               {panelType === 'porConfirmar' && (
                 <Button 
@@ -1262,6 +1277,21 @@ export default function AtlasScreen({ route, navigation }: any) {
                   style={{ marginRight: 5 }}
                 >
                   Volver
+                </Button>
+              )}
+              {panelType === 'memories' && (
+                <Button 
+                  mode="text" 
+                  icon="arrow-left"
+                  onPress={() => {
+                    setMemoryEntityId(null);
+                    setSelectedPlaceEntity(null);
+                    setPanelType('destacados');
+                  }}
+                  style={{ marginRight: 5 }}
+                  compact
+                >
+                  Lugares
                 </Button>
               )}
               {panelType === 'memories' && selectedPlaceEntity && (
@@ -1589,10 +1619,11 @@ export default function AtlasScreen({ route, navigation }: any) {
                         <TouchableOpacity
                           onPress={() => {
                             if (lat && lon) {
+                              const delta = getDeltaForGeoLevel(targetGeoLevel);
                               mapRef.current?.animateToRegion({
                                 latitude: lat,
                                 longitude: lon,
-                                latitudeDelta: 0.005, longitudeDelta: 0.005,
+                                latitudeDelta: delta, longitudeDelta: delta,
                               }, 500);
                             }
                           }}
@@ -1606,6 +1637,7 @@ export default function AtlasScreen({ route, navigation }: any) {
                       );
                     })()
                   ) : null}
+
 
                   {/* ── "Not the right place?" (Permanent Section) ── */}
                   {confirmMode !== 'quick' ? (
@@ -1623,6 +1655,31 @@ export default function AtlasScreen({ route, navigation }: any) {
                     </TouchableOpacity>
                   ) : (
                     <View style={{ marginBottom: 10 }}>
+                      {/* ── Address field FIRST (ONLY FOR POINTS) ── */}
+                      {targetGeoLevel === 0 && (
+                        <View style={{ marginBottom: 12 }}>
+                          <Text style={{ fontWeight: 'bold', fontSize: 15, color: '#444', marginBottom: 8 }}>
+                            📍 Dirección Exacta
+                          </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                            <View style={{ flex: 1 }}>
+                              <TextInput
+                                mode="outlined"
+                                label="Buscar por dirección"
+                                value={addressQuery}
+                                onChangeText={setAddressQuery}
+                                onSubmitEditing={sendAddress}
+                                dense
+                                placeholder="Escribe una dirección exacta"
+                                style={{ backgroundColor: 'white' }}
+                                returnKeyType="send"
+                              />
+                            </View>
+                            <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{ marginLeft: 4 }} />
+                          </View>
+                        </View>
+                      )}
+
                       <Text style={{ fontWeight: 'bold', fontSize: 15, color: '#444', marginBottom: 8, marginTop: 5 }}>
                         ✨ Búsqueda Inteligente
                       </Text>
@@ -1693,31 +1750,6 @@ export default function AtlasScreen({ route, navigation }: any) {
                           Sin resultados. Intenta con otro término.
                         </Text>
                       )}
-
-                      {/* ── Address field (last resort, ONLY FOR POINTS) ── */}
-                      {targetGeoLevel === 0 && (
-                        <View style={{ marginTop: 15 }}>
-                          <Text style={{ fontWeight: 'bold', fontSize: 15, color: '#444', marginBottom: 8 }}>
-                            📍 Dirección Exacta
-                          </Text>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                            <View style={{ flex: 1 }}>
-                              <TextInput
-                                mode="outlined"
-                                label="Buscar por dirección"
-                                value={addressQuery}
-                                onChangeText={setAddressQuery}
-                                onSubmitEditing={sendAddress}
-                                dense
-                                placeholder="Escribe una dirección exacta"
-                                style={{ backgroundColor: 'white' }}
-                                returnKeyType="send"
-                              />
-                            </View>
-                            <IconButton icon="send" iconColor="#6200ee" size={24} onPress={sendAddress} style={{ marginLeft: 4 }} />
-                          </View>
-                        </View>
-                      )}
                     </View>
                   )}
 
@@ -1750,7 +1782,20 @@ export default function AtlasScreen({ route, navigation }: any) {
                     >
                       Guardar posición del marcador
                     </Button>
-                  ) : null}
+                  ) : (
+                    <Button
+                      mode="outlined"
+                      icon="map-search"
+                      onPress={() => {
+                        if (confirmMode !== 'quick') {
+                          setConfirmMode('quick');
+                          searchPlaces(searchQuery);
+                        }
+                      }}
+                    >
+                      Selecciona una sugerencia arriba
+                    </Button>
+                  )}
                 </View>
               </View>
             )}

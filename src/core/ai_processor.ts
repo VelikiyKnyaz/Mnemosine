@@ -269,10 +269,7 @@ export const processPendingMemories = async () => {
         // 7. Generar Inbox Tasks — incluyendo detección proactiva
         const ambiguities = [...(aiData.ambiguities || [])];
         
-        // Detección proactiva: si no hay fechas calculadas, forzar DATE_UNCLEAR
-        if (!dates.start_date && !dates.end_date && !ambiguities.includes('DATE_UNCLEAR')) {
-          ambiguities.push('DATE_UNCLEAR');
-        }
+        // Fechas ya no son obligatorias, no se genera DATE_UNCLEAR proactivamente.
 
         if (ambiguities.length > 0) {
           // Remover duplicados si AI devolvió multiples
@@ -282,7 +279,6 @@ export const processPendingMemories = async () => {
             if (amb === 'ENTITY_AMBIGUOUS' || amb === 'LOCATION_UNCLEAR' || amb === 'MEMORY_LOCATION_UNCLEAR') continue;
 
             let question = 'Por favor aclara este detalle.';
-            if (amb === 'DATE_UNCLEAR') question = '¿Cuándo ocurrió esto? Puedes indicar un año, una edad o una fecha aproximada.';
             
             await db.runAsync(
               "INSERT INTO inbox_tasks (id, memory_id, ambiguity_type, question) VALUES (?, ?, ?, ?)",

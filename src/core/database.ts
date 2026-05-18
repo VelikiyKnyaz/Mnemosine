@@ -1,11 +1,48 @@
 import * as SQLite from 'expo-sqlite';
 
 let db: SQLite.SQLiteDatabase | null = null;
+let dbOpenPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export const getDb = async () => {
-  if (db) return db;
-  db = await SQLite.openDatabaseAsync('mnemosine.db');
-  return db;
+/**
+ * Opens or re-opens the SQLite database, applying session-level PRAGMAs.
+ * Uses a promise lock to prevent concurrent openDatabaseAsync calls (race condition).
+ */
+async function openFreshDb(): Promise<SQLite.SQLiteDatabase> {
+  if (dbOpenPromise) return dbOpenPromise;
+
+  dbOpenPromise = (async () => {
+    console.log('[Mnemosine DB] Opening fresh database connection...');
+    const newDb = await SQLite.openDatabaseAsync('mnemosine.db');
+    // Re-apply session-level PRAGMAs (these don't persist across connections)
+    await newDb.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+    db = newDb;
+    return newDb;
+  })();
+
+  try {
+    return await dbOpenPromise;
+  } finally {
+    dbOpenPromise = null;
+  }
+}
+
+/**
+ * Returns a validated SQLite connection. If the native handle has been
+ * invalidated (NullPointerException on Android), automatically reopens.
+ */
+export const getDb = async (): Promise<SQLite.SQLiteDatabase> => {
+  if (db) {
+    try {
+      // Lightweight ping — verifies the native handle is still alive
+      // SELECT 1 on SQLite is < 1ms, negligible overhead
+      await db.getFirstAsync('SELECT 1');
+      return db;
+    } catch (e) {
+      console.warn('[Mnemosine DB] Native handle dead, will reopen.', e);
+      db = null;
+    }
+  }
+  return openFreshDb();
 };
 
 export const initDatabase = async () => {
