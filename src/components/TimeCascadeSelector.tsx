@@ -1,22 +1,32 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Modal, ActivityIndicator } from 'react-native';
-import { Text, IconButton, Button, Appbar, Portal } from 'react-native-paper';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, StyleSheet, Dimensions, Modal, ActivityIndicator, FlatList, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { Text, Appbar, IconButton, TextInput, Button } from 'react-native-paper';
 import { getDb } from '../core/database';
 import { v4 as uuidv4 } from 'uuid';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const COLUMN_WIDTH = SCREEN_WIDTH / 2;
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const COL_WIDTH = SCREEN_WIDTH / 2;
+const ITEM_HEIGHT = 65;
 
-// Alturas base para la unidad de la derecha en cada nivel
-const ROW_HEIGHT = 60; // Pixeles por fila unitaria
+const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
-interface TimeEntity {
-  id: string;
-  name: string;
-  start_date: string;
-  end_date: string;
-  is_custom_period: number;
-}
+const formatDate = (d: Date) => {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const parseDateLocal = (dateStr: string) => {
+  const [yyyy, mm, dd] = dateStr.split('-');
+  return new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
+};
+
+const getBounds = (dateStr: string) => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return { y, m: m - 1, d };
+};
 
 interface TimeCascadeSelectorProps {
   visible: boolean;
@@ -25,37 +35,43 @@ interface TimeCascadeSelectorProps {
   onManageCustom: () => void;
 }
 
-const parseDateStr = (dateStr: string) => {
-  const parts = dateStr.split('-');
-  return new Date(parseInt(parts[0]), parseInt(parts[1] || '1') - 1, parseInt(parts[2] || '1'));
-};
+type ColumnType = 'ROOT' | 'YEARS' | 'MONTHS' | 'DAYS' | 'SUBPERIODS';
 
-const getDaysBetween = (start: Date, end: Date) => {
-  return Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-};
+interface ColumnData {
+  id: string;
+  type: ColumnType;
+  title: string;
+  items: any[];
+  activeIndex?: number; // Para mantener el color del item seleccionado
+  stageId?: string; // Para saber a qué etapa pertenece la columna
+}
 
 export default function TimeCascadeSelector({ visible, onClose, onSelectTime, onManageCustom }: TimeCascadeSelectorProps) {
   const [loading, setLoading] = useState(true);
-  const [stages, setStages] = useState<TimeEntity[]>([]);
-  const [customPeriods, setCustomPeriods] = useState<TimeEntity[]>([]);
+  const [columns, setColumns] = useState<ColumnData[]>([]);
+  const scrollRef = useRef<ScrollView>(null);
+
   const [startYear, setStartYear] = useState(1990);
   const [endYear, setEndYear] = useState(new Date().getFullYear());
   
-  // Paginación horizontal (Zoom Level)
-  const [zoomLevel, setZoomLevel] = useState(0); 
-  // 0: Etapas Generales | Etapas Personalizadas
-  // 1: Etapas Personalizadas | Años
-  // 2: Años | Meses
-  // 3: Meses | Días
+  const [allStages, setAllStages] = useState<any[]>([]);
 
-  // Virtualization state
-  const [scrollY, setScrollY] = useState(0);
-  const scrollViewRef = useRef<ScrollView>(null);
-  const horizontalScrollRef = useRef<ScrollView>(null);
+  // Inline Form State
+  const [inlineFormVisible, setInlineFormVisible] = useState(false);
+  const [showPicker, setShowPicker] = useState<'start' | 'end' | null>(null);
+  const [formData, setFormData] = useState({
+    parent_id: null as string | null,
+    name: '',
+    startDate: new Date(),
+    endDate: new Date()
+  });
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (visible) {
       loadData();
+    } else {
+      setColumns([]);
     }
   }, [visible]);
 
@@ -63,403 +79,662 @@ export default function TimeCascadeSelector({ visible, onClose, onSelectTime, on
     setLoading(true);
     const db = await getDb();
     
-    // Get profile to find start year
     const profile = await db.getFirstAsync<any>('SELECT birth_date FROM user_profile LIMIT 1');
     let bYear = 1990;
     if (profile?.birth_date) {
       bYear = parseInt(profile.birth_date.split('-')[0]);
     }
-    setStartYear(bYear);
-    setEndYear(new Date().getFullYear());
+    
+    if (bYear && !isNaN(bYear)) {
+       const { generateLifecycleStages } = require('../core/chrono_engine');
+       await generateLifecycleStages(bYear);
+    }
 
-    // Load entities
+    const currentYear = new Date().getFullYear();
+    setStartYear(bYear);
+    setEndYear(currentYear + 5);
+
     const entities = await db.getAllAsync<any>("SELECT id, name, metadata FROM entities WHERE type = 'TIME'");
     
-    const general: TimeEntity[] = [];
-    const custom: TimeEntity[] = [];
-
+    const rootItems: any[] = [
+      { id: 'all_years', type: 'ALL_YEARS', label: 'Toda mi vida (Años)', name: 'Toda mi vida', start_date: `${bYear}-01-01`, end_date: `${currentYear + 5}-12-31` }
+    ];
+    
+    const gen: any[] = [];
+    const rootCust: any[] = [];
+    const allStg: any[] = [];
+    
     for (const e of entities) {
       if (e.metadata) {
         try {
           const meta = typeof e.metadata === 'string' ? JSON.parse(e.metadata) : e.metadata;
           if (meta.start_date && meta.end_date) {
-            const mapped = {
+            const payload = {
               id: e.id,
+              type: 'STAGE',
+              label: e.name,
               name: e.name,
               start_date: meta.start_date,
               end_date: meta.end_date,
-              is_custom_period: meta.is_custom_period || 0
+              baseYear: parseInt(meta.start_date.split('-')[0]),
+              parent_id: meta.parent_id || null
             };
-            if (mapped.is_custom_period === 1) {
-              custom.push(mapped);
+            
+            allStg.push(payload);
+
+            if (meta.is_custom_period === 1) {
+              if (!meta.parent_id) {
+                rootCust.push({ ...payload, label: `🌟 ${e.name}` });
+              }
             } else {
-              general.push(mapped);
+              gen.push(payload);
             }
           }
         } catch (err) {}
       }
     }
+
+    setAllStages(allStg);
+
+    gen.sort((a,b) => a.baseYear - b.baseYear);
+    rootCust.sort((a,b) => a.baseYear - b.baseYear);
+
+    const rootItemsList: any[] = [...rootItems];
     
-    // Sort by start_date
-    general.sort((a, b) => a.start_date.localeCompare(b.start_date));
-    custom.sort((a, b) => a.start_date.localeCompare(b.start_date));
+    if (gen.length > 0) {
+      rootItemsList.push({ id: 'h_bio', isHeader: true, label: 'Etapas Biológicas / Generales' });
+      rootItemsList.push(...gen);
+    }
     
-    setStages(general);
-    setCustomPeriods(custom);
+    if (rootCust.length > 0) {
+      rootItemsList.push({ id: 'h_cust', isHeader: true, label: 'Periodos Personales' });
+      rootItemsList.push(...rootCust);
+    }
+
+    rootItemsList.push({ id: 'btn_add_root', type: 'ADD_BUTTON', label: '+ Nuevo Periodo Principal', parentId: null });
+
+    const initialCol: ColumnData = {
+      id: 'col_0_root',
+      type: 'ROOT',
+      title: 'Etapas Principales',
+      items: rootItemsList
+    };
+
+    setColumns([initialCol]);
     setLoading(false);
   };
 
-  const handleScroll = (e: any) => {
-    setScrollY(e.nativeEvent.contentOffset.y);
+  const reloadDataInPlace = async () => {
+    const db = await getDb();
+    const entities = await db.getAllAsync<any>("SELECT id, name, metadata FROM entities WHERE type = 'TIME'");
+    
+    const gen: any[] = [];
+    const rootCust: any[] = [];
+    const allStg: any[] = [];
+    
+    for (const e of entities) {
+      if (e.metadata) {
+        try {
+          const meta = typeof e.metadata === 'string' ? JSON.parse(e.metadata) : e.metadata;
+          if (meta.start_date && meta.end_date) {
+            const payload = {
+              id: e.id, type: 'STAGE', label: e.name, name: e.name,
+              start_date: meta.start_date, end_date: meta.end_date,
+              baseYear: parseInt(meta.start_date.split('-')[0]),
+              parent_id: meta.parent_id || null
+            };
+            allStg.push(payload);
+            if (meta.is_custom_period === 1) {
+              if (!meta.parent_id) rootCust.push({ ...payload, label: `🌟 ${e.name}` });
+            } else {
+              gen.push(payload);
+            }
+          }
+        } catch (err) {}
+      }
+    }
+
+    setAllStages(allStg);
+    gen.sort((a,b) => a.baseYear - b.baseYear);
+    rootCust.sort((a,b) => a.baseYear - b.baseYear);
+
+    setColumns(prevCols => {
+       return prevCols.map(col => {
+          if (col.type === 'ROOT') {
+             const rootItemsList: any[] = [
+               { id: 'all_years', type: 'ALL_YEARS', label: 'Toda mi vida (Años)', name: 'Toda mi vida', start_date: `${startYear}-01-01`, end_date: `${endYear}-12-31` }
+             ];
+             if (gen.length > 0) {
+               rootItemsList.push({ id: 'h_bio', isHeader: true, label: 'Etapas Biológicas / Generales' });
+               rootItemsList.push(...gen);
+             }
+             if (rootCust.length > 0) {
+               rootItemsList.push({ id: 'h_cust', isHeader: true, label: 'Periodos Personales' });
+               rootItemsList.push(...rootCust);
+             }
+             rootItemsList.push({ id: 'btn_add_root', type: 'ADD_BUTTON', label: '+ Nuevo Periodo Principal', parentId: null });
+             return { ...col, items: rootItemsList };
+          } else if (col.type === 'SUBPERIODS') {
+             const children = allStg.filter(s => s.parent_id === col.stageId).map(s => ({ ...s, label: `🌟 ${s.name}` }));
+             children.sort((a,b) => a.baseYear - b.baseYear);
+             const itemsList = [...children];
+             itemsList.push({ id: `btn_add_sub_${col.stageId}`, type: 'ADD_BUTTON', label: '+ Añadir Sub-periodo', parentId: col.stageId });
+             return { ...col, items: itemsList };
+          }
+          return col;
+       });
+    });
   };
 
-  const handleHorizontalScroll = (e: any) => {
-    const x = e.nativeEvent.contentOffset.x;
-    const page = Math.round(x / SCREEN_WIDTH);
-    if (page !== zoomLevel) {
-      setZoomLevel(page);
+  const generateYears = (startStr: string, endStr: string) => {
+    const s = getBounds(startStr);
+    const e = getBounds(endStr);
+    const arr = [];
+    for (let y = s.y; y <= e.y; y++) {
+      arr.push({ id: `y_${y}`, type: 'YEAR', label: `Año ${y}`, name: `Año ${y}`, year: y, start_date: `${y}-01-01`, end_date: `${y}-12-31`, limitStart: startStr, limitEnd: endStr });
+    }
+    return arr;
+  };
+
+  const generateMonths = (y: number, limitStart: string, limitEnd: string) => {
+    const s = getBounds(limitStart);
+    const e = getBounds(limitEnd);
+    let startMonth = 0;
+    let endMonth = 11;
+    if (y === s.y) startMonth = s.m;
+    if (y === e.y) endMonth = e.m;
+    
+    const arr = [];
+    for (let m = startMonth; m <= endMonth; m++) {
+      const mm = String(m + 1).padStart(2, '0');
+      arr.push({ id: `m_${y}_${m}`, type: 'MONTH', label: monthNames[m], name: `${monthNames[m]} ${y}`, year: y, month: m, start_date: `${y}-${mm}-01`, end_date: `${y}-${mm}-28`, limitStart, limitEnd });
+    }
+    return arr;
+  };
+
+  const generateDays = (y: number, m: number, limitStart: string, limitEnd: string) => {
+    const s = getBounds(limitStart);
+    const e = getBounds(limitEnd);
+    let startDay = 1;
+    let endDay = new Date(y, m + 1, 0).getDate();
+    if (y === s.y && m === s.m) startDay = s.d;
+    if (y === e.y && m === e.m) endDay = e.d;
+    
+    const arr = [];
+    const mm = String(m + 1).padStart(2, '0');
+    const mName = monthNames[m];
+    for (let d = startDay; d <= endDay; d++) {
+      const dd = String(d).padStart(2, '0');
+      arr.push({ id: `d_${y}_${m}_${d}`, type: 'DAY', label: `${d}`, name: `${d} de ${mName} ${y}`, year: y, month: m, day: d, start_date: `${y}-${mm}-${dd}`, end_date: `${y}-${mm}-${dd}` });
+    }
+    return arr;
+  };
+
+  const handleItemPress = (item: any, colIndex: number, itemIndex: number) => {
+    let newCols = columns.slice(0, colIndex + 1);
+    newCols[colIndex].activeIndex = itemIndex;
+
+    let newCol: ColumnData | null = null;
+
+    if (item.type === 'ALL_YEARS') {
+      newCol = { id: `years_all`, type: 'YEARS', title: 'Años', items: generateYears(item.start_date, item.end_date) };
+    } else if (item.type === 'STAGE') {
+      const sStr = item.start_date;
+      const eStr = item.end_date;
+      
+      const children = allStages.filter(s => s.parent_id === item.id).map(s => ({ ...s, label: `🌟 ${s.name}` }));
+      children.sort((a,b) => a.baseYear - b.baseYear);
+
+      if (children.length > 0) {
+         const itemsList = [...children];
+         itemsList.push({ id: `btn_add_sub_${item.id}`, type: 'ADD_BUTTON', label: '+ Añadir Sub-periodo', parentId: item.id });
+         newCol = { id: `col_${item.id}`, type: 'SUBPERIODS', title: item.name, items: itemsList, stageId: item.id };
+      } else {
+         const s = getBounds(sStr);
+         const e = getBounds(eStr);
+         let colTitle = item.name;
+         
+         if (s.y === e.y) {
+            if (s.m === e.m) {
+               colType = 'DAYS';
+               itemsList = generateDays(s.y, s.m, sStr, eStr);
+               colTitle = `${item.name} (${monthNames[s.m]} ${s.y})`;
+            } else {
+               colType = 'MONTHS';
+               itemsList = generateMonths(s.y, sStr, eStr);
+               colTitle = `${item.name} (${s.y})`;
+            }
+         } else {
+            colType = 'YEARS';
+            itemsList = generateYears(sStr, eStr);
+            colTitle = `Años en ${item.name}`;
+         }
+         
+         itemsList.push({ id: `btn_add_sub_${item.id}`, type: 'ADD_BUTTON', label: '+ Añadir Sub-periodo', parentId: item.id });
+         newCol = { id: `col_${item.id}`, type: colType, title: colTitle, items: itemsList, stageId: item.id };
+      }
+    } else if (item.type === 'YEAR') {
+      newCol = { id: `months_${item.year}`, type: 'MONTHS', title: `Meses de ${item.year}`, items: generateMonths(item.year, item.limitStart, item.limitEnd) };
+    } else if (item.type === 'MONTH') {
+      newCol = { id: `days_${item.year}_${item.month}`, type: 'DAYS', title: `Días de ${item.label}`, items: generateDays(item.year, item.month, item.limitStart, item.limitEnd) };
+    } else if (item.type === 'DAY') {
+      // Día es el nivel más profundo, solo lo marcamos como activo
+    }
+
+    if (newCol) {
+      const finalCols = [...newCols, newCol];
+      setColumns(finalCols);
+      
+      // Auto-scroll to show the new column completely
+      setTimeout(() => {
+        scrollRef.current?.scrollTo({ x: colIndex * COL_WIDTH, animated: true });
+      }, 100);
+    } else {
+      setColumns(newCols);
     }
   };
 
-  // --- MEMOIZED DATA GENERATION ---
-  
-  const baseStartDate = useMemo(() => new Date(startYear, 0, 1), [startYear]);
-  const baseEndDate = useMemo(() => new Date(endYear, 11, 31), [endYear]);
-  const totalDaysLife = useMemo(() => getDaysBetween(baseStartDate, baseEndDate), [baseStartDate, baseEndDate]);
-  const totalMonthsLife = (endYear - startYear + 1) * 12;
-  const totalYearsLife = endYear - startYear + 1;
-
-  // Render helpers
-  const renderVirtualItem = (
-    key: string,
-    label: string, 
-    yPos: number, 
-    height: number, 
-    isLeft: boolean, 
-    dataPayload: any
-  ) => {
-    // Virtualization check: Render only if visible within window + buffer
-    const isVisible = (yPos + height > scrollY - 500) && (yPos < scrollY + SCREEN_HEIGHT + 500);
-    if (!isVisible) return null;
-
-    return (
-      <TouchableOpacity 
-        key={key}
-        activeOpacity={0.7}
-        onPress={() => onSelectTime(dataPayload)}
-        style={[
-          styles.itemContainer, 
-          { 
-            top: yPos, 
-            height: Math.max(height, 20), // Minimum visible height
-            left: isLeft ? 0 : COLUMN_WIDTH,
-            width: COLUMN_WIDTH,
-            backgroundColor: isLeft ? '#f0f4c3' : '#e8f5e9',
-            borderRightWidth: isLeft ? 1 : 0,
+  const handleItemLongPress = (item: any) => {
+    if (item.type === 'STAGE' && item.label.startsWith('🌟')) {
+      Alert.alert('Confirmar', `¿Eliminar "${item.name}" y todos sus sub-periodos?`, [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Eliminar', style: 'destructive', onPress: async () => {
+          const db = await getDb();
+          
+          const idsToDelete = [item.id];
+          let currentIndex = 0;
+          while (currentIndex < idsToDelete.length) {
+             const currentId = idsToDelete[currentIndex];
+             const children = allStages.filter(s => s.parent_id === currentId).map(s => s.id);
+             idsToDelete.push(...children);
+             currentIndex++;
           }
-        ]}
-      >
-        <Text style={styles.itemText} numberOfLines={2} adjustsFontSizeToFit>{label}</Text>
-      </TouchableOpacity>
+          
+          for (const id of idsToDelete) {
+             await db.runAsync("DELETE FROM entities WHERE id = ?", id);
+          }
+          
+          await reloadDataInPlace();
+        }}
+      ]);
+    }
+  };
+
+  const renderColumn = (col: ColumnData, colIndex: number) => {
+    return (
+      <View key={col.id} style={styles.column}>
+        <View style={styles.colHeader}>
+          <Text style={styles.colHeaderText} numberOfLines={1}>{col.title}</Text>
+        </View>
+        <FlatList
+          data={col.items}
+          keyExtractor={item => item.id}
+          renderItem={({ item, index }) => {
+            if (item.type === 'ADD_BUTTON') {
+              return (
+                <TouchableOpacity style={styles.itemRow} onPress={() => openInlineCreate(item.parentId)}>
+                  <View style={styles.itemTextContainer}>
+                    <Text style={[styles.itemText, { color: '#2e7d32', fontWeight: 'bold' }]} numberOfLines={1}>
+                      {item.label}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            }
+
+            if (item.isHeader) {
+              return (
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionHeaderText}>{item.label}</Text>
+                </View>
+              );
+            }
+
+            const isActive = col.activeIndex === index;
+            const isDeepestLevel = item.type === 'DAY';
+            
+            return (
+              <View style={[styles.itemRow, isActive && styles.itemRowActive]}>
+                <TouchableOpacity 
+                  style={styles.itemTextContainer}
+                  onPress={() => handleItemPress(item, colIndex, index)}
+                  onLongPress={() => handleItemLongPress(item)}
+                  activeOpacity={0.6}
+                >
+                  <Text style={[styles.itemText, isActive && styles.itemTextActive]} numberOfLines={2}>
+                    {item.label}
+                  </Text>
+                  {!isDeepestLevel && <Text style={styles.chevron}>›</Text>}
+                </TouchableOpacity>
+                
+                {/* Botón de Fijar Momento */}
+                {isActive && (
+                  <TouchableOpacity 
+                    style={styles.selectBtn}
+                    onPress={() => onSelectTime(item)}
+                  >
+                    <Text style={styles.selectBtnText}>ASIGNAR</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          }}
+          getItemLayout={(data, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
+          showsVerticalScrollIndicator={false}
+        />
+      </View>
     );
   };
 
-  // --- CALCULATE HEIGHTS AND POSITIONS BASED ON ZOOM LEVEL ---
-  
-  const renderLevel0 = () => {
-    // Scale: 1 Year = ROW_HEIGHT
-    // Total Height: totalYearsLife * ROW_HEIGHT
-    const scaleDaysToPx = (ROW_HEIGHT * 12 * 30) / 360; // Approx 1 year = 360 days for simple scaling
-    const yearToPx = ROW_HEIGHT;
-    const totalHeight = totalYearsLife * yearToPx;
+  const openInlineCreate = (parentId: string | null = null) => {
+    let defaultStart = new Date();
+    let defaultEnd = new Date();
+    if (parentId) {
+       const parent = allStages.find(p => p.id === parentId);
+       if (parent) {
+         defaultStart = parseDateLocal(parent.start_date);
+         defaultEnd = parseDateLocal(parent.end_date);
+       }
+    }
+    setFormData({
+      parent_id: parentId,
+      name: '',
+      startDate: defaultStart,
+      endDate: defaultEnd
+    });
+    setInlineFormVisible(true);
+  };
 
-    const items = [];
+  const onDateChange = (event: any, selectedDate?: Date) => {
+    const currentMode = showPicker;
+    setShowPicker(null);
+    if (event.type === 'set' && selectedDate) {
+      if (currentMode === 'start') {
+        setFormData(prev => ({ ...prev, startDate: selectedDate }));
+      } else if (currentMode === 'end') {
+        setFormData(prev => ({ ...prev, endDate: selectedDate }));
+      }
+    }
+  };
+
+  const handleInlineSave = async () => {
+    if (!formData.name.trim()) return;
+    const sStr = formatDate(formData.startDate);
+    const eStr = formatDate(formData.endDate);
     
-    // Left: General
-    stages.forEach((stg) => {
-      const sY = parseInt(stg.start_date.split('-')[0]) - startYear;
-      const eY = parseInt(stg.end_date.split('-')[0]) - startYear;
-      const yPos = sY * yearToPx;
-      const h = ((eY - sY) + 1) * yearToPx;
-      items.push(renderVirtualItem(`gen-${stg.id}`, stg.name, yPos, h, true, stg));
-    });
+    if (sStr > eStr) {
+      Alert.alert('Error', 'La fecha de inicio no puede ser posterior a la fecha de fin');
+      return;
+    }
 
-    // Right: Custom
-    customPeriods.forEach((stg) => {
-      const sY = parseInt(stg.start_date.split('-')[0]) - startYear;
-      const eY = parseInt(stg.end_date.split('-')[0]) - startYear;
-      const yPos = sY * yearToPx;
-      const h = ((eY - sY) + 1) * yearToPx;
-      items.push(renderVirtualItem(`cust-${stg.id}`, stg.name, yPos, h, false, stg));
-    });
-
-    if (customPeriods.length === 0) {
-      items.push(
-        <View key="no-custom" style={{ position: 'absolute', left: COLUMN_WIDTH, top: 200, width: COLUMN_WIDTH, padding: 20, alignItems: 'center' }}>
-          <Text style={{ textAlign: 'center', color: '#888' }}>No hay periodos personalizados</Text>
-          <Button mode="outlined" onPress={onManageCustom} style={{ marginTop: 10 }}>Crear Uno</Button>
-        </View>
+    if (formData.parent_id) {
+      const parent = allStages.find(p => p.id === formData.parent_id);
+      if (parent && (sStr < parent.start_date || eStr > parent.end_date)) {
+        Alert.alert('Fechas Inválidas', `Debe estar entre ${parent.start_date} y ${parent.end_date}`);
+        return;
+      }
+    }
+    
+    setSaving(true);
+    try {
+      const db = await getDb();
+      const metadata = JSON.stringify({
+        start_date: sStr,
+        end_date: eStr,
+        is_custom_period: 1,
+        parent_id: formData.parent_id
+      });
+      await db.runAsync(
+        "INSERT INTO entities (id, type, name, metadata, is_confirmed) VALUES (?, ?, ?, ?, 1)", 
+        uuidv4(), 'TIME', formData.name.trim(), metadata
       );
-    }
-
-    return { totalHeight, items };
-  };
-
-  const renderLevel1 = () => {
-    // Scale: 1 Year = ROW_HEIGHT
-    const yearToPx = ROW_HEIGHT;
-    const totalHeight = totalYearsLife * yearToPx;
-    const items = [];
-
-    // Left: Custom
-    customPeriods.forEach((stg) => {
-      const sY = parseInt(stg.start_date.split('-')[0]) - startYear;
-      const eY = parseInt(stg.end_date.split('-')[0]) - startYear;
-      const yPos = sY * yearToPx;
-      const h = ((eY - sY) + 1) * yearToPx;
-      items.push(renderVirtualItem(`cust-${stg.id}`, stg.name, yPos, h, true, stg));
-    });
-
-    // Right: Years
-    for (let y = 0; y < totalYearsLife; y++) {
-      const actualYear = startYear + y;
-      const yPos = y * yearToPx;
-      const payload = {
-        name: `Año ${actualYear}`,
-        start_date: `${actualYear}-01-01`,
-        end_date: `${actualYear}-12-31`,
-        is_custom_period: 0
-      };
-      items.push(renderVirtualItem(`yr-${actualYear}`, String(actualYear), yPos, yearToPx, false, payload));
-    }
-
-    return { totalHeight, items };
-  };
-
-  const renderLevel2 = () => {
-    // Scale: 1 Month = ROW_HEIGHT
-    // 1 Year = 12 * ROW_HEIGHT
-    const monthToPx = ROW_HEIGHT;
-    const yearToPx = 12 * monthToPx;
-    const totalHeight = totalYearsLife * yearToPx;
-    const items = [];
-
-    const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-
-    // Left: Years
-    for (let y = 0; y < totalYearsLife; y++) {
-      const actualYear = startYear + y;
-      const yPos = y * yearToPx;
-      const payload = {
-        name: `Año ${actualYear}`,
-        start_date: `${actualYear}-01-01`,
-        end_date: `${actualYear}-12-31`,
-        is_custom_period: 0
-      };
-      items.push(renderVirtualItem(`yr-${actualYear}`, String(actualYear), yPos, yearToPx, true, payload));
       
-      // Right: Months (Optimization: only loop if year is visible)
-      if (yPos + yearToPx > scrollY - 500 && yPos < scrollY + SCREEN_HEIGHT + 500) {
-        for (let m = 0; m < 12; m++) {
-          const myPos = yPos + (m * monthToPx);
-          const mm = String(m + 1).padStart(2, '0');
-          const payloadMonth = {
-            name: `${monthNames[m]} ${actualYear}`,
-            start_date: `${actualYear}-${mm}-01`,
-            end_date: `${actualYear}-${mm}-28`, // simplificado para no calcular ultimo dia aqui
-            is_custom_period: 0
-          };
-          items.push(renderVirtualItem(`mo-${actualYear}-${m}`, monthNames[m], myPos, monthToPx, false, payloadMonth));
-        }
-      }
-    }
-
-    return { totalHeight, items };
-  };
-
-  const renderLevel3 = () => {
-    // Scale: 1 Day = ROW_HEIGHT
-    const dayToPx = ROW_HEIGHT;
-    const items = [];
-    let currentYPos = 0;
-
-    const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-
-    for (let y = 0; y < totalYearsLife; y++) {
-      const actualYear = startYear + y;
-      
-      for (let m = 0; m < 12; m++) {
-        const daysInMonth = new Date(actualYear, m + 1, 0).getDate();
-        const monthHeight = daysInMonth * dayToPx;
-        
-        // Is month visible?
-        if (currentYPos + monthHeight > scrollY - 500 && currentYPos < scrollY + SCREEN_HEIGHT + 500) {
-          // Render Left: Month
-          const mm = String(m + 1).padStart(2, '0');
-          const payloadMonth = {
-            name: `${monthNames[m]} ${actualYear}`,
-            start_date: `${actualYear}-${mm}-01`,
-            end_date: `${actualYear}-${mm}-${daysInMonth}`,
-            is_custom_period: 0
-          };
-          items.push(renderVirtualItem(`mo-${actualYear}-${m}`, payloadMonth.name, currentYPos, monthHeight, true, payloadMonth));
-
-          // Render Right: Days
-          for (let d = 1; d <= daysInMonth; d++) {
-            const dyPos = currentYPos + ((d - 1) * dayToPx);
-            const dd = String(d).padStart(2, '0');
-            const payloadDay = {
-              name: `${d} ${monthNames[m]} ${actualYear}`,
-              start_date: `${actualYear}-${mm}-${dd}`,
-              end_date: `${actualYear}-${mm}-${dd}`,
-              is_custom_period: 0
-            };
-            items.push(renderVirtualItem(`day-${actualYear}-${m}-${d}`, String(d), dyPos, dayToPx, false, payloadDay));
-          }
-        }
-        
-        currentYPos += monthHeight;
-      }
-    }
-
-    return { totalHeight: currentYPos, items };
-  };
-
-  const renderCurrentLevel = () => {
-    switch (zoomLevel) {
-      case 0: return renderLevel0();
-      case 1: return renderLevel1();
-      case 2: return renderLevel2();
-      case 3: return renderLevel3();
-      default: return { totalHeight: 1000, items: [] };
+      setInlineFormVisible(false);
+      await reloadDataInPlace();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSaving(false);
     }
   };
-
-  const currentData = loading ? { totalHeight: 0, items: [] } : renderCurrentLevel();
 
   return (
-    <Portal>
-      <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-        <Appbar.Header style={{ backgroundColor: '#2e7d32' }}>
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <Appbar.Header style={{ backgroundColor: '#2e7d32' }}>
           <Appbar.Action icon="close" color="white" onPress={onClose} />
           <Appbar.Content title="Seleccionar Momento" color="white" />
           <Appbar.Action icon="pencil-outline" color="white" onPress={onManageCustom} />
         </Appbar.Header>
-        
-        <View style={styles.headerRow}>
-          <Text style={styles.colHeader}>{zoomLevel === 0 ? 'Etapas Vida' : zoomLevel === 1 ? 'Etapas Personales' : zoomLevel === 2 ? 'Años' : 'Meses'}</Text>
-          <Text style={styles.colHeader}>{zoomLevel === 0 ? 'Etapas Personales' : zoomLevel === 1 ? 'Años' : zoomLevel === 2 ? 'Meses' : 'Días'}</Text>
-        </View>
 
         {loading ? (
-          <View style={styles.loading}>
-            <ActivityIndicator size="large" color="#2e7d32" />
-          </View>
+          <View style={styles.center}><ActivityIndicator size="large" color="#2e7d32" /></View>
         ) : (
-          <ScrollView 
-            horizontal 
-            pagingEnabled 
-            ref={horizontalScrollRef}
-            onMomentumScrollEnd={handleHorizontalScroll}
-            showsHorizontalScrollIndicator={false}
-            style={styles.horizontalScroll}
-          >
-            {[0, 1, 2, 3].map((pageIndex) => (
-              <View key={`page-${pageIndex}`} style={styles.pageContainer}>
-                {zoomLevel === pageIndex && (
-                  <ScrollView
-                    ref={scrollViewRef}
-                    onScroll={handleScroll}
-                    scrollEventThrottle={16}
-                    contentContainerStyle={{ height: currentData.totalHeight }}
-                    style={styles.verticalScroll}
-                  >
-                    {currentData.items}
-                  </ScrollView>
-                )}
-              </View>
-            ))}
-          </ScrollView>
+          <View style={styles.container}>
+            <ScrollView 
+              horizontal 
+              ref={scrollRef}
+              snapToInterval={COL_WIDTH}
+              decelerationRate="fast"
+              showsHorizontalScrollIndicator={false}
+              style={styles.horizontalScroll}
+            >
+              {columns.map((col, index) => renderColumn(col, index))}
+              
+              {/* Filler column if only 1 column exists, to maintain UI structure */}
+              {columns.length === 1 && (
+                <View style={[styles.column, { backgroundColor: '#f9f9f9', justifyContent: 'center', alignItems: 'center' }]}>
+                  <Text style={{ color: '#aaa', textAlign: 'center', padding: 20 }}>
+                    Toca una etapa para ver sus detalles aquí.
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+          </View>
         )}
-        
-        <View style={styles.pagination}>
-          {[0, 1, 2, 3].map(i => (
-            <View key={i} style={[styles.dot, zoomLevel === i && styles.dotActive]} />
-          ))}
-        </View>
+
+        {/* Modal Flotante de Formulario Inline */}
+        <Modal
+          visible={inlineFormVisible}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setInlineFormVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.dialogContent}>
+              <Text style={styles.dialogTitle}>
+                {formData.parent_id ? 'Nuevo Sub-periodo' : 'Nuevo Periodo Principal'}
+              </Text>
+              
+              <TextInput
+                label="Nombre (ej. Colegio, Semestre 1)"
+                value={formData.name}
+                onChangeText={(t) => setFormData(prev => ({...prev, name: t}))}
+                mode="outlined"
+                style={{ backgroundColor: 'white', marginBottom: 20 }}
+              />
+
+              <View style={styles.datesRow}>
+                <View style={{flex: 1, marginRight: 5}}>
+                  <Text style={styles.dateLabel}>Desde:</Text>
+                  <TouchableOpacity style={styles.dateButton} onPress={() => setShowPicker('start')}>
+                    <Text style={styles.dateButtonText}>{formatDate(formData.startDate)}</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={{flex: 1, marginLeft: 5}}>
+                  <Text style={styles.dateLabel}>Hasta:</Text>
+                  <TouchableOpacity style={styles.dateButton} onPress={() => setShowPicker('end')}>
+                    <Text style={styles.dateButtonText}>{formatDate(formData.endDate)}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.dialogActions}>
+                <Button onPress={() => setInlineFormVisible(false)} style={{marginRight: 10}} textColor="#555">Cancelar</Button>
+                <Button mode="contained" onPress={handleInlineSave} loading={saving} style={{backgroundColor: '#2e7d32'}}>
+                  Crear
+                </Button>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* DateTimePicker nativo */}
+        {showPicker && (
+          <DateTimePicker
+            value={showPicker === 'start' ? formData.startDate : formData.endDate}
+            mode="date"
+            display="default"
+            onChange={onDateChange}
+          />
+        )}
       </Modal>
-    </Portal>
   );
 }
 
 const styles = StyleSheet.create({
-  headerRow: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#ccc',
-    elevation: 2,
-  },
-  colHeader: {
-    width: COLUMN_WIDTH,
-    textAlign: 'center',
-    paddingVertical: 12,
-    fontWeight: 'bold',
-    color: '#2e7d32',
-    borderRightWidth: 1,
-    borderRightColor: '#eee'
-  },
-  horizontalScroll: {
+  container: {
     flex: 1,
-    backgroundColor: '#fafafa',
+    backgroundColor: '#fafafa'
   },
-  pageContainer: {
-    width: SCREEN_WIDTH,
-    flex: 1,
-  },
-  verticalScroll: {
-    flex: 1,
-  },
-  itemContainer: {
-    position: 'absolute',
-    borderBottomWidth: 1,
-    borderBottomColor: '#c8e6c9',
-    borderColor: '#c8e6c9',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 10,
-    overflow: 'hidden'
-  },
-  itemText: {
-    fontSize: 16,
-    color: '#333',
-    fontWeight: '500',
-    textAlign: 'center'
-  },
-  loading: {
+  center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center'
   },
-  pagination: {
-    flexDirection: 'row',
-    justifyContent: 'center',
+  horizontalScroll: {
+    flex: 1
+  },
+  column: {
+    width: COL_WIDTH,
+    borderRightWidth: 1,
+    borderColor: '#e0e0e0',
+    backgroundColor: '#fff'
+  },
+  colHeader: {
+    backgroundColor: '#e8f5e9',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderColor: '#c8e6c9',
     alignItems: 'center',
-    paddingVertical: 10,
-    backgroundColor: 'white',
-    borderTopWidth: 1,
-    borderTopColor: '#eee'
+    paddingHorizontal: 10
   },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#ccc',
-    marginHorizontal: 5
+  colHeaderText: {
+    fontWeight: 'bold',
+    color: '#2e7d32',
+    fontSize: 14
   },
-  dotActive: {
+  sectionHeader: {
+    backgroundColor: '#f5f5f5',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderBottomWidth: 1,
+    borderColor: '#e0e0e0',
+    marginTop: 5
+  },
+  sectionHeaderText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#757575',
+    textTransform: 'uppercase'
+  },
+  itemRow: {
+    flexDirection: 'row',
+    height: ITEM_HEIGHT,
+    borderBottomWidth: 1,
+    borderColor: '#f0f0f0',
+    alignItems: 'center'
+  },
+  itemRowActive: {
+    backgroundColor: '#e3f2fd' // Azul claro para indicar el camino seleccionado
+  },
+  itemTextContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 15,
+    height: '100%'
+  },
+  itemText: {
+    fontSize: 15,
+    color: '#333',
+    flex: 1
+  },
+  itemTextActive: {
+    fontWeight: 'bold',
+    color: '#1565c0'
+  },
+  chevron: {
+    fontSize: 20,
+    color: '#aaa',
+    marginLeft: 5
+  },
+  selectBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 8,
     backgroundColor: '#2e7d32',
-    width: 10,
-    height: 10,
+    borderRadius: 4
+  },
+  selectBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold'
+  },
+  inlineAddBtn: {
+    backgroundColor: '#e8f5e9',
+    padding: 12,
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderColor: '#c8e6c9'
+  },
+  inlineAddBtnText: {
+    color: '#2e7d32',
+    fontWeight: 'bold'
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: 20
+  },
+  dialogContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 20,
+    elevation: 5
+  },
+  dialogTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 15
+  },
+  datesRow: {
+    flexDirection: 'row',
+    marginBottom: 20
+  },
+  dateLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 5,
+    fontWeight: 'bold'
+  },
+  dateButton: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    backgroundColor: '#fafafa'
+  },
+  dateButtonText: {
+    fontSize: 16,
+    color: '#333'
+  },
+  dialogActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end'
   }
 });

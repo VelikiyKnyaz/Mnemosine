@@ -5,6 +5,7 @@ import { getDb } from '../core/database';
 import { v4 as uuidv4 } from 'uuid';
 import TimeCascadeSelector from './TimeCascadeSelector';
 import CustomTimePeriodsScreen from '../features/profile/CustomTimePeriodsScreen';
+import EmotionCascadeSelector from './EmotionCascadeSelector';
 
 interface MemoryEditModalProps {
   memory: any; // Requires at least { id/memory_id, raw_text }
@@ -26,6 +27,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
   // Custom Time Selector States
   const [timeSelectorVisible, setTimeSelectorVisible] = useState(false);
   const [customPeriodsVisible, setCustomPeriodsVisible] = useState(false);
+  const [emotionSelectorVisible, setEmotionSelectorVisible] = useState(false);
 
   useEffect(() => {
     if (visible && memory) {
@@ -164,6 +166,8 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             <Chip icon="plus" onPress={() => {
               if (type === 'TIME') {
                 setTimeSelectorVisible(true);
+              } else if (type === 'EMOTION') {
+                setEmotionSelectorVisible(true);
               } else {
                 setAddingType(type);
                 setNewTagQuery('');
@@ -244,6 +248,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             {renderSection('Personas', 'PERSON', '👤', false)}
             {renderSection('Eventos', 'EVENT', '🎯', false)}
             {renderSection('Objetos', 'OBJECT', '📦', false)}
+            {renderSection('Sentimientos', 'EMOTION', '❤️', false)}
             {renderSection('Lugar', 'LOCATION', '📍', true)}
             {renderSection('Momento/Fecha', 'TIME', '⏳', true)}
 
@@ -264,24 +269,34 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             setCustomPeriodsVisible(true);
           }}
           onSelectTime={async (timeEntity) => {
-             // If selected, add relation and update memory dates
-             let finalEntityId = timeEntity.id;
-             try {
-               const db = await getDb();
-               if (!finalEntityId) {
-                 // It's a generated time (Year, Month, Day) that doesn't exist in DB yet
-                 finalEntityId = uuidv4();
-                 const metadata = JSON.stringify({
-                   start_date: timeEntity.start_date,
-                   end_date: timeEntity.end_date,
-                   is_custom_period: 0
-                 });
-                 await db.runAsync(
-                   "INSERT INTO entities (id, type, name, metadata, is_confirmed) VALUES (?, ?, ?, ?, 1)",
-                   finalEntityId, 'TIME', timeEntity.name, metadata
-                 );
-               }
-               
+            // If selected, add relation and update memory dates
+            let finalEntityId = timeEntity.id;
+            try {
+              const db = await getDb();
+              
+              if (timeEntity.type !== 'STAGE') {
+                // Check if this generated time already exists in the database
+                const existing = await db.getFirstAsync<{id: string}>(
+                  "SELECT id FROM entities WHERE type = 'TIME' AND name = ?", 
+                  timeEntity.name
+                );
+                
+                if (existing) {
+                  finalEntityId = existing.id;
+                } else {
+                  finalEntityId = uuidv4();
+                  const metadata = JSON.stringify({
+                    start_date: timeEntity.start_date,
+                    end_date: timeEntity.end_date,
+                    is_custom_period: 0
+                  });
+                  await db.runAsync(
+                    "INSERT INTO entities (id, type, name, metadata, is_confirmed) VALUES (?, ?, ?, ?, 1)",
+                    finalEntityId, 'TIME', timeEntity.name, metadata
+                  );
+                }
+              }
+              
                // Update Memory start/end dates
                await db.runAsync(
                  "UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?",
@@ -300,6 +315,35 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
           onClose={() => {
             setCustomPeriodsVisible(false);
             setTimeSelectorVisible(true);
+          }}
+        />
+
+        <EmotionCascadeSelector
+          visible={emotionSelectorVisible}
+          onClose={() => setEmotionSelectorVisible(false)}
+          onSelectEmotion={async (emotionPath) => {
+            try {
+              const db = await getDb();
+              const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'EMOTION' AND name = ?", emotionPath);
+              let entityId = existing?.id;
+              
+              if (!entityId) {
+                entityId = uuidv4();
+                await db.runAsync("INSERT INTO entities (id, type, name, is_confirmed) VALUES (?, 'EMOTION', ?, 1)", entityId, emotionPath);
+              }
+
+              const memId = memory.id || memory.memory_id;
+              const pivot = await db.getFirstAsync("SELECT id FROM memory_entities WHERE memory_id = ? AND entity_id = ?", memId, entityId);
+              if (!pivot) {
+                await db.runAsync("INSERT INTO memory_entities (id, memory_id, entity_id) VALUES (?, ?, ?)", uuidv4(), memId, entityId);
+              }
+              
+              loadEntities();
+              onSaved();
+            } catch (e) {
+              console.error(e);
+            }
+            setEmotionSelectorVisible(false);
           }}
         />
 
