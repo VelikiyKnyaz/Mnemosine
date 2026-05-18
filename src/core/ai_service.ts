@@ -1,11 +1,12 @@
 // AI Service - Lee la API Key de AsyncStorage (configurada desde el Panel Admin)
 import { getConfig } from './config';
+import { EMOTIONS_DESCRIPTIONS } from './emotions';
 
 export interface AICategorization {
   title: string;
   sentiment: number;
   time_markers: string[];
-  entities: { name: string; type: 'PERSON' | 'LOCATION' | 'EVENT' | 'OBJECT' | 'TIME'; parent_name?: string }[];
+  entities: { name: string; type: 'PERSON' | 'LOCATION' | 'EVENT' | 'OBJECT' | 'TIME' | 'EMOTION'; parent_name?: string }[];
   ambiguities: string[];
 }
 
@@ -47,13 +48,22 @@ export const extractMemoryData = async (text: string, existingEntitiesContext: s
   const apiKey = await getConfig('OPENAI_API_KEY');
   if (!apiKey) throw new Error('API Key no configurada. Ve al Panel Admin para ingresarla.');
 
+  const allowedEmotions = Object.keys(EMOTIONS_DESCRIPTIONS).join(', ');
+
   const systemPrompt = `Extract metadata from a personal memory into JSON.
 
 KNOWN: [${existingEntitiesContext}]
+ALLOWED_EMOTIONS: [${allowedEmotions}]
 
 OUTPUT:
 - time_markers: Extract all temporal references. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:childhood|teenage|adulthood", "fuzzy:TEXT". Prefer exact_age over life_stage.
-- entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT, TIME. IMPORTANT: Retain complete proper nouns including their descriptive prefixes/suffixes (e.g. keep identifiers like "Hotel", "Museum", "Park", "Mount" if they are part of the recognized place name). For TIME entities, use the descriptive time period (e.g., "Navidad de 1998", "Verano del 2005", "Juventud"). If a reference matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
+- entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT, TIME, EMOTION.
+  RULES FOR ENTITIES:
+  * EMOTION: Analyze the text and infer the user's emotional state. Extract one or more emotions strictly using ONLY the exact labels from ALLOWED_EMOTIONS.
+  * LOCATION: Extract the FULL, exact name of the place (e.g., 'Iglesia de San Francisco' instead of 'San Francisco'). Never truncate a landmark, building, or specific place into a broad city or region name. Differentiate between landmarks and cities.
+  * PERSON: Extract exhaustively ALL people mentioned. Crucially, split group references into distinct individual entities (e.g. 'mis abuelos' -> 'abuelo' and 'abuela', 'mis padres' -> 'padre' and 'madre'). Do not omit anyone.
+  * TIME: Use descriptive time periods (e.g., "Navidad de 1998"). If a life stage or time reference matches a KNOWN entity conceptually (e.g. "mi adolescencia" -> "Adolescencia"), map it strictly to the KNOWN name to inherit custom periods.
+  * GENERAL: If a reference conceptually matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
 - parent_name: Infer and set parent locations based on textual containment. If uncertain, add "ENTITY_AMBIGUOUS" to ambiguities.
 - sentiment: Float from -1.0 to 1.0.
 - title: Max 5 words.
