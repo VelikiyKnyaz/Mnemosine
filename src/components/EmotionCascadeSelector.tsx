@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Dimensions, Modal, FlatList, TouchableOpacity, ScrollView } from 'react-native';
 import { Text, Appbar } from 'react-native-paper';
-import { EMOTIONS_HIERARCHY } from '../core/emotions';
+import { EMOTIONS_HIERARCHY, EMOTIONS_DESCRIPTIONS } from '../core/emotions';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const COL_WIDTH = SCREEN_WIDTH / 2;
@@ -124,12 +124,17 @@ export default function EmotionCascadeSelector({ visible, onClose, onSelectEmoti
                 </TouchableOpacity>
                 
                 {isActive && (
-                  <TouchableOpacity 
-                    style={styles.selectBtn}
-                    onPress={() => onSelectEmotion(item.path)}
-                  >
-                    <Text style={styles.selectBtnText}>ASIGNAR</Text>
-                  </TouchableOpacity>
+                  <View style={styles.activeContainer}>
+                    <Text style={styles.descriptionText}>
+                      {EMOTIONS_DESCRIPTIONS[item.label] || "Una emoción fundamental en tu espectro sentimental."}
+                    </Text>
+                    <TouchableOpacity 
+                      style={styles.selectBtn}
+                      onPress={() => onSelectEmotion(item.label)}
+                    >
+                      <Text style={styles.selectBtnText}>ASIGNAR {item.label.toUpperCase()}</Text>
+                    </TouchableOpacity>
+                  </View>
                 )}
               </View>
             );
@@ -195,22 +200,20 @@ const styles = StyleSheet.create({
     fontSize: 14
   },
   itemRow: {
-    flexDirection: 'row',
-    height: ITEM_HEIGHT,
     borderBottomWidth: 1,
     borderColor: '#f0f0f0',
-    alignItems: 'center'
+    minHeight: ITEM_HEIGHT
   },
   itemRowActive: {
-    backgroundColor: '#fce4ec' 
+    backgroundColor: '#fce4ec',
+    paddingBottom: 10
   },
   itemTextContainer: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 15,
-    height: '100%'
+    height: ITEM_HEIGHT
   },
   itemText: {
     fontSize: 15,
@@ -226,16 +229,28 @@ const styles = StyleSheet.create({
     color: '#aaa',
     marginLeft: 5
   },
+  activeContainer: {
+    paddingHorizontal: 15,
+    marginTop: -5,
+  },
+  descriptionText: {
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
+    marginBottom: 10,
+    lineHeight: 16
+  },
   selectBtn: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginRight: 8,
+    paddingVertical: 8,
     backgroundColor: '#c2185b',
-    borderRadius: 4
+    borderRadius: 6,
+    alignSelf: 'flex-start'
   },
   selectBtnText: {
     color: '#fff',
     fontSize: 12,
-    fontWeight: 'bold'
+    fontWeight: 'bold',
+    textAlign: 'center'
   }
 });
