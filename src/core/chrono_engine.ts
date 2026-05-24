@@ -56,6 +56,20 @@ export const calculateDatesFromMarkers = async (timeMarkers: string[]): Promise<
       startDate = value;
       endDate = value;
 
+    } else if (type === 'exact_month') {
+      // Formato: exact_month:2026-05
+      const dateParts = value.split('-');
+      if (dateParts.length === 2) {
+        const y = parseInt(dateParts[0]);
+        const m = parseInt(dateParts[1]);
+        if (!isNaN(y) && !isNaN(m) && m >= 1 && m <= 12) {
+          const monthStr = String(m).padStart(2, '0');
+          startDate = `${y}-${monthStr}-01`;
+          const lastDay = new Date(y, m, 0).getDate();
+          endDate = `${y}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+        }
+      }
+
     } else if (type === 'relative_years') {
       const offset = parseInt(value);
       const y = currentYear + offset;

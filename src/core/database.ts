@@ -70,6 +70,8 @@ export const initDatabase = async () => {
       timestamp_inferred INTEGER,
       sync_status TEXT DEFAULT 'DRAFT',
       sentiment_score REAL,
+      time_context TEXT,
+      space_context TEXT,
       created_at INTEGER DEFAULT (cast(strftime('%s','now') as int))
     );
 
@@ -129,7 +131,9 @@ export const initDatabase = async () => {
       entity_id TEXT NOT NULL,
       FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
     );`,
-    'CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_unique ON entity_aliases(alias);'
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_unique ON entity_aliases(alias);',
+    'ALTER TABLE memories ADD COLUMN time_context TEXT;',
+    'ALTER TABLE memories ADD COLUMN space_context TEXT;'
   ];
 
   for (const query of migrations) {

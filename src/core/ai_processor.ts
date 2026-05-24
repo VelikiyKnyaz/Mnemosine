@@ -184,12 +184,16 @@ export const processPendingMemories = async () => {
       }
     }
 
-    // 1. Fetch pending memories
-    const pendingMemories = await db.getAllAsync(
-      "SELECT id, raw_text, audio_uri, created_at FROM memories WHERE sync_status = 'PENDING_AI'"
-    ) as {id: string, raw_text: string | null, audio_uri: string | null, created_at: number}[];
+    // 1. Fetch and process pending memories one by one
+    while (true) {
+      const memory = await db.getFirstAsync(
+        "SELECT id, raw_text, audio_uri, created_at, time_context, space_context FROM memories WHERE sync_status = 'PENDING_AI' LIMIT 1"
+      ) as {id: string, raw_text: string | null, audio_uri: string | null, created_at: number, time_context: string | null, space_context: string | null} | null;
 
-    for (const memory of pendingMemories) {
+      if (!memory) {
+        break;
+      }
+
       let textToProcess = memory.raw_text || '';
 
       try {
@@ -212,15 +216,15 @@ export const processPendingMemories = async () => {
         const segments = await segmentMemoryText(textToProcess);
         if (segments && segments.length > 1) {
           console.log(`Memory ${memory.id} split into ${segments.length} fragments.`);
-          // Update current memory raw_text to be only the first fragment
-          textToProcess = segments[0];
+          // Update current memory raw_text to be only the first fragment's text
+          textToProcess = segments[0].text;
           
-          // Insert the remaining fragments as new memories in the database
+          // Insert the remaining fragments as new memories in the database, carrying over inherited contexts
           for (let i = 1; i < segments.length; i++) {
             const newId = uuidv4();
             await db.runAsync(
-              "INSERT INTO memories (id, raw_text, sync_status, created_at) VALUES (?, ?, 'PENDING_AI', ?)",
-              newId, segments[i].trim(), memory.created_at
+              "INSERT INTO memories (id, raw_text, sync_status, created_at, time_context, space_context) VALUES (?, ?, 'PENDING_AI', ?, ?, ?)",
+              newId, segments[i].text.trim(), memory.created_at, segments[i].inherited_time, segments[i].inherited_location
             );
           }
         }
@@ -265,7 +269,7 @@ export const processPendingMemories = async () => {
         const allContextEntities = [...matchingTimeEntitiesList, ...existingEntities];
         const existingNamesStr = allContextEntities.map(e => e.name).join(', ');
 
-        const aiData = await extractMemoryData(textToProcess, existingNamesStr);
+        const aiData = await extractMemoryData(textToProcess, existingNamesStr, memory.time_context || '', memory.space_context || '');
 
 
         // 4. Calcular Fechas Algorítmicas
@@ -391,6 +395,12 @@ export const processPendingMemories = async () => {
 
       } catch (innerError) {
         console.error(`Failed to process memory ${memory.id}:`, innerError);
+        try {
+          await db.runAsync("UPDATE memories SET sync_status = 'PROCESSED_LOCAL' WHERE id = ?", memory.id);
+        } catch (dbErr) {
+          console.error(`Failed to update status for broken memory ${memory.id}:`, dbErr);
+          break;
+        }
       }
     }
 
