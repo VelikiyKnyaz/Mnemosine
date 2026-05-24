@@ -21,58 +21,6 @@ const hasWordMatch = (normalizedText: string, searchWord: string): boolean => {
   return regex.test(normalizedText);
 };
 
-// ===========================
-// PLACE KEYWORDS - words that ALWAYS indicate a LOCATION, never an OBJECT
-// ===========================
-const PLACE_KEYWORDS = [
-  // Spanish - Buildings & Establishments
-  'iglesia', 'hospital', 'hotel', 'restaurante', 'parque', 'colegio', 'escuela',
-  'universidad', 'casa', 'museo', 'catedral', 'templo', 'aeropuerto', 'estacion',
-  'plaza', 'mercado', 'tienda', 'bar', 'cafe', 'teatro', 'cine', 'biblioteca',
-  'estadio', 'gimnasio', 'finca', 'hacienda', 'granja',
-  'capilla', 'basilica', 'santuario', 'monasterio', 'convento', 'cementerio',
-  'clinica', 'consultorio', 'farmacia', 'supermercado', 'edificio', 'torre',
-  'castillo', 'palacio', 'fortaleza', 'salon', 'sala', 'cocina', 'habitacion',
-  'patio', 'jardin', 'terraza', 'balcon', 'piscina', 'cancha', 'campo',
-  'oficina', 'banco', 'juzgado', 'comisaria', 'cuartel',
-  // Spanish - Infrastructure & Transit
-  'terminal', 'parada', 'metro', 'autopista', 'carretera', 'puente', 'puerto', 'muelle',
-  'calle', 'avenida', 'barrio', 'comuna', 'vereda', 'pueblo', 'aldea',
-  // Spanish - Natural formations
-  'rio', 'lago', 'playa', 'montana', 'montaña', 'volcan', 'cueva', 'bosque',
-  'selva', 'desierto', 'isla', 'cascada', 'valle', 'cerro', 'colina',
-  // Spanish - Commercial
-  'centro comercial', 'pasaje', 'galeria', 'almacen',
-  // English equivalents
-  'church', 'park', 'school', 'beach', 'mountain', 'river', 'lake', 'forest',
-  'bridge', 'castle', 'palace', 'tower', 'station', 'airport', 'port',
-  'office', 'clinic', 'pharmacy', 'mall', 'store', 'shop', 'gym',
-  'pool', 'court', 'field', 'room', 'kitchen', 'garden', 'museum',
-  'cathedral', 'temple', 'cemetery', 'farm', 'ranch', 'village', 'town',
-  'hotel', 'restaurant', 'bar', 'cafe', 'theater', 'cinema', 'library',
-  'stadium', 'building', 'house', 'apartment',
-];
-
-/**
- * Reclassifies OBJECT entities to LOCATION if their name contains place keywords.
- * This is a deterministic code-level fix to prevent the AI from misclassifying
- * buildings and places as objects.
- */
-function reclassifyMisclassifiedObjects(entities: { name: string; type: string; parent_name?: string }[]): void {
-  for (const entity of entities) {
-    if (entity.type !== 'OBJECT') continue;
-    
-    const normalizedName = normalizeString(entity.name);
-    for (const keyword of PLACE_KEYWORDS) {
-      const normalizedKeyword = normalizeString(keyword);
-      if (normalizedName.includes(normalizedKeyword)) {
-        console.log(`Reclassifying OBJECT -> LOCATION: "${entity.name}" (matched keyword: "${keyword}")`);
-        entity.type = 'LOCATION';
-        break;
-      }
-    }
-  }
-}
 
 /**
  * Derives a time marker string from computed start_date and end_date.
@@ -365,11 +313,6 @@ export const processPendingMemories = async () => {
         // POST-PROCESSING: Deterministic code-level fixes
         // =====================================================================
 
-        // FIX 1: Reclassify OBJECTs that are actually places -> LOCATION
-        if (aiData.entities) {
-          reclassifyMisclassifiedObjects(aiData.entities);
-        }
-
         // FIX 2: Filter emotions to only allow valid ones from EMOTIONS_DESCRIPTIONS
         const validEmotionsKeys = Object.keys(EMOTIONS_DESCRIPTIONS);
         const emotionsMapLower = new Map<string, string>();
@@ -405,8 +348,23 @@ export const processPendingMemories = async () => {
           const locations = aiData.entities.filter(e => e.type === 'LOCATION');
           if (locations.length > 1) {
             console.log(`Memory ${memory.id} has ${locations.length} locations. Enforcing single location limit.`);
-            // Prefer the location with a parent_name (most specific), otherwise the first one
-            const bestLocation = locations.find(l => l.parent_name) || locations[0];
+            
+            // Build a set of names that appear as parent_name of another location.
+            // Those are territories (less specific) and must be discarded.
+            const parentNames = new Set<string>();
+            for (const loc of locations) {
+              if (loc.parent_name) {
+                parentNames.add(loc.parent_name.toLowerCase());
+              }
+            }
+
+            // Filter: remove locations whose name matches a parent_name (they're territories)
+            let candidates = locations.filter(l => !parentNames.has(l.name.toLowerCase()));
+            if (candidates.length === 0) candidates = locations; // safety fallback
+
+            // Among remaining candidates, prefer the one with parent_name (most specific)
+            const bestLocation = candidates.find(l => l.parent_name) || candidates[0];
+            
             aiData.entities = aiData.entities.filter(e => {
               if (e.type === 'LOCATION') {
                 return e.name === bestLocation.name;

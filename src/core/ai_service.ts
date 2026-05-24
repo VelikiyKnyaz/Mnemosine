@@ -68,17 +68,18 @@ OUTPUT:
 - entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT, TIME, EMOTION.
   RULES FOR ENTITIES:
   * EMOTION: Analyze the text and infer the user's emotional state. Extract one or more emotions strictly using ONLY the exact labels from ALLOWED_EMOTIONS.
-  * LOCATION: Extract the ONE specific physical place where the events of this fragment took place. Return AT MOST ONE LOCATION entity.
-    - WHAT IS A LOCATION: Any physical space where people can be present: buildings (churches, hospitals, hotels, schools, houses), parks, plazas, stadiums, airports, stations, farms, landmarks, natural formations (rivers, mountains, beaches, lakes), rooms, venues, neighborhoods, cities, countries. ALL of these are LOCATION, NEVER OBJECT.
-    - SPECIFICITY RULE: If both a specific place AND its containing territory are mentioned (e.g., a church in a city, a hotel in a town), extract ONLY the most specific place as the LOCATION entity. Put the containing territory (city/state/country) in the 'parent_name' field. Do NOT create separate LOCATION entities for territories.
-    - If no specific building/landmark is mentioned, the city/town itself is the LOCATION.
+  * LOCATION: You must extract EXACTLY ONE LOCATION entity — the MOST SPECIFIC physical place where the core events of this fragment happened.
+    - SPECIFICITY HIERARCHY (from most to least specific): room/hall/space inside a building > building/establishment/landmark/venue > park/plaza/neighborhood > city/town/village > state/region/department > country. ALWAYS choose the HIGHEST specificity level mentioned in the text.
+    - If the text mentions a specific building, landmark, venue, park, or any named physical space AND ALSO mentions the city/state/country that contains it, you MUST extract the specific place as the LOCATION and put the city/state/country in 'parent_name'. The territory is NEVER the LOCATION when a more specific place inside it is mentioned.
+    - A city/town is ONLY the LOCATION when NO more specific place within it is mentioned.
+    - Any physical space where people can be present is a LOCATION: buildings, churches, hospitals, hotels, schools, houses, parks, plazas, stadiums, airports, stations, farms, landmarks, natural formations (rivers, mountains, beaches, lakes), rooms, venues, neighborhoods, cities, countries. These are ALL LOCATION, NEVER OBJECT.
     - Use CONTEXT_LOCATION to resolve relative references (e.g., "allí", "en ese lugar") if needed.
-  * OBJECT: ONLY extract portable, inanimate, man-made physical items that a person can carry or move (e.g., 'libro', 'carta', 'regalo', 'carro', 'maleta'). If in doubt whether something is a LOCATION or OBJECT, it is a LOCATION.
+  * OBJECT: ONLY portable, inanimate items that a person can physically carry or move by hand (e.g., 'libro', 'carta', 'regalo', 'maleta'). Any structure, building, space, terrain, or natural formation is LOCATION, not OBJECT.
   * PERSON: Extract exhaustively ALL people mentioned. Split group references into distinct individuals (e.g. 'mis abuelos' -> 'abuelo' and 'abuela', 'mis padres' -> 'padre' and 'madre'). Do not omit anyone.
   * TIME: Use descriptive time periods (e.g., "Navidad de 1998"). If a life stage or time reference matches a KNOWN entity conceptually—including macro-stages, custom stages, or nested sub-stages (e.g. "mi adolescencia" -> "Adolescencia", "en el colegio" -> "Colegio", "primer año de universidad" -> "Primer Año")—map it strictly to the KNOWN name to inherit custom periods. CRITICAL: Only assign a stage or sub-stage if there is SUFFICIENT certainty and evidence in the text. Do not guess.
   * FOCUS & RELEVANCE: Only extract entities that are active parts of the memory being described. Do NOT extract entities mentioned purely as narrative connectors, passive comparisons, or references to other past/future memories.
   * GENERAL: If a reference conceptually matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
-- parent_name: Infer and set parent locations based on textual containment. If uncertain, add "ENTITY_AMBIGUOUS" to ambiguities.
+- parent_name: For the LOCATION entity, set parent_name to the containing territory (city/state/country). If uncertain, add "ENTITY_AMBIGUOUS" to ambiguities.
 - sentiment: Float from -1.0 to 1.0.
 - title: Max 5 words.
 
