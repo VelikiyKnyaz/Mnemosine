@@ -281,6 +281,9 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
 
               if (timeEntity.type === 'STAGE') {
                 await addEntityRelation(timeEntity.id);
+              } else {
+                loadEntities();
+                onSaved();
               }
             } catch (e) {
               console.error('Error saving selected time:', e);
