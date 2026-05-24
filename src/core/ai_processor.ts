@@ -349,6 +349,20 @@ export const processPendingMemories = async () => {
               type: 'LOCATION'
             });
           }
+
+          // Filtro Estricto: Mantener estrictamente como máximo una ubicación (LOCATION) por recuerdo
+          const locations = aiData.entities.filter(e => e.type === 'LOCATION');
+          if (locations.length > 1) {
+            console.log(`Memory ${memory.id} has ${locations.length} locations. Enforcing single location limit.`);
+            // Preferimos la ubicación más específica (que tenga parent_name), de lo contrario la primera
+            const bestLocation = locations.find(l => l.parent_name) || locations[0];
+            aiData.entities = aiData.entities.filter(e => {
+              if (e.type === 'LOCATION') {
+                return e.name === bestLocation.name;
+              }
+              return true;
+            });
+          }
         }
 
         // 6. Hydrate Entities (LOCATIONs created without coords, confirmed in Atlas)
