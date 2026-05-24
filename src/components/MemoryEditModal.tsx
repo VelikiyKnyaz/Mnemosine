@@ -18,6 +18,8 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
   const [editText, setEditText] = useState('');
   const [entities, setEntities] = useState<any[]>([]);
   const [allEntities, setAllEntities] = useState<any[]>([]);
+  const [memoryDates, setMemoryDates] = useState<{ start_date: string | null, end_date: string | null } | null>(null);
+  const [refiningEntity, setRefiningEntity] = useState<any | null>(null);
   
   // Tagging states
   const [addingType, setAddingType] = useState<string | null>(null);
@@ -34,10 +36,12 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
       setEditText(memory.raw_text || '');
       setAddingType(null);
       setNewTagQuery('');
+      setRefiningEntity(null);
       loadEntities();
     } else if (!visible) {
       setAddingType(null);
       setNewTagQuery('');
+      setRefiningEntity(null);
     }
   }, [visible, memory]);
 
@@ -54,6 +58,16 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
         memId
       );
       setEntities(associated);
+
+      const memRecord = await db.getFirstAsync("SELECT start_date, end_date FROM memories WHERE id = ?", memId) as { start_date: string | null, end_date: string | null } | null;
+      if (memRecord) {
+        setMemoryDates({
+          start_date: memRecord.start_date,
+          end_date: memRecord.end_date
+        });
+      } else {
+        setMemoryDates(null);
+      }
 
       const all = await db.getAllAsync<any>("SELECT id, name, type FROM entities");
       setAllEntities(all);
@@ -106,11 +120,29 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     const memId = memory.id || memory.memory_id;
     try {
       const db = await getDb();
-      await db.runAsync("DELETE FROM memory_entities WHERE memory_id = ? AND entity_id = ?", memId, entityId);
+      if (entityId === 'virtual_time') {
+        await db.runAsync("UPDATE memories SET start_date = NULL, end_date = NULL WHERE id = ?", memId);
+        setMemoryDates(null);
+      } else {
+        await db.runAsync("DELETE FROM memory_entities WHERE memory_id = ? AND entity_id = ?", memId, entityId);
+      }
       loadEntities();
       onSaved();
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleChipPress = (entity: any, type: string) => {
+    setRefiningEntity(entity);
+    if (type === 'TIME') {
+      setTimeSelectorVisible(true);
+    } else if (type === 'EMOTION') {
+      setEmotionSelectorVisible(true);
+    } else {
+      setAddingType(type);
+      setNewTagQuery(entity.name);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     }
   };
 
@@ -119,6 +151,27 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     const memId = memory.id || memory.memory_id;
     try {
       const db = await getDb();
+
+      // If we are refining an entity, delete the old relation first
+      if (refiningEntity) {
+        await db.runAsync(
+          "DELETE FROM memory_entities WHERE memory_id = ? AND entity_id = ?",
+          memId, refiningEntity.id
+        );
+        setRefiningEntity(null);
+      }
+
+      // Also, if the entity type is single-value (TIME or LOCATION), enforce single relation
+      const entityInfo = await db.getFirstAsync("SELECT type FROM entities WHERE id = ?", entityId) as {type: string} | null;
+      if (entityInfo && (entityInfo.type === 'LOCATION' || entityInfo.type === 'TIME')) {
+        await db.runAsync(
+          `DELETE FROM memory_entities 
+           WHERE memory_id = ? 
+           AND entity_id IN (SELECT id FROM entities WHERE type = ? AND id != ?)`,
+          memId, entityInfo.type, entityId
+        );
+      }
+
       const existing = await db.getFirstAsync("SELECT 1 FROM memory_entities WHERE memory_id = ? AND entity_id = ?", memId, entityId);
       if (!existing) {
         const pivotId = uuidv4();
@@ -145,7 +198,14 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
   };
 
   const renderSection = (title: string, type: string, icon: string, isSingle: boolean) => {
-    const items = entities.filter(e => e.type === type);
+    let items = entities.filter(e => e.type === type);
+
+    if (type === 'TIME' && items.length === 0 && memoryDates && memoryDates.start_date) {
+      const dateName = memoryDates.start_date === memoryDates.end_date
+        ? memoryDates.start_date
+        : `${memoryDates.start_date} a ${memoryDates.end_date}`;
+      items = [{ id: 'virtual_time', name: dateName, type: 'TIME', isVirtual: true }];
+    }
     const canAdd = !isSingle || items.length === 0;
 
     const filteredSuggestions = allEntities
@@ -158,12 +218,18 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
         <Text style={styles.sectionTitle}>{icon} {title}</Text>
         <View style={styles.chipsContainer}>
           {items.map(e => (
-            <Chip key={e.id} onClose={() => removeEntity(e.id)} style={styles.chip}>
+            <Chip 
+              key={e.id} 
+              onClose={() => removeEntity(e.id)} 
+              onPress={() => handleChipPress(e, type)}
+              style={styles.chip}
+            >
               {e.name}
             </Chip>
           ))}
           {canAdd && addingType !== type && (
             <Chip icon="plus" onPress={() => {
+              setRefiningEntity(null);
               if (type === 'TIME') {
                 setTimeSelectorVisible(true);
               } else if (type === 'EMOTION') {
@@ -218,7 +284,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
                  </TouchableOpacity>
                )}
             </ScrollView>
-            <Button onPress={() => { setAddingType(null); setNewTagQuery(''); }} style={{marginTop: 5}}>Cancelar Añadir</Button>
+            <Button onPress={() => { setAddingType(null); setNewTagQuery(''); setRefiningEntity(null); }} style={{marginTop: 5}}>Cancelar Añadir</Button>
           </View>
         )}
       </View>
@@ -263,7 +329,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
         {/* Modales de Tiempo */}
         <TimeCascadeSelector
           visible={timeSelectorVisible}
-          onClose={() => setTimeSelectorVisible(false)}
+          onClose={() => { setTimeSelectorVisible(false); setRefiningEntity(null); }}
           onManageCustom={() => {
             setTimeSelectorVisible(false);
             setCustomPeriodsVisible(true);
@@ -272,6 +338,17 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             // If selected, add relation (only for STAGE) and update memory dates
             try {
               const db = await getDb();
+
+              // If refining, delete the old stage relation
+              if (refiningEntity) {
+                if (refiningEntity.id !== 'virtual_time') {
+                  await db.runAsync(
+                    "DELETE FROM memory_entities WHERE memory_id = ? AND entity_id = ?",
+                    memory.id || memory.memory_id, refiningEntity.id
+                  );
+                }
+                setRefiningEntity(null);
+              }
               
               // Update Memory start/end dates
               await db.runAsync(
@@ -282,6 +359,17 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
               if (timeEntity.type === 'STAGE') {
                 await addEntityRelation(timeEntity.id);
               } else {
+                // If they selected a specific date, remove any existing TIME stage entity relations
+                await db.runAsync(
+                  `DELETE FROM memory_entities 
+                   WHERE memory_id = ? 
+                   AND entity_id IN (SELECT id FROM entities WHERE type = 'TIME')`,
+                  memory.id || memory.memory_id
+                );
+                setMemoryDates({
+                  start_date: timeEntity.start_date,
+                  end_date: timeEntity.end_date
+                });
                 loadEntities();
                 onSaved();
               }
@@ -301,10 +389,19 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
 
         <EmotionCascadeSelector
           visible={emotionSelectorVisible}
-          onClose={() => setEmotionSelectorVisible(false)}
+          onClose={() => { setEmotionSelectorVisible(false); setRefiningEntity(null); }}
           onSelectEmotion={async (emotionPath) => {
             try {
               const db = await getDb();
+
+              if (refiningEntity) {
+                await db.runAsync(
+                  "DELETE FROM memory_entities WHERE memory_id = ? AND entity_id = ?",
+                  memory.id || memory.memory_id, refiningEntity.id
+                );
+                setRefiningEntity(null);
+              }
+
               const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'EMOTION' AND name = ?", emotionPath);
               let entityId = existing?.id;
               

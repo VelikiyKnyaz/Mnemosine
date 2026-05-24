@@ -103,3 +103,48 @@ OUTPUT:
     throw error;
   }
 };
+
+export const segmentMemoryText = async (text: string): Promise<string[]> => {
+  const apiKey = await getConfig('OPENAI_API_KEY');
+  if (!apiKey) throw new Error('API Key no configurada. Ve al Panel Admin para ingresarla.');
+
+  const systemPrompt = `You are an AI editor for a memory journal application.
+Analyze the provided journal text and segment/split it into distinct chronological fragments (memories) ONLY when there is a shift in location (place/space) or a change of day/date (time).
+RULES:
+1. If the text describes a continuous scene in the same location and time, do not split it.
+2. If there are no space-time shifts, return the original text as the single segment.
+3. Keep the exact text and wording of each segment as it appears in the original text (preserving its meaning and tone).
+4. Return the result strictly in JSON format as an array of strings under the key "segments".
+Format: {"segments": ["fragment 1", "fragment 2", ...]}`.trim();
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: text },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.1,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`GPT API error during segmentation: ${errText}`);
+    }
+
+    const data = await response.json();
+    const result = JSON.parse(data.choices[0].message.content) as { segments: string[] };
+    return result.segments || [text];
+  } catch (error) {
+    console.error('Segmentation failed:', error);
+    return [text];
+  }
+};

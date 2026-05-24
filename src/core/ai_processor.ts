@@ -1,5 +1,5 @@
 import { getDb, inheritCoordinatesFromParent } from './database';
-import { transcribeAudio, extractMemoryData } from './ai_service';
+import { transcribeAudio, extractMemoryData, segmentMemoryText } from './ai_service';
 import { calculateDatesFromMarkers, generateLifecycleStages } from './chrono_engine';
 import { getConfig } from './config';
 import 'react-native-get-random-values';
@@ -185,9 +185,9 @@ export const processPendingMemories = async () => {
     }
 
     // 1. Fetch pending memories
-    const pendingMemories = await db.getAllAsync<{id: string, raw_text: string | null, audio_uri: string | null}>(
-      "SELECT id, raw_text, audio_uri FROM memories WHERE sync_status = 'PENDING_AI'"
-    );
+    const pendingMemories = await db.getAllAsync(
+      "SELECT id, raw_text, audio_uri, created_at FROM memories WHERE sync_status = 'PENDING_AI'"
+    ) as {id: string, raw_text: string | null, audio_uri: string | null, created_at: number}[];
 
     for (const memory of pendingMemories) {
       let textToProcess = memory.raw_text || '';
@@ -205,6 +205,24 @@ export const processPendingMemories = async () => {
           console.log('Skipping empty memory');
           await db.runAsync("UPDATE memories SET sync_status = 'PROCESSED_LOCAL' WHERE id = ?", memory.id);
           continue;
+        }
+
+        // Segment the text into space-time fragments if it mentions shifts in space or time
+        console.log(`Segmenting text for memory ${memory.id}`);
+        const segments = await segmentMemoryText(textToProcess);
+        if (segments && segments.length > 1) {
+          console.log(`Memory ${memory.id} split into ${segments.length} fragments.`);
+          // Update current memory raw_text to be only the first fragment
+          textToProcess = segments[0];
+          
+          // Insert the remaining fragments as new memories in the database
+          for (let i = 1; i < segments.length; i++) {
+            const newId = uuidv4();
+            await db.runAsync(
+              "INSERT INTO memories (id, raw_text, sync_status, created_at) VALUES (?, ?, 'PENDING_AI', ?)",
+              newId, segments[i].trim(), memory.created_at
+            );
+          }
         }
 
         console.log(`Extracting data for memory ${memory.id}`);
