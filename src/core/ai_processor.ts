@@ -1,5 +1,6 @@
 import { getDb, inheritCoordinatesFromParent } from './database';
 import { transcribeAudio, extractMemoryData, segmentMemoryText } from './ai_service';
+import { EMOTIONS_DESCRIPTIONS } from './emotions';
 import { calculateDatesFromMarkers, generateLifecycleStages } from './chrono_engine';
 import { getConfig } from './config';
 import 'react-native-get-random-values';
@@ -275,7 +276,13 @@ export const processPendingMemories = async () => {
         // 4. Calcular Fechas Algorítmicas
         let dates = await calculateDatesFromMarkers(aiData.time_markers || []);
 
-        // Fallback: Si no se determinaron fechas específicas, verificar si se extrajo una etapa biológica o personalizada (entidades de tipo TIME)
+        // Fallback 1: Si no se extrajeron fechas pero hay un time_context heredado del fragmentador, usarlo
+        if (!dates.start_date && !dates.end_date && memory.time_context) {
+          console.log(`No dates extracted for memory ${memory.id}, inheriting from time_context: ${memory.time_context}`);
+          dates = await calculateDatesFromMarkers([memory.time_context]);
+        }
+
+        // Fallback 2: Si no se determinaron fechas específicas, verificar si se extrajo una etapa biológica o personalizada (entidades de tipo TIME)
         if (!dates.start_date && !dates.end_date && aiData.entities) {
           const timeEntities = aiData.entities.filter(e => e.type === 'TIME');
           for (const te of timeEntities) {
@@ -311,6 +318,38 @@ export const processPendingMemories = async () => {
           "UPDATE memories SET raw_text = ?, start_date = ?, end_date = ?, sentiment_score = ?, sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
           textToProcess.trim(), dates.start_date, dates.end_date, aiData.sentiment, memory.id
         );
+
+        // Filtrar y validar EMOTIONs para que sólo contengan emociones de EMOTIONS_DESCRIPTIONS (evitando alucinaciones de la IA)
+        const validEmotionsKeys = Object.keys(EMOTIONS_DESCRIPTIONS);
+        const emotionsMapLower = new Map<string, string>();
+        for (const key of validEmotionsKeys) {
+          emotionsMapLower.set(key.toLowerCase(), key);
+        }
+
+        if (aiData.entities) {
+          aiData.entities = aiData.entities.filter(entity => {
+            if (entity.type === 'EMOTION') {
+              const matchedKey = emotionsMapLower.get(entity.name.trim().toLowerCase());
+              if (matchedKey) {
+                entity.name = matchedKey; // Corregir casing (ej: "tristeza" -> "Tristeza")
+                return true;
+              }
+              console.warn(`Filtering out invalid emotion extracted by AI: ${entity.name}`);
+              return false;
+            }
+            return true;
+          });
+
+          // Fallback de Ubicación: si no se extrajo ninguna ubicación pero hay un space_context heredado, lo inyectamos
+          const hasLocation = aiData.entities.some(e => e.type === 'LOCATION');
+          if (!hasLocation && memory.space_context) {
+            console.log(`No location extracted for memory ${memory.id}, inheriting from space_context: ${memory.space_context}`);
+            aiData.entities.push({
+              name: memory.space_context,
+              type: 'LOCATION'
+            });
+          }
+        }
 
         // 6. Hydrate Entities (LOCATIONs created without coords, confirmed in Atlas)
         const entityIdMap: Record<string, string> = {};
