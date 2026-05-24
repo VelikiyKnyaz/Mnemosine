@@ -112,7 +112,7 @@ export default function EmotionCascadeSelector({ visible, onClose, onSelectEmoti
             const isActive = col.activeIndex === index;
             return (
               <View style={[styles.itemRow, isActive && styles.itemRowActive]}>
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.itemTextContainer}
                   onPress={() => handleItemPress(item, colIndex, index)}
                   activeOpacity={0.6}
@@ -122,17 +122,17 @@ export default function EmotionCascadeSelector({ visible, onClose, onSelectEmoti
                   </Text>
                   {item.hasChildren && <Text style={styles.chevron}>›</Text>}
                 </TouchableOpacity>
-                
+
                 {isActive && (
                   <View style={styles.activeContainer}>
                     <Text style={styles.descriptionText}>
                       {EMOTIONS_DESCRIPTIONS[item.label] || "Una emoción fundamental en tu espectro sentimental."}
                     </Text>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.selectBtn}
                       onPress={() => onSelectEmotion(item.label)}
                     >
-                      <Text style={styles.selectBtnText}>ASIGNAR {item.label.toUpperCase()}</Text>
+                      <Text style={styles.selectBtnText}>ASIGNAR</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -154,8 +154,8 @@ export default function EmotionCascadeSelector({ visible, onClose, onSelectEmoti
       </Appbar.Header>
 
       <View style={styles.container}>
-        <ScrollView 
-          horizontal 
+        <ScrollView
+          horizontal
           ref={scrollRef}
           snapToInterval={COL_WIDTH}
           decelerationRate="fast"
@@ -163,7 +163,7 @@ export default function EmotionCascadeSelector({ visible, onClose, onSelectEmoti
           style={styles.horizontalScroll}
         >
           {columns.map((col, index) => renderColumn(col, index))}
-          
+
           {columns.length === 1 && (
             <View style={[styles.column, { backgroundColor: '#f9f9f9', justifyContent: 'center', alignItems: 'center' }]}>
               <Text style={{ color: '#aaa', textAlign: 'center', padding: 20 }}>

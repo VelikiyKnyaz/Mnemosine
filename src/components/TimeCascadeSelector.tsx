@@ -90,14 +90,15 @@ export default function TimeCascadeSelector({ visible, onClose, onSelectTime, on
        await generateLifecycleStages(bYear);
     }
 
+    const todayStr = formatDate(new Date());
     const currentYear = new Date().getFullYear();
     setStartYear(bYear);
-    setEndYear(currentYear + 5);
+    setEndYear(currentYear);
 
     const entities = await db.getAllAsync<any>("SELECT id, name, metadata FROM entities WHERE type = 'TIME'");
     
     const rootItems: any[] = [
-      { id: 'all_years', type: 'ALL_YEARS', label: 'Toda mi vida (Años)', name: 'Toda mi vida', start_date: `${bYear}-01-01`, end_date: `${currentYear + 5}-12-31` }
+      { id: 'all_years', type: 'ALL_YEARS', label: 'Toda mi vida (Años)', name: 'Toda mi vida', start_date: `${bYear}-01-01`, end_date: todayStr }
     ];
     
     const gen: any[] = [];
@@ -200,10 +201,11 @@ export default function TimeCascadeSelector({ visible, onClose, onSelectTime, on
 
     setColumns(prevCols => {
        return prevCols.map(col => {
-          if (col.type === 'ROOT') {
-             const rootItemsList: any[] = [
-               { id: 'all_years', type: 'ALL_YEARS', label: 'Toda mi vida (Años)', name: 'Toda mi vida', start_date: `${startYear}-01-01`, end_date: `${endYear}-12-31` }
-             ];
+        if (col.type === 'ROOT') {
+           const todayStr = formatDate(new Date());
+           const rootItemsList: any[] = [
+             { id: 'all_years', type: 'ALL_YEARS', label: 'Toda mi vida (Años)', name: 'Toda mi vida', start_date: `${startYear}-01-01`, end_date: todayStr }
+           ];
              if (gen.length > 0) {
                rootItemsList.push({ id: 'h_bio', isHeader: true, label: 'Etapas Biológicas / Generales' });
                rootItemsList.push(...gen);
@@ -293,6 +295,8 @@ export default function TimeCascadeSelector({ visible, onClose, onSelectTime, on
          const s = getBounds(sStr);
          const e = getBounds(eStr);
          let colTitle = item.name;
+         let colType: ColumnType;
+         let itemsList: any[];
          
          if (s.y === e.y) {
             if (s.m === e.m) {

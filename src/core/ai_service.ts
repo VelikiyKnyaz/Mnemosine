@@ -57,12 +57,13 @@ ALLOWED_EMOTIONS: [${allowedEmotions}]
 
 OUTPUT:
 - time_markers: Extract all temporal references. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:childhood|teenage|adulthood", "fuzzy:TEXT". Prefer exact_age over life_stage.
+  CRITICAL: Do not assume, guess, or invent a specific year, month, or day if there is no explicit certainty in the text. If the reference is vague or context-dependent, use "fuzzy:TEXT", "life_stage:childhood|teenage|adulthood", or map it to a KNOWN stage or sub-stage of type TIME under entities ONLY when there is sufficient evidence.
 - entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT, TIME, EMOTION.
   RULES FOR ENTITIES:
   * EMOTION: Analyze the text and infer the user's emotional state. Extract one or more emotions strictly using ONLY the exact labels from ALLOWED_EMOTIONS.
   * LOCATION: Extract the FULL, exact name of the place (e.g., 'Iglesia de San Francisco' instead of 'San Francisco'). Never truncate a landmark, building, or specific place into a broad city or region name. Differentiate between landmarks and cities.
   * PERSON: Extract exhaustively ALL people mentioned. Crucially, split group references into distinct individual entities (e.g. 'mis abuelos' -> 'abuelo' and 'abuela', 'mis padres' -> 'padre' and 'madre'). Do not omit anyone.
-  * TIME: Use descriptive time periods (e.g., "Navidad de 1998"). If a life stage or time reference matches a KNOWN entity conceptually (e.g. "mi adolescencia" -> "Adolescencia"), map it strictly to the KNOWN name to inherit custom periods.
+  * TIME: Use descriptive time periods (e.g., "Navidad de 1998"). If a life stage or time reference matches a KNOWN entity conceptually—including macro-stages, custom stages, or nested sub-stages (e.g. "mi adolescencia" -> "Adolescencia", "en el colegio" -> "Colegio", "primer año de universidad" -> "Primer Año")—map it strictly to the KNOWN name to inherit custom periods. CRITICAL: Only assign a stage or sub-stage if there is SUFFICIENT certainty and evidence in the text. Do not guess.
   * GENERAL: If a reference conceptually matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
 - parent_name: Infer and set parent locations based on textual containment. If uncertain, add "ENTITY_AMBIGUOUS" to ambiguities.
 - sentiment: Float from -1.0 to 1.0.

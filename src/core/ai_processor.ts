@@ -1,12 +1,27 @@
 import { getDb, inheritCoordinatesFromParent } from './database';
 import { transcribeAudio, extractMemoryData } from './ai_service';
-import { calculateDatesFromMarkers } from './chrono_engine';
+import { calculateDatesFromMarkers, generateLifecycleStages } from './chrono_engine';
 import { getConfig } from './config';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
+const normalizeString = (str: string): string => {
+  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+};
+
+const hasWordMatch = (normalizedText: string, searchWord: string): boolean => {
+  if (!searchWord) return false;
+  const normalizedSearchWord = normalizeString(searchWord);
+  if (normalizedSearchWord.length === 0) return false;
+  
+  // Escape regex special chars
+  const escapedWord = normalizedSearchWord.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const regex = new RegExp(`\\b${escapedWord}\\b`, 'i');
+  return regex.test(normalizedText);
+};
+
 // Helper: buscar coordenadas con Google Places API (Text Search)
-export const geocodeLocation = async (name: string, hometownContext: string): Promise<{lat: number, lon: number, address?: any} | null> => {
+export const geocodeLocation = async (name: string, hometownContext: string): Promise<{lat: number, lon: number, address?: any, placeData?: any} | null> => {
   try {
     const apiKey = await getConfig('GOOGLE_MAPS_KEY');
     if (!apiKey) {
@@ -76,7 +91,7 @@ export const geocodeLocation = async (name: string, hometownContext: string): Pr
 };
 
 async function getOrCreateTerritory(db: any, name: string, lat: number, lon: number, level: 'city'|'state'|'country'): Promise<string> {
-   const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'LOCATION' AND name = ? COLLATE NOCASE", name);
+   const existing = await db.getFirstAsync("SELECT id FROM entities WHERE type = 'LOCATION' AND name = ? COLLATE NOCASE", name) as {id: string} | null;
    if (existing) {
      // Ensure geo_level is set even on existing territories
      const geoLevel = level === 'country' ? 4 : level === 'state' ? 3 : 2;
@@ -157,9 +172,17 @@ export const processPendingMemories = async () => {
   try {
     const db = await getDb();
     
-    // Fetch hometown and country context once
-    const userProfile = await db.getFirstAsync<{hometown: string | null, country: string | null}>('SELECT hometown, country FROM user_profile LIMIT 1');
+    // Fetch profile context once (including birth date)
+    const userProfile = await db.getFirstAsync('SELECT hometown, country, birth_date FROM user_profile LIMIT 1') as {hometown: string | null, country: string | null, birth_date: string | null} | null;
     const hometownContext = [userProfile?.hometown, userProfile?.country].filter(Boolean).join(', ') ? `, ${[userProfile?.hometown, userProfile?.country].filter(Boolean).join(', ')}` : '';
+
+    // Proactively generate/update biological stages based on birth year and current time
+    if (userProfile?.birth_date) {
+      const birthYear = parseInt(userProfile.birth_date.split('-')[0]);
+      if (!isNaN(birthYear)) {
+        await generateLifecycleStages(birthYear);
+      }
+    }
 
     // 1. Fetch pending memories
     const pendingMemories = await db.getAllAsync<{id: string, raw_text: string | null, audio_uri: string | null}>(
@@ -185,22 +208,81 @@ export const processPendingMemories = async () => {
         }
 
         console.log(`Extracting data for memory ${memory.id}`);
-        // Fetch top 50 existing entity names for context to prevent LLM token explosion
-        const existingEntities = await db.getAllAsync<{name: string}>(`
+        // Local filtering: Fetch all TIME entities and filter them in JS to avoid token explosion
+        const allTimeEntities = await db.getAllAsync("SELECT id, name FROM entities WHERE type = 'TIME'") as {id: string, name: string}[];
+        const allTimeAliases = await db.getAllAsync(`
+          SELECT ta.alias, e.name 
+          FROM entity_aliases ta 
+          JOIN entities e ON ta.entity_id = e.id 
+          WHERE e.type = 'TIME'
+        `) as {alias: string, name: string}[];
+
+        const normalizedText = normalizeString(textToProcess);
+        const matchingTimeNames = new Set<string>();
+
+        for (const te of allTimeEntities) {
+          if (hasWordMatch(normalizedText, te.name)) {
+            matchingTimeNames.add(te.name);
+          }
+        }
+        for (const ta of allTimeAliases) {
+          if (hasWordMatch(normalizedText, ta.alias)) {
+            matchingTimeNames.add(ta.name);
+          }
+        }
+
+        const matchingTimeEntitiesList = Array.from(matchingTimeNames).map(name => ({ name }));
+        
+        // Fetch top 50 other existing entity names to prevent token explosion
+        const existingEntities = await db.getAllAsync(`
           SELECT e.name 
           FROM entities e 
           LEFT JOIN memory_entities me ON e.id = me.entity_id 
+          WHERE e.type != 'TIME'
           GROUP BY e.id 
           ORDER BY COUNT(me.memory_id) DESC 
           LIMIT 50
-        `);
-        const existingNamesStr = existingEntities.map(e => e.name).join(', ');
+        `) as {name: string}[];
+        
+        const allContextEntities = [...matchingTimeEntitiesList, ...existingEntities];
+        const existingNamesStr = allContextEntities.map(e => e.name).join(', ');
 
         const aiData = await extractMemoryData(textToProcess, existingNamesStr);
 
 
         // 4. Calcular Fechas Algorítmicas
-        const dates = await calculateDatesFromMarkers(aiData.time_markers || []);
+        let dates = await calculateDatesFromMarkers(aiData.time_markers || []);
+
+        // Fallback: Si no se determinaron fechas específicas, verificar si se extrajo una etapa biológica o personalizada (entidades de tipo TIME)
+        if (!dates.start_date && !dates.end_date && aiData.entities) {
+          const timeEntities = aiData.entities.filter(e => e.type === 'TIME');
+          for (const te of timeEntities) {
+            const aliasMatch = await db.getFirstAsync(
+              "SELECT entity_id FROM entity_aliases WHERE alias = ? COLLATE NOCASE",
+              te.name
+            ) as {entity_id: string} | null;
+            const existingEntity = aliasMatch
+              ? await db.getFirstAsync(
+                  "SELECT metadata FROM entities WHERE id = ?", aliasMatch.entity_id
+                ) as {metadata: string | null} | null
+              : await db.getFirstAsync(
+                  "SELECT metadata FROM entities WHERE name = ? AND type = 'TIME' COLLATE NOCASE",
+                  te.name
+                ) as {metadata: string | null} | null;
+            if (existingEntity?.metadata) {
+              try {
+                const meta = JSON.parse(existingEntity.metadata);
+                if (meta.start_date && meta.end_date) {
+                  dates.start_date = meta.start_date;
+                  dates.end_date = meta.end_date;
+                  break; // Usar el primer rango de fechas válido de la etapa
+                }
+              } catch (e) {
+                console.warn('Error parsing metadata for TIME entity:', te.name, e);
+              }
+            }
+          }
+        }
 
         // 5. Update Memory table
         await db.runAsync(
@@ -213,19 +295,19 @@ export const processPendingMemories = async () => {
         
         for (const entity of aiData.entities) {
           // Resolve via alias first (deterministic local resolution)
-          const aliasMatch = await db.getFirstAsync<{entity_id: string}>(
+          const aliasMatch = await db.getFirstAsync(
             "SELECT entity_id FROM entity_aliases WHERE alias = ? COLLATE NOCASE",
             entity.name
-          );
+          ) as {entity_id: string} | null;
 
           const existingEntity = aliasMatch
-            ? await db.getFirstAsync<{id: string, latitude: number | null}>(
+            ? await db.getFirstAsync(
                 "SELECT id, latitude FROM entities WHERE id = ?", aliasMatch.entity_id
-              )
-            : await db.getFirstAsync<{id: string, latitude: number | null}>(
+              ) as {id: string, latitude: number | null} | null
+            : await db.getFirstAsync(
                 "SELECT id, latitude FROM entities WHERE name = ? AND type = ?",
                 entity.name, entity.type
-              );
+              ) as {id: string, latitude: number | null} | null;
 
           let entityId = existingEntity?.id;
 

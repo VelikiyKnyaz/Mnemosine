@@ -269,45 +269,23 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             setCustomPeriodsVisible(true);
           }}
           onSelectTime={async (timeEntity) => {
-            // If selected, add relation and update memory dates
-            let finalEntityId = timeEntity.id;
+            // If selected, add relation (only for STAGE) and update memory dates
             try {
               const db = await getDb();
               
-              if (timeEntity.type !== 'STAGE') {
-                // Check if this generated time already exists in the database
-                const existing = await db.getFirstAsync<{id: string}>(
-                  "SELECT id FROM entities WHERE type = 'TIME' AND name = ?", 
-                  timeEntity.name
-                );
-                
-                if (existing) {
-                  finalEntityId = existing.id;
-                } else {
-                  finalEntityId = uuidv4();
-                  const metadata = JSON.stringify({
-                    start_date: timeEntity.start_date,
-                    end_date: timeEntity.end_date,
-                    is_custom_period: 0
-                  });
-                  await db.runAsync(
-                    "INSERT INTO entities (id, type, name, metadata, is_confirmed) VALUES (?, ?, ?, ?, 1)",
-                    finalEntityId, 'TIME', timeEntity.name, metadata
-                  );
-                }
-              }
-              
-               // Update Memory start/end dates
-               await db.runAsync(
-                 "UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?",
-                 timeEntity.start_date, timeEntity.end_date, memory.id || memory.memory_id
-               );
+              // Update Memory start/end dates
+              await db.runAsync(
+                "UPDATE memories SET start_date = ?, end_date = ? WHERE id = ?",
+                timeEntity.start_date, timeEntity.end_date, memory.id || memory.memory_id
+              );
 
-               await addEntityRelation(finalEntityId);
-             } catch (e) {
-               console.error('Error saving selected time:', e);
-             }
-             setTimeSelectorVisible(false);
+              if (timeEntity.type === 'STAGE') {
+                await addEntityRelation(timeEntity.id);
+              }
+            } catch (e) {
+              console.error('Error saving selected time:', e);
+            }
+            setTimeSelectorVisible(false);
           }}
         />
         <CustomTimePeriodsScreen

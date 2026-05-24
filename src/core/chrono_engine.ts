@@ -107,35 +107,55 @@ export const calculateDatesFromMarkers = async (timeMarkers: string[]): Promise<
     }
   }
 
+  const todayStr = getTodayStr();
+
+  if (startDate && startDate > todayStr) {
+    startDate = todayStr;
+  }
+  if (endDate && endDate > todayStr) {
+    endDate = todayStr;
+  }
+
   return { start_date: startDate, end_date: endDate };
+};
+
+const getTodayStr = (): string => {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 };
 
 export const generateLifecycleStages = async (birthYear: number) => {
   if (!birthYear) return;
   const db = await getDb();
-  const currentYear = new Date().getFullYear();
+  const todayStr = getTodayStr();
 
   const stages = [
     { name: 'Infancia', startOffset: 0, endOffset: 11, type: 'TIME', is_custom_period: 0 },
     { name: 'Adolescencia', startOffset: 12, endOffset: 17, type: 'TIME', is_custom_period: 0 },
     { name: 'Adultez Temprana', startOffset: 18, endOffset: 29, type: 'TIME', is_custom_period: 0 },
-    { name: 'Adultez', startOffset: 30, endOffset: 59, type: 'TIME', is_custom_period: 0 },
-    { name: 'Tercera Edad', startOffset: 60, endOffset: 120, type: 'TIME', is_custom_period: 0 },
+    { name: 'Adultez Media', startOffset: 30, endOffset: 59, type: 'TIME', is_custom_period: 0 },
+    { name: 'Adultez Mayor', startOffset: 60, endOffset: 120, type: 'TIME', is_custom_period: 0 },
   ];
 
   for (const stage of stages) {
     const startY = birthYear + stage.startOffset;
     const endY = birthYear + stage.endOffset;
-    if (startY > currentYear) continue; // Skip future stages
-    
-    const actualEndY = endY > currentYear ? currentYear : endY;
-    
+    const startStr = `${startY}-01-01`;
+    const naturalEndStr = `${endY}-12-31`;
+
+    if (startStr > todayStr) continue; // Skip future stages
+
+    const actualEndStr = naturalEndStr > todayStr ? todayStr : naturalEndStr;
+
     // Check if it already exists
-    const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'TIME' AND name = ?", stage.name);
-    
+    const existing = await db.getFirstAsync<{ id: string }>("SELECT id FROM entities WHERE type = 'TIME' AND name = ?", stage.name);
+
     const metadata = JSON.stringify({
-      start_date: `${startY}-01-01`,
-      end_date: `${actualEndY}-12-31`,
+      start_date: startStr,
+      end_date: actualEndStr,
       is_custom_period: stage.is_custom_period
     });
 
