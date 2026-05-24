@@ -21,6 +21,94 @@ const hasWordMatch = (normalizedText: string, searchWord: string): boolean => {
   return regex.test(normalizedText);
 };
 
+// ===========================
+// PLACE KEYWORDS - words that ALWAYS indicate a LOCATION, never an OBJECT
+// ===========================
+const PLACE_KEYWORDS = [
+  // Spanish - Buildings & Establishments
+  'iglesia', 'hospital', 'hotel', 'restaurante', 'parque', 'colegio', 'escuela',
+  'universidad', 'casa', 'museo', 'catedral', 'templo', 'aeropuerto', 'estacion',
+  'plaza', 'mercado', 'tienda', 'bar', 'cafe', 'teatro', 'cine', 'biblioteca',
+  'estadio', 'gimnasio', 'finca', 'hacienda', 'granja',
+  'capilla', 'basilica', 'santuario', 'monasterio', 'convento', 'cementerio',
+  'clinica', 'consultorio', 'farmacia', 'supermercado', 'edificio', 'torre',
+  'castillo', 'palacio', 'fortaleza', 'salon', 'sala', 'cocina', 'habitacion',
+  'patio', 'jardin', 'terraza', 'balcon', 'piscina', 'cancha', 'campo',
+  'oficina', 'banco', 'juzgado', 'comisaria', 'cuartel',
+  // Spanish - Infrastructure & Transit
+  'terminal', 'parada', 'metro', 'autopista', 'carretera', 'puente', 'puerto', 'muelle',
+  'calle', 'avenida', 'barrio', 'comuna', 'vereda', 'pueblo', 'aldea',
+  // Spanish - Natural formations
+  'rio', 'lago', 'playa', 'montana', 'montaña', 'volcan', 'cueva', 'bosque',
+  'selva', 'desierto', 'isla', 'cascada', 'valle', 'cerro', 'colina',
+  // Spanish - Commercial
+  'centro comercial', 'pasaje', 'galeria', 'almacen',
+  // English equivalents
+  'church', 'park', 'school', 'beach', 'mountain', 'river', 'lake', 'forest',
+  'bridge', 'castle', 'palace', 'tower', 'station', 'airport', 'port',
+  'office', 'clinic', 'pharmacy', 'mall', 'store', 'shop', 'gym',
+  'pool', 'court', 'field', 'room', 'kitchen', 'garden', 'museum',
+  'cathedral', 'temple', 'cemetery', 'farm', 'ranch', 'village', 'town',
+  'hotel', 'restaurant', 'bar', 'cafe', 'theater', 'cinema', 'library',
+  'stadium', 'building', 'house', 'apartment',
+];
+
+/**
+ * Reclassifies OBJECT entities to LOCATION if their name contains place keywords.
+ * This is a deterministic code-level fix to prevent the AI from misclassifying
+ * buildings and places as objects.
+ */
+function reclassifyMisclassifiedObjects(entities: { name: string; type: string; parent_name?: string }[]): void {
+  for (const entity of entities) {
+    if (entity.type !== 'OBJECT') continue;
+    
+    const normalizedName = normalizeString(entity.name);
+    for (const keyword of PLACE_KEYWORDS) {
+      const normalizedKeyword = normalizeString(keyword);
+      if (normalizedName.includes(normalizedKeyword)) {
+        console.log(`Reclassifying OBJECT -> LOCATION: "${entity.name}" (matched keyword: "${keyword}")`);
+        entity.type = 'LOCATION';
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Derives a time marker string from computed start_date and end_date.
+ * This allows us to store the ACTUAL resolved dates from the first segment
+ * in a format that calculateDatesFromMarkers can parse for subsequent segments.
+ */
+function deriveTimeMarker(startDate: string | null, endDate: string | null): string {
+  if (!startDate || !endDate) return '';
+
+  // Same date -> exact_date
+  if (startDate === endDate) return `exact_date:${startDate}`;
+
+  const sy = startDate.substring(0, 4);
+  const ey = endDate.substring(0, 4);
+
+  // Same year, Jan 1 to Dec 31 -> exact_year
+  if (sy === ey && startDate === `${sy}-01-01` && endDate === `${ey}-12-31`) {
+    return `exact_year:${sy}`;
+  }
+
+  // Same year-month, 1st to last day -> exact_month
+  const sm = startDate.substring(0, 7);
+  const em = endDate.substring(0, 7);
+  if (sm === em && startDate.endsWith('-01')) {
+    return `exact_month:${sm}`;
+  }
+
+  // Multi-month range within same year -> use exact_month of the start
+  if (sy === ey) {
+    return `exact_month:${sm}`;
+  }
+
+  // Fallback: use exact_year of start
+  return `exact_year:${sy}`;
+}
+
 // Helper: buscar coordenadas con Google Places API (Text Search)
 export const geocodeLocation = async (name: string, hometownContext: string): Promise<{lat: number, lon: number, address?: any, placeData?: any} | null> => {
   try {
@@ -212,24 +300,25 @@ export const processPendingMemories = async () => {
           continue;
         }
 
-        // Segment the text into space-time fragments if it mentions shifts in space or time
+        // =====================================================================
+        // SEGMENTATION: Split text into fragments based on space-time shifts.
+        // The segmenter returns simple string[] — NO inheritance logic in the AI.
+        // We process segment[0] fully first, then use its ACTUAL computed dates
+        // and location to seed the remaining segments deterministically.
+        // =====================================================================
         console.log(`Segmenting text for memory ${memory.id}`);
         const segments = await segmentMemoryText(textToProcess);
+        let additionalSegments: string[] = [];
+
         if (segments && segments.length > 1) {
           console.log(`Memory ${memory.id} split into ${segments.length} fragments.`);
-          // Update current memory raw_text to be only the first fragment's text
-          textToProcess = segments[0].text;
-          
-          // Insert the remaining fragments as new memories in the database, carrying over inherited contexts
-          for (let i = 1; i < segments.length; i++) {
-            const newId = uuidv4();
-            await db.runAsync(
-              "INSERT INTO memories (id, raw_text, sync_status, created_at, time_context, space_context) VALUES (?, ?, 'PENDING_AI', ?, ?, ?)",
-              newId, segments[i].text.trim(), memory.created_at, segments[i].inherited_time, segments[i].inherited_location
-            );
-          }
+          textToProcess = segments[0];
+          additionalSegments = segments.slice(1);
         }
 
+        // =====================================================================
+        // EXTRACTION: Process the first segment (or the whole text)
+        // =====================================================================
         console.log(`Extracting data for memory ${memory.id}`);
         // Local filtering: Fetch all TIME entities and filter them in JS to avoid token explosion
         const allTimeEntities = await db.getAllAsync("SELECT id, name FROM entities WHERE type = 'TIME'") as {id: string, name: string}[];
@@ -272,17 +361,74 @@ export const processPendingMemories = async () => {
 
         const aiData = await extractMemoryData(textToProcess, existingNamesStr, memory.time_context || '', memory.space_context || '');
 
+        // =====================================================================
+        // POST-PROCESSING: Deterministic code-level fixes
+        // =====================================================================
 
-        // 4. Calcular Fechas Algorítmicas
+        // FIX 1: Reclassify OBJECTs that are actually places -> LOCATION
+        if (aiData.entities) {
+          reclassifyMisclassifiedObjects(aiData.entities);
+        }
+
+        // FIX 2: Filter emotions to only allow valid ones from EMOTIONS_DESCRIPTIONS
+        const validEmotionsKeys = Object.keys(EMOTIONS_DESCRIPTIONS);
+        const emotionsMapLower = new Map<string, string>();
+        for (const key of validEmotionsKeys) {
+          emotionsMapLower.set(key.toLowerCase(), key);
+        }
+
+        if (aiData.entities) {
+          aiData.entities = aiData.entities.filter(entity => {
+            if (entity.type === 'EMOTION') {
+              const matchedKey = emotionsMapLower.get(entity.name.trim().toLowerCase());
+              if (matchedKey) {
+                entity.name = matchedKey; // Correct casing
+                return true;
+              }
+              console.warn(`Filtering out invalid emotion extracted by AI: ${entity.name}`);
+              return false;
+            }
+            return true;
+          });
+
+          // FIX 3: Location fallback - if no location extracted but space_context exists, inject it
+          const hasLocation = aiData.entities.some(e => e.type === 'LOCATION');
+          if (!hasLocation && memory.space_context) {
+            console.log(`No location extracted for memory ${memory.id}, inheriting from space_context: ${memory.space_context}`);
+            aiData.entities.push({
+              name: memory.space_context,
+              type: 'LOCATION'
+            });
+          }
+
+          // FIX 4: Enforce single LOCATION per memory (prefer most specific)
+          const locations = aiData.entities.filter(e => e.type === 'LOCATION');
+          if (locations.length > 1) {
+            console.log(`Memory ${memory.id} has ${locations.length} locations. Enforcing single location limit.`);
+            // Prefer the location with a parent_name (most specific), otherwise the first one
+            const bestLocation = locations.find(l => l.parent_name) || locations[0];
+            aiData.entities = aiData.entities.filter(e => {
+              if (e.type === 'LOCATION') {
+                return e.name === bestLocation.name;
+              }
+              return true;
+            });
+          }
+        }
+
+
+        // =====================================================================
+        // DATE CALCULATION
+        // =====================================================================
         let dates = await calculateDatesFromMarkers(aiData.time_markers || []);
 
-        // Fallback 1: Si no se extrajeron fechas pero hay un time_context heredado del fragmentador, usarlo
+        // Fallback 1: If no dates extracted but there is an inherited time_context, use it
         if (!dates.start_date && !dates.end_date && memory.time_context) {
           console.log(`No dates extracted for memory ${memory.id}, inheriting from time_context: ${memory.time_context}`);
           dates = await calculateDatesFromMarkers([memory.time_context]);
         }
 
-        // Fallback 2: Si no se determinaron fechas específicas, verificar si se extrajo una etapa biológica o personalizada (entidades de tipo TIME)
+        // Fallback 2: If still no dates, check TIME entities for stage-based date ranges
         if (!dates.start_date && !dates.end_date && aiData.entities) {
           const timeEntities = aiData.entities.filter(e => e.type === 'TIME');
           for (const te of timeEntities) {
@@ -304,7 +450,7 @@ export const processPendingMemories = async () => {
                 if (meta.start_date && meta.end_date) {
                   dates.start_date = meta.start_date;
                   dates.end_date = meta.end_date;
-                  break; // Usar el primer rango de fechas válido de la etapa
+                  break;
                 }
               } catch (e) {
                 console.warn('Error parsing metadata for TIME entity:', te.name, e);
@@ -313,59 +459,38 @@ export const processPendingMemories = async () => {
           }
         }
 
-        // 5. Update Memory table
+        // =====================================================================
+        // UPDATE MEMORY
+        // =====================================================================
         await db.runAsync(
           "UPDATE memories SET raw_text = ?, start_date = ?, end_date = ?, sentiment_score = ?, sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
           textToProcess.trim(), dates.start_date, dates.end_date, aiData.sentiment, memory.id
         );
 
-        // Filtrar y validar EMOTIONs para que sólo contengan emociones de EMOTIONS_DESCRIPTIONS (evitando alucinaciones de la IA)
-        const validEmotionsKeys = Object.keys(EMOTIONS_DESCRIPTIONS);
-        const emotionsMapLower = new Map<string, string>();
-        for (const key of validEmotionsKeys) {
-          emotionsMapLower.set(key.toLowerCase(), key);
-        }
+        // =====================================================================
+        // INSERT REMAINING SEGMENTS with ACTUAL computed context from segment[0]
+        // This is the key architectural change: we derive the time marker and
+        // location from the ALREADY COMPUTED results of the first segment,
+        // not from the AI segmenter's guesses.
+        // =====================================================================
+        if (additionalSegments.length > 0) {
+          const computedTimeMarker = deriveTimeMarker(dates.start_date, dates.end_date);
+          const computedLocation = aiData.entities?.find(e => e.type === 'LOCATION')?.name || memory.space_context || '';
+          
+          console.log(`Inserting ${additionalSegments.length} child segments with inherited context -> time: "${computedTimeMarker}", location: "${computedLocation}"`);
 
-        if (aiData.entities) {
-          aiData.entities = aiData.entities.filter(entity => {
-            if (entity.type === 'EMOTION') {
-              const matchedKey = emotionsMapLower.get(entity.name.trim().toLowerCase());
-              if (matchedKey) {
-                entity.name = matchedKey; // Corregir casing (ej: "tristeza" -> "Tristeza")
-                return true;
-              }
-              console.warn(`Filtering out invalid emotion extracted by AI: ${entity.name}`);
-              return false;
-            }
-            return true;
-          });
-
-          // Fallback de Ubicación: si no se extrajo ninguna ubicación pero hay un space_context heredado, lo inyectamos
-          const hasLocation = aiData.entities.some(e => e.type === 'LOCATION');
-          if (!hasLocation && memory.space_context) {
-            console.log(`No location extracted for memory ${memory.id}, inheriting from space_context: ${memory.space_context}`);
-            aiData.entities.push({
-              name: memory.space_context,
-              type: 'LOCATION'
-            });
-          }
-
-          // Filtro Estricto: Mantener estrictamente como máximo una ubicación (LOCATION) por recuerdo
-          const locations = aiData.entities.filter(e => e.type === 'LOCATION');
-          if (locations.length > 1) {
-            console.log(`Memory ${memory.id} has ${locations.length} locations. Enforcing single location limit.`);
-            // Preferimos la ubicación más específica (que tenga parent_name), de lo contrario la primera
-            const bestLocation = locations.find(l => l.parent_name) || locations[0];
-            aiData.entities = aiData.entities.filter(e => {
-              if (e.type === 'LOCATION') {
-                return e.name === bestLocation.name;
-              }
-              return true;
-            });
+          for (const segmentText of additionalSegments) {
+            const newId = uuidv4();
+            await db.runAsync(
+              "INSERT INTO memories (id, raw_text, sync_status, created_at, time_context, space_context) VALUES (?, ?, 'PENDING_AI', ?, ?, ?)",
+              newId, segmentText.trim(), memory.created_at, computedTimeMarker || null, computedLocation || null
+            );
           }
         }
 
-        // 6. Hydrate Entities (LOCATIONs created without coords, confirmed in Atlas)
+        // =====================================================================
+        // HYDRATE ENTITIES
+        // =====================================================================
         const entityIdMap: Record<string, string> = {};
         
         for (const entity of aiData.entities) {
@@ -481,4 +606,3 @@ export const processPendingMemories = async () => {
     console.error('Error in processPendingMemories:', err);
   }
 };
-
