@@ -11,6 +11,15 @@ export default function RegisterScreen({ navigation }: any) {
   const setSession = useAuthStore((state) => state.setSession);
 
   const handleRegister = async () => {
+    // Validación de variables de entorno cargadas
+    if (!process.env.EXPO_PUBLIC_SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL.includes('placeholder')) {
+      Alert.alert(
+        'Configuración Faltante',
+        'Las variables de entorno de Supabase no están cargadas en la app. Si las acabas de agregar en la consola de Expo o archivo .env, debes reiniciar el Metro Bundler (reiniciar el servidor con "npm run dev" / "expo start" o refrescar por completo el Snack) para borrar la caché.'
+      );
+      return;
+    }
+
     setLoading(true);
     const { data, error } = await supabase.auth.signUp({
       email,
