@@ -17,6 +17,7 @@ import EntitiesScreen from '../features/entities/EntitiesScreen';
 import ProfileScreen from '../features/profile/ProfileScreen';
 import DebugScreen from '../features/debug/DebugScreen';
 import EntityMemoriesScreen from '../features/memories/EntityMemoriesScreen';
+import NotificationsScreen from '../features/notifications/NotificationsScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -41,7 +42,7 @@ function MainTabs() {
       <Tab.Screen name="Atlas" component={AtlasScreen} options={{ title: 'Atlas' }} />
       <Tab.Screen name="FamilyTree" component={FamilyTreeScreen} options={{ title: 'Red Social' }} />
       <Tab.Screen name="Entities" component={EntitiesScreen} options={{ title: 'Elementos' }} />
-
+      <Tab.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notificaciones' }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Perfil' }} />
       {isAdmin && <Tab.Screen name="Debug" component={DebugScreen} options={{ title: '⚙️ Admin' }} />}
     </Tab.Navigator>
@@ -52,31 +53,18 @@ export default function RootNavigator() {
   const { session, setSession, isLoading, setIsLoading } = useAuthStore();
 
   // ═══════════════════════════════════════════════════════════════
-  // 🔧 DEBUG BYPASS: Auto-login as admin. 
-  // To restore normal auth, comment this useEffect and uncomment the one below.
+  // 🔐 SUPABASE REAL AUTH LOGIC:
   // ═══════════════════════════════════════════════════════════════
   useEffect(() => {
-    setSession({
-      user: { id: 'admin', email: 'admin@debug.local', role: 'admin' },
-      access_token: 'debug',
-      refresh_token: 'debug',
-    } as any);
-    setIsLoading(false);
-  }, [setSession, setIsLoading]);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setIsLoading(false);
+    });
 
-  // ═══════════════════════════════════════════════════════════════
-  // 🔐 ORIGINAL AUTH LOGIC — Uncomment to restore login flow:
-  // ═══════════════════════════════════════════════════════════════
-  // useEffect(() => {
-  //   supabase.auth.getSession().then(({ data: { session } }) => {
-  //     setSession(session);
-  //     setIsLoading(false);
-  //   });
-  //
-  //   supabase.auth.onAuthStateChange((_event, session) => {
-  //     setSession(session);
-  //   });
-  // }, [setIsLoading, setSession]);
+    supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+  }, [setIsLoading, setSession]);
 
   if (isLoading) {
     return (

@@ -19,6 +19,12 @@ export default function DebugScreen() {
   const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
   const [configSaved, setConfigSaved] = useState(false);
 
+  // Variables de entorno de Expo activas
+  const isEnvOpenai = !!process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+  const isEnvGoogleMaps = !!process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY;
+  const isEnvSupabaseUrl = !!process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const isEnvSupabaseKey = !!process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
   const loadData = async () => {
     try {
       const db = await getDb();
@@ -37,7 +43,7 @@ export default function DebugScreen() {
     setGoogleMapsKey(cfg.GOOGLE_MAPS_KEY || '');
     setSupabaseUrl(cfg.SUPABASE_URL || '');
     setSupabaseAnonKey(cfg.SUPABASE_ANON_KEY || '');
-    setConfigSaved(!!(cfg.OPENAI_API_KEY));
+    setConfigSaved(!!cfg.OPENAI_API_KEY);
   };
 
   useEffect(() => {
@@ -51,7 +57,7 @@ export default function DebugScreen() {
     await setConfig('SUPABASE_URL', supabaseUrl.trim());
     await setConfig('SUPABASE_ANON_KEY', supabaseAnonKey.trim());
     setConfigSaved(true);
-    Alert.alert('Guardado', 'Claves guardadas en el dispositivo. No se suben a internet.');
+    Alert.alert('Guardado', 'Claves guardadas localmente en el dispositivo.');
   };
 
   const handleClearDb = async () => {
@@ -99,55 +105,72 @@ export default function DebugScreen() {
       <Card style={styles.configCard}>
         <Card.Content>
           <Title style={{fontSize: 16}}>🔑 Configuración de Claves</Title>
-          <Text style={styles.configHint}>
-            Las claves se guardan SOLO en tu teléfono. Nunca se suben al código.
-          </Text>
+          
+          {(isEnvOpenai || isEnvGoogleMaps || isEnvSupabaseUrl || isEnvSupabaseKey) && (
+            <View style={styles.envActiveBanner}>
+              <Text style={styles.envActiveBannerText}>
+                🎉 Variables de entorno de Expo detectadas. Las claves marcadas con [Entorno] se cargan automáticamente desde la consola de Expo.
+              </Text>
+            </View>
+          )}
 
           {configSaved ? (
             <View>
-              <Text style={styles.savedKey}>OpenAI: {maskKey(openaiKey)}</Text>
-              <Text style={styles.savedKey}>Google Maps: {maskKey(googleMapsKey)}</Text>
-              <Text style={styles.savedKey}>Supabase URL: {maskKey(supabaseUrl)}</Text>
-              <Text style={styles.savedKey}>Supabase Key: {maskKey(supabaseAnonKey)}</Text>
+              <Text style={styles.savedKey}>
+                OpenAI: {maskKey(openaiKey)} {isEnvOpenai && <Text style={styles.envTag}>[Entorno]</Text>}
+              </Text>
+              <Text style={styles.savedKey}>
+                Google Maps: {maskKey(googleMapsKey)} {isEnvGoogleMaps && <Text style={styles.envTag}>[Entorno]</Text>}
+              </Text>
+              <Text style={styles.savedKey}>
+                Supabase URL: {maskKey(supabaseUrl)} {isEnvSupabaseUrl && <Text style={styles.envTag}>[Entorno]</Text>}
+              </Text>
+              <Text style={styles.savedKey}>
+                Supabase Key: {maskKey(supabaseAnonKey)} {isEnvSupabaseKey && <Text style={styles.envTag}>[Entorno]</Text>}
+              </Text>
               <Button mode="text" onPress={() => setConfigSaved(false)} style={{marginTop: 5}}>
-                Editar Claves
+                Editar / Sobrescribir Claves
               </Button>
             </View>
           ) : (
             <View>
               <TextInput
-                label="OpenAI API Key (sk-proj-...)"
+                label={`OpenAI API Key (sk-proj-...)${isEnvOpenai ? ' [Entorno]' : ''}`}
                 value={openaiKey}
                 onChangeText={setOpenaiKey}
                 style={styles.input}
                 secureTextEntry
                 dense
+                disabled={isEnvOpenai}
               />
               <TextInput
-                label="Google Maps API Key"
+                label={`Google Maps API Key${isEnvGoogleMaps ? ' [Entorno]' : ''}`}
                 value={googleMapsKey}
                 onChangeText={setGoogleMapsKey}
                 style={styles.input}
                 secureTextEntry
                 dense
+                disabled={isEnvGoogleMaps}
               />
               <TextInput
-                label="Supabase URL"
+                label={`Supabase URL${isEnvSupabaseUrl ? ' [Entorno]' : ''}`}
                 value={supabaseUrl}
                 onChangeText={setSupabaseUrl}
                 style={styles.input}
                 dense
+                disabled={isEnvSupabaseUrl}
               />
               <TextInput
-                label="Supabase Anon Key"
+                label={`Supabase Anon Key${isEnvSupabaseKey ? ' [Entorno]' : ''}`}
                 value={supabaseAnonKey}
                 onChangeText={setSupabaseAnonKey}
                 style={styles.input}
                 secureTextEntry
                 dense
+                disabled={isEnvSupabaseKey}
               />
               <Button mode="contained" onPress={handleSaveConfig} style={{marginTop: 10}} buttonColor="#2e7d32">
-                Guardar Claves en Dispositivo
+                Guardar Sobrescritura en Dispositivo
               </Button>
             </View>
           )}
@@ -259,6 +282,25 @@ const styles = StyleSheet.create({
   card: {
     marginBottom: 15,
     backgroundColor: '#ffffff',
-  }
+  },
+  envActiveBanner: {
+    backgroundColor: '#e8f5e9',
+    padding: 10,
+    borderRadius: 6,
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#a5d6a7',
+  },
+  envActiveBannerText: {
+    fontSize: 12,
+    color: '#2e7d32',
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+  envTag: {
+    color: '#2e7d32',
+    fontWeight: 'bold',
+    fontSize: 11,
+  },
 });
 

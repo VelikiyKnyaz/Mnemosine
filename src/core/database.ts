@@ -54,6 +54,9 @@ export const initDatabase = async () => {
 
     CREATE TABLE IF NOT EXISTS user_profile (
       id TEXT PRIMARY KEY NOT NULL,
+      username TEXT,
+      full_name TEXT,
+      avatar_url TEXT,
       birth_date TEXT,
       hometown TEXT,
       country TEXT,
@@ -119,6 +122,9 @@ export const initDatabase = async () => {
   // Migraciones seguras para bases de datos existentes en desarrollo
   const migrations = [
     'ALTER TABLE user_profile ADD COLUMN country TEXT;',
+    'ALTER TABLE user_profile ADD COLUMN username TEXT;',
+    'ALTER TABLE user_profile ADD COLUMN full_name TEXT;',
+    'ALTER TABLE user_profile ADD COLUMN avatar_url TEXT;',
     'ALTER TABLE memories ADD COLUMN start_date TEXT;',
     'ALTER TABLE memories ADD COLUMN end_date TEXT;',
     'ALTER TABLE entities ADD COLUMN parent_id TEXT;',
