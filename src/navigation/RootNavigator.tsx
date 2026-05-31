@@ -57,6 +57,10 @@ export default function RootNavigator() {
 
   // Verificar si el usuario requiere onboarding lineal al cambiar la sesión
   const checkProfileStatus = async (userId: string) => {
+    if (userId === 'admin') {
+      setNeedsOnboarding(false);
+      return;
+    }
     try {
       const db = await getDb();
       
