@@ -6,6 +6,8 @@ interface AuthState {
   setSession: (session: Session | null) => void;
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
+  needsOnboarding: boolean;
+  setNeedsOnboarding: (needs: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -13,4 +15,6 @@ export const useAuthStore = create<AuthState>((set) => ({
   setSession: (session) => set({ session }),
   isLoading: true,
   setIsLoading: (isLoading) => set({ isLoading }),
+  needsOnboarding: false,
+  setNeedsOnboarding: (needsOnboarding) => set({ needsOnboarding }),
 }));

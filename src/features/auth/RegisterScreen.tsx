@@ -6,11 +6,27 @@ import { useAuthStore } from '../../core/store';
 
 export default function RegisterScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const setSession = useAuthStore((state) => state.setSession);
 
   const handleRegister = async () => {
+    const cleanUsername = username.trim().toLowerCase();
+
+    // Validar longitud
+    if (cleanUsername.length < 3) {
+      Alert.alert('Formato Inválido', 'El nombre de usuario debe tener al menos 3 caracteres.');
+      return;
+    }
+
+    // Validar caracteres permitidos
+    const usernameRegex = /^[a-zA-Z0-9_]+$/;
+    if (!usernameRegex.test(cleanUsername)) {
+      Alert.alert('Formato Inválido', 'El nombre de usuario solo puede tener letras, números y guiones bajos (_).');
+      return;
+    }
+
     // Validación de variables de entorno o fallbacks cargados
     const activeSupabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://eknupuhacgqfgmbrxrys.supabase.co';
     if (!activeSupabaseUrl || activeSupabaseUrl.includes('placeholder')) {
@@ -22,16 +38,46 @@ export default function RegisterScreen({ navigation }: any) {
     }
 
     setLoading(true);
-    const { data, error } = await supabase.auth.signUp({
+
+    // Validar unicidad del nombre de usuario en Supabase profiles
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('username')
+        .eq('username', cleanUsername)
+        .maybeSingle();
+
+      if (error && error.code !== 'PGRST116' && error.code !== '42P01') {
+        // Ignoramos error 42P01 (relation "profiles" does not exist) para no bloquear el testing
+        // si la tabla aún no ha sido creada en la base de datos de producción
+        console.warn('Error de Supabase consultando profiles:', error);
+      } else if (data) {
+        setLoading(false);
+        Alert.alert('Nombre ocupado', 'El nombre de usuario ya está registrado por otra cuenta. Intenta con uno diferente.');
+        return;
+      }
+    } catch (e) {
+      console.warn('Fallo al comprobar disponibilidad del username:', e);
+    }
+
+    // Registro del usuario en Supabase con el username en raw_user_meta_data
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        data: {
+          username: cleanUsername,
+        }
+      }
     });
+
     setLoading(false);
-    if (error) {
-      Alert.alert('Error', error.message);
+
+    if (signUpError) {
+      Alert.alert('Error', signUpError.message);
     } else {
-      if (data.session) {
-        setSession(data.session);
+      if (signUpData.session) {
+        setSession(signUpData.session);
       } else {
         Alert.alert('Éxito', 'Revisa tu correo para confirmar tu cuenta');
         navigation.navigate('Login');
@@ -42,6 +88,14 @@ export default function RegisterScreen({ navigation }: any) {
   return (
     <View style={styles.container}>
       <Text variant="headlineMedium" style={styles.title}>Crear Cuenta</Text>
+      <TextInput
+        label="Nombre de Usuario (@)"
+        value={username}
+        onChangeText={setUsername}
+        autoCapitalize="none"
+        style={styles.input}
+        placeholder="Ej: sofiagomez"
+      />
       <TextInput
         label="Email"
         value={email}

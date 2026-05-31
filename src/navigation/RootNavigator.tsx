@@ -18,6 +18,9 @@ import ProfileScreen from '../features/profile/ProfileScreen';
 import DebugScreen from '../features/debug/DebugScreen';
 import EntityMemoriesScreen from '../features/memories/EntityMemoriesScreen';
 import NotificationsScreen from '../features/notifications/NotificationsScreen';
+import OnboardingScreen from '../features/auth/OnboardingScreen';
+import MemberProfileScreen from '../features/familyTree/MemberProfileScreen';
+import { getDb } from '../core/database';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -50,20 +53,46 @@ function MainTabs() {
 }
 
 export default function RootNavigator() {
-  const { session, setSession, isLoading, setIsLoading } = useAuthStore();
+  const { session, setSession, isLoading, setIsLoading, needsOnboarding, setNeedsOnboarding } = useAuthStore();
+
+  // Verificar si el usuario requiere onboarding lineal al cambiar la sesión
+  const checkProfileStatus = async (userId: string) => {
+    try {
+      const db = await getDb();
+      const profile = await db.getFirstAsync<any>('SELECT * FROM user_profile WHERE id = ?', userId);
+      if (!profile || !profile.full_name || !profile.birth_date) {
+        setNeedsOnboarding(true);
+      } else {
+        setNeedsOnboarding(false);
+      }
+    } catch (e) {
+      console.warn('Error verificando perfil en SQLite:', e);
+      setNeedsOnboarding(true); // Por seguridad, forzar onboarding si falla
+    }
+  };
 
   // ═══════════════════════════════════════════════════════════════
   // 🔐 SUPABASE REAL AUTH LOGIC:
   // ═══════════════════════════════════════════════════════════════
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
+      if (session?.user) {
+        await checkProfileStatus(session.user.id);
+      }
       setIsLoading(false);
     });
 
-    supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
+      if (session?.user) {
+        await checkProfileStatus(session.user.id);
+      }
     });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, [setIsLoading, setSession]);
 
   if (isLoading) {
@@ -78,8 +107,15 @@ export default function RootNavigator() {
     <NavigationContainer>
       {session ? (
         <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="Main" component={MainTabs} />
-          <Stack.Screen name="EntityMemories" component={EntityMemoriesScreen} />
+          {needsOnboarding ? (
+            <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+          ) : (
+            <>
+              <Stack.Screen name="Main" component={MainTabs} />
+              <Stack.Screen name="EntityMemories" component={EntityMemoriesScreen} />
+              <Stack.Screen name="MemberProfile" component={MemberProfileScreen} />
+            </>
+          )}
         </Stack.Navigator>
       ) : (
         <AuthStack />

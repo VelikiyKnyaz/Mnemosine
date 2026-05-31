@@ -1,153 +1,224 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
-import { Appbar, Card, Text, Avatar, Button, IconButton, Badge } from 'react-native-paper';
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet, FlatList, Alert, Image, ActivityIndicator } from 'react-native';
+import { Appbar, Card, Text, Button, IconButton } from 'react-native-paper';
+import { supabase } from '../../core/supabase';
+import { useAuthStore } from '../../core/store';
+import { useIsFocused } from '@react-navigation/native';
+import { syncConnections } from '../../core/socialSync';
 
-interface NotificationItem {
+interface ConnectionRequest {
   id: string;
-  type: 'mention' | 'family' | 'inbox' | 'system';
-  title: string;
-  message: string;
-  time: string;
-  read: boolean;
-  avatarUrl?: string;
-  avatarInitials?: string;
-  avatarColor?: string;
+  sender_id: string;
+  receiver_id: string;
+  status: string;
+  created_at: string;
+  sender: {
+    id: string;
+    username: string;
+    full_name: string;
+    avatar_url: string;
+  };
 }
 
-const INITIAL_NOTIFICATIONS: NotificationItem[] = [
-  {
-    id: '1',
-    type: 'mention',
-    title: 'Nueva mención en un recuerdo',
-    message: 'Juan te etiquetó en el recuerdo "Vacaciones de verano en la playa en 2012".',
-    time: 'Hace 5 min',
-    read: false,
-    avatarInitials: 'JD',
-    avatarColor: '#6200ee',
-  },
-  {
-    id: '2',
-    type: 'family',
-    title: 'Actualización del Árbol Familiar',
-    message: 'Sofía agregó una foto de perfil antigua a tu abuelo "Carlos Gómez".',
-    time: 'Hace 2 horas',
-    read: false,
-    avatarInitials: 'SG',
-    avatarColor: '#03dac6',
-  },
-  {
-    id: '3',
-    type: 'inbox',
-    title: 'Pregunta pendiente de Mnemósine',
-    message: 'Se detectó una ambigüedad: ¿En qué año fue tu mudanza a Medellín con tu familia?',
-    time: 'Ayer',
-    read: true,
-    avatarInitials: 'M',
-    avatarColor: '#ff0266',
-  },
-  {
-    id: '4',
-    type: 'system',
-    title: 'Procesamiento de IA Completo',
-    message: 'El analizador cronológico procesó tu último audio y generó 3 hitos de vida nuevos.',
-    time: 'Hace 2 días',
-    read: true,
-    avatarInitials: 'IA',
-    avatarColor: '#3f51b5',
-  },
-];
-
 export default function NotificationsScreen() {
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+  const [requests, setRequests] = useState<ConnectionRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionId, setActionId] = useState<string | null>(null);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  const session = useAuthStore((state) => state.session);
+  const myId = session?.user?.id;
+  const isFocused = useIsFocused();
 
-  const markAllAsRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  const fetchRequests = async () => {
+    if (!myId) return;
+    setLoading(true);
+    try {
+      const { data: conns, error: connsError } = await supabase
+        .from('connections')
+        .select('*')
+        .eq('receiver_id', myId)
+        .eq('status', 'PENDING');
+
+      if (connsError) {
+        console.warn('Error loading connections:', connsError);
+      } else if (conns && conns.length > 0) {
+        const senderIds = conns.map(c => c.sender_id);
+        const { data: profiles, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, avatar_url')
+          .in('id', senderIds);
+
+        if (profilesError) {
+          console.warn('Error loading profiles:', profilesError);
+        } else {
+          const formatted = conns.map(conn => {
+            const profile = profiles.find(p => p.id === conn.sender_id);
+            return {
+              ...conn,
+              sender: profile || {
+                id: conn.sender_id,
+                username: 'usuario',
+                full_name: 'Usuario de Mnemósine',
+                avatar_url: '',
+              }
+            };
+          });
+          setRequests(formatted);
+        }
+      } else {
+        setRequests([]);
+      }
+    } catch (e) {
+      console.warn('Network request failed loading notifications:', e);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const toggleRead = (id: string) => {
-    setNotifications(prev =>
-      prev.map(n => (n.id === id ? { ...n, read: !n.read } : n))
-    );
+  useEffect(() => {
+    if (isFocused) {
+      fetchRequests();
+    }
+  }, [isFocused, myId]);
+
+  const handleAccept = async (request: ConnectionRequest) => {
+    setActionId(request.id);
+    try {
+      const { error } = await supabase
+        .from('connections')
+        .update({ status: 'ACCEPTED', updated_at: new Date().toISOString() })
+        .eq('id', request.id);
+
+      if (error) {
+        Alert.alert('Error', 'No se pudo aceptar la solicitud.');
+      } else {
+        Alert.alert('Conectados', `¡Ahora estás conectado con @${request.sender.username}!`);
+        await syncConnections(myId);
+        fetchRequests();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setActionId(null);
+    }
   };
 
-  const deleteNotification = (id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
+  const handleReject = async (request: ConnectionRequest) => {
+    setActionId(request.id);
+    try {
+      const { error } = await supabase
+        .from('connections')
+        .delete()
+        .eq('id', request.id);
+
+      if (error) {
+        Alert.alert('Error', 'No se pudo rechazar la solicitud.');
+      } else {
+        Alert.alert('Rechazada', 'La solicitud ha sido rechazada.');
+        fetchRequests();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setActionId(null);
+    }
   };
 
-  const clearAll = () => {
+  const handleBlock = (request: ConnectionRequest) => {
     Alert.alert(
-      'Limpiar notificaciones',
-      '¿Estás seguro de que quieres borrar todas las notificaciones?',
+      'Bloquear Usuario',
+      `¿Estás seguro de que quieres bloquear a @${request.sender.username}? No podrá buscar tu perfil ni enviarte solicitudes nunca más.`,
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Borrar Todo', style: 'destructive', onPress: () => setNotifications([]) },
+        {
+          text: 'Bloquear',
+          style: 'destructive',
+          onPress: async () => {
+            setActionId(request.id);
+            try {
+              await supabase.from('connections').delete().eq('id', request.id);
+              const { error } = await supabase.from('blocks').insert({
+                blocker_id: myId,
+                blocked_id: request.sender_id,
+              });
+
+              if (error) {
+                Alert.alert('Error', 'No se pudo bloquear al usuario.');
+              } else {
+                Alert.alert('Bloqueado', `@${request.sender.username} ha sido bloqueado.`);
+                fetchRequests();
+              }
+            } catch (e) {
+              console.error(e);
+            } finally {
+              setActionId(null);
+            }
+          }
+        }
       ]
     );
   };
 
-  const getIcon = (type: NotificationItem['type']) => {
-    switch (type) {
-      case 'mention':
-        return 'at';
-      case 'family':
-        return 'account-multiple-outline';
-      case 'inbox':
-        return 'help-circle-outline';
-      case 'system':
-        return 'robot-outline';
-      default:
-        return 'bell-outline';
-    }
-  };
-
-  const renderItem = ({ item }: { item: NotificationItem }) => {
-    const iconName = getIcon(item.type);
+  const renderItem = ({ item }: { item: ConnectionRequest }) => {
+    const isBusy = actionId === item.id;
+    const timeText = new Date(item.created_at).toLocaleDateString('es-ES', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
 
     return (
-      <Card style={[styles.card, !item.read && styles.unreadCard]} mode="flat">
+      <Card style={styles.card} mode="flat">
         <Card.Content style={styles.cardContent}>
-          {item.avatarInitials ? (
-            <Avatar.Text
-              size={48}
-              label={item.avatarInitials}
-              style={[styles.avatar, { backgroundColor: item.avatarColor || '#6200ee' }]}
-              labelStyle={styles.avatarText}
-            />
-          ) : (
-            <Avatar.Icon
-              size={48}
-              icon={iconName}
-              style={[styles.avatar, { backgroundColor: '#f0f0f0' }]}
-              color="#333"
-            />
-          )}
-
+          <Image
+            source={{
+              uri: item.sender.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder',
+            }}
+            style={styles.avatar}
+          />
           <View style={styles.textContainer}>
-            <View style={styles.rowHeader}>
-              <Text style={[styles.title, !item.read && styles.unreadText]}>{item.title}</Text>
-              {!item.read && <Badge size={8} style={styles.dot} />}
-            </View>
-            <Text style={styles.message}>{item.message}</Text>
-            <Text style={styles.time}>{item.time}</Text>
+            <Text style={styles.title}>
+              Solicitud de Conexión
+            </Text>
+            <Text style={styles.message}>
+              <Text style={{ fontWeight: 'bold' }}>{item.sender.full_name}</Text> (@{item.sender.username}) quiere conectarse contigo en Mnemósine.
+            </Text>
+            <Text style={styles.time}>{timeText}</Text>
           </View>
         </Card.Content>
         <Card.Actions style={styles.actions}>
-          <Button
-            mode="text"
-            compact
-            onPress={() => toggleRead(item.id)}
-            textColor="#6200ee"
-          >
-            {item.read ? 'Marcar no leído' : 'Marcar leído'}
-          </Button>
-          <IconButton
-            icon="trash-can-outline"
-            iconColor="#B00020"
-            size={18}
-            onPress={() => deleteNotification(item.id)}
-          />
+          <View style={styles.actionRow}>
+            <Button
+              mode="contained"
+              onPress={() => handleAccept(item)}
+              loading={isBusy}
+              disabled={isBusy}
+              style={styles.acceptBtn}
+              buttonColor="#2e7d32"
+              labelStyle={styles.btnLabel}
+            >
+              Aceptar
+            </Button>
+            <Button
+              mode="outlined"
+              onPress={() => handleReject(item)}
+              disabled={isBusy}
+              style={styles.rejectBtn}
+              textColor="#d32f2f"
+              labelStyle={styles.btnLabel}
+            >
+              Rechazar
+            </Button>
+            <IconButton
+              icon="account-cancel-outline"
+              iconColor="#d32f2f"
+              size={20}
+              onPress={() => handleBlock(item)}
+              disabled={isBusy}
+              style={styles.blockBtn}
+            />
+          </View>
         </Card.Actions>
       </Card>
     );
@@ -156,40 +227,29 @@ export default function NotificationsScreen() {
   return (
     <View style={styles.container}>
       <Appbar.Header style={styles.appbar}>
-        <Appbar.Content
-          title={
-            <View style={styles.titleContainer}>
-              <Text variant="titleLarge" style={styles.headerTitle}>Notificaciones</Text>
-              {unreadCount > 0 && (
-                <Badge style={styles.headerBadge} size={20}>
-                  {unreadCount}
-                </Badge>
-              )}
-            </View>
-          }
-        />
-        {notifications.length > 0 && (
-          <>
-            <Appbar.Action icon="check-all" onPress={markAllAsRead} title="Marcar todo leído" />
-            <Appbar.Action icon="delete-sweep-outline" onPress={clearAll} title="Borrar todo" />
-          </>
-        )}
+        <Appbar.Content title="Notificaciones" titleStyle={styles.headerTitle} />
       </Appbar.Header>
 
-      {notifications.length === 0 ? (
+      {loading && requests.length === 0 ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#6200ee" />
+        </View>
+      ) : requests.length === 0 ? (
         <View style={styles.emptyContainer}>
           <IconButton icon="bell-off-outline" size={64} iconColor="#aaa" />
           <Text variant="titleMedium" style={styles.emptyTitle}>Todo al día</Text>
           <Text variant="bodyMedium" style={styles.emptySubtitle}>
-            No tienes notificaciones pendientes. Cuando haya interacciones sociales o tareas de IA, aparecerán aquí.
+            No tienes solicitudes de conexión pendientes por el momento.
           </Text>
         </View>
       ) : (
         <FlatList
-          data={notifications}
-          keyExtractor={item => item.id}
+          data={requests}
+          keyExtractor={(item) => item.id}
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
+          refreshing={loading}
+          onRefresh={fetchRequests}
         />
       )}
     </View>
@@ -207,71 +267,49 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f1f3f5',
   },
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
   headerTitle: {
     fontWeight: 'bold',
   },
-  headerBadge: {
-    marginLeft: 8,
-    backgroundColor: '#6200ee',
-    fontWeight: 'bold',
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   listContent: {
     padding: 16,
   },
   card: {
-    marginBottom: 12,
+    marginBottom: 16,
     backgroundColor: '#ffffff',
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: '#e9ecef',
-  },
-  unreadCard: {
-    backgroundColor: '#f1f3f9',
-    borderColor: '#d0ebff',
+    elevation: 0,
   },
   cardContent: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     paddingBottom: 8,
   },
   avatar: {
-    marginRight: 12,
-  },
-  avatarText: {
-    fontWeight: 'bold',
-    fontSize: 16,
-    color: '#ffffff',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#f1f3f9',
+    marginRight: 16,
   },
   textContainer: {
     flex: 1,
   },
-  rowHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
   title: {
     fontSize: 15,
-    fontWeight: '600',
-    color: '#343a40',
-    flex: 1,
-    marginRight: 8,
-  },
-  unreadText: {
     fontWeight: 'bold',
-    color: '#1a1a1a',
-  },
-  dot: {
-    backgroundColor: '#6200ee',
+    color: '#6200ee',
+    marginBottom: 4,
   },
   message: {
     fontSize: 13,
-    color: '#495057',
+    color: '#343a40',
     lineHeight: 18,
     marginBottom: 6,
   },
@@ -280,10 +318,33 @@ const styles = StyleSheet.create({
     color: '#868e96',
   },
   actions: {
-    justifyContent: 'space-between',
-    paddingHorizontal: 8,
     borderTopWidth: 1,
     borderTopColor: '#f1f3f5',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+  },
+  acceptBtn: {
+    flex: 1,
+    marginRight: 8,
+    borderRadius: 8,
+  },
+  rejectBtn: {
+    flex: 1,
+    marginRight: 8,
+    borderRadius: 8,
+    borderColor: '#d32f2f',
+  },
+  blockBtn: {
+    margin: 0,
+  },
+  btnLabel: {
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   emptyContainer: {
     flex: 1,

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Alert, Image, TouchableOpacity } from 'react-native';
 import { Appbar, TextInput, Button, Text, Card, Title, Paragraph, List, Divider } from 'react-native-paper';
+import * as ImagePicker from 'expo-image-picker';
 import { getDb } from '../../core/database';
 import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
@@ -93,6 +94,42 @@ export default function ProfileScreen() {
     loadProfile();
   }, [session]);
 
+  const pickImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso Denegado', 'Necesitamos acceso a tu galería para cambiar tu foto.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setAvatarUrl(result.assets[0].uri);
+      }
+    } catch (e) {
+      console.warn('Error al seleccionar imagen de la galería:', e);
+      Alert.alert('Error', 'No se pudo seleccionar la imagen.');
+    }
+  };
+
+  const handleAvatarPress = () => {
+    Alert.alert(
+      'Foto de Perfil',
+      'Elige cómo actualizar tu foto de perfil:',
+      [
+        { text: 'Seleccionar de la galería', onPress: pickImage },
+        { text: 'Elegir avatar ilustrado', onPress: () => setShowAvatarPicker(true) },
+        { text: 'Cancelar', style: 'cancel' }
+      ]
+    );
+  };
+
   const handleSave = async () => {
     if (!username.trim()) {
       Alert.alert('Error', 'El nombre de usuario es obligatorio.');
@@ -101,25 +138,42 @@ export default function ProfileScreen() {
     setLoading(true);
     try {
       const db = await getDb();
-      if (profileId) {
-        await db.runAsync(
-          'UPDATE user_profile SET username = ?, full_name = ?, avatar_url = ?, birth_date = ?, hometown = ?, country = ?, life_events = ? WHERE id = ?',
-          username.trim(), fullName.trim(), avatarUrl, birthDate.trim(), hometown.trim(), country.trim(), lifeEvents.trim(), profileId
-        );
-      } else {
-        const newId = uuidv4();
-        await db.runAsync(
-          'INSERT INTO user_profile (id, username, full_name, avatar_url, birth_date, hometown, country, life_events) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          newId, username.trim(), fullName.trim(), avatarUrl, birthDate.trim(), hometown.trim(), country.trim(), lifeEvents.trim()
-        );
-        setProfileId(newId);
-      }
+      const currentUserId = session?.user?.id || profileId || uuidv4();
+      
+      await db.runAsync(
+        'INSERT OR REPLACE INTO user_profile (id, username, full_name, avatar_url, birth_date, hometown, country, life_events) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        currentUserId,
+        username.trim().toLowerCase(),
+        fullName.trim(),
+        avatarUrl,
+        birthDate.trim(),
+        hometown.trim(),
+        country.trim(),
+        lifeEvents.trim()
+      );
+      setProfileId(currentUserId);
 
       if (birthDate.trim()) {
         const year = parseInt(birthDate.trim().split('-')[0]);
         if (!isNaN(year)) {
           await generateLifecycleStages(year);
         }
+      }
+
+      // Sincronizar en la nube con Supabase profiles
+      try {
+        const { error: syncError } = await supabase.from('profiles').upsert({
+          id: currentUserId,
+          username: username.trim().toLowerCase(),
+          full_name: fullName.trim(),
+          avatar_url: avatarUrl,
+          updated_at: new Date().toISOString(),
+        });
+        if (syncError && syncError.code !== '42P01') {
+          console.warn('Fallo al sincronizar con Supabase profiles:', syncError);
+        }
+      } catch (err) {
+        console.warn('Fallo de red al sincronizar con Supabase profiles:', err);
       }
 
       Alert.alert('Guardado', 'Perfil actualizado exitosamente.');
@@ -161,7 +215,7 @@ export default function ProfileScreen() {
       <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
         {/* Cabecera Social de Perfil */}
         <View style={styles.profileHeaderCard}>
-          <TouchableOpacity onPress={() => setShowAvatarPicker(!showAvatarPicker)} style={styles.avatarContainer}>
+          <TouchableOpacity onPress={handleAvatarPress} style={styles.avatarContainer}>
             <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
             <View style={styles.avatarEditBadge}>
               <Text style={styles.avatarEditIcon}>✏️</Text>
