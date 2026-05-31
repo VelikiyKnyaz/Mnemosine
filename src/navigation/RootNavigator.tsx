@@ -59,15 +59,48 @@ export default function RootNavigator() {
   const checkProfileStatus = async (userId: string) => {
     try {
       const db = await getDb();
+      
+      // 1. Primero ver si ya existe un perfil completo localmente
       const profile = await db.getFirstAsync<any>('SELECT * FROM user_profile WHERE id = ?', userId);
-      if (!profile || !profile.full_name || !profile.birth_date) {
-        setNeedsOnboarding(true);
-      } else {
+      if (profile && profile.full_name && profile.birth_date) {
         setNeedsOnboarding(false);
+        return;
+      }
+
+      // 2. Si no está en SQLite, consultar en la base de datos remota de Supabase
+      const { data: remoteProfile, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (error && error.code !== '42P01') {
+        console.warn('Error verificando perfil remoto en Supabase:', error);
+      }
+
+      // Si el usuario ya tiene un perfil remoto con nombre completo, asumimos que ya completó el onboarding
+      if (remoteProfile && remoteProfile.full_name) {
+        await db.runAsync(
+          'INSERT OR REPLACE INTO user_profile (id, username, full_name, avatar_url, birth_date, hometown, country, life_events) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          userId,
+          remoteProfile.username || 'user',
+          remoteProfile.full_name,
+          remoteProfile.avatar_url || '',
+          '1990', // fallback por defecto de año de nacimiento para no forzar onboarding
+          '',
+          '',
+          ''
+        );
+        setNeedsOnboarding(false);
+      } else {
+        // Si no tiene perfil remoto completo, es porque se loguea por primera vez con esta cuenta
+        setNeedsOnboarding(true);
       }
     } catch (e) {
-      console.warn('Error verificando perfil en SQLite:', e);
-      setNeedsOnboarding(true); // Por seguridad, forzar onboarding si falla
+      console.warn('Error verificando perfil:', e);
+      // Por seguridad ante fallos de red en usuarios que ya iniciaron sesión anteriormente,
+      // no forzar onboarding si al menos existe la sesión activa
+      setNeedsOnboarding(false);
     }
   };
 
