@@ -9,12 +9,12 @@ const KEYS = {
   SUPABASE_ANON_KEY: 'config:supabase_anon_key',
 };
 
-// Mapeo a las variables de entorno de Expo
+// Mapeo a las variables de entorno de Expo con fallbacks para entornos sin env vars (ej: Expo Snack)
 const ENV_MAPPING = {
-  OPENAI_API_KEY: process.env.EXPO_PUBLIC_OPENAI_API_KEY,
-  GOOGLE_MAPS_KEY: process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY,
-  SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL,
-  SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
+  OPENAI_API_KEY: process.env.EXPO_PUBLIC_OPENAI_API_KEY || '', // Dejado vacío por seguridad en repo público
+  GOOGLE_MAPS_KEY: process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || '', // Se configura en la app vía panel Admin
+  SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://eknupuhacgqfgmbrxrys.supabase.co',
+  SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVrbnVwdWhhY2dxZmdtYnJ4cnlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1MTA5MDEsImV4cCI6MjA5MzA4NjkwMX0.HYcHhS7P36D-QOoonosyil8779iUG-fT-iHbIdOZjK4',
 };
 
 export const getConfig = async (key: keyof typeof KEYS): Promise<string> => {
