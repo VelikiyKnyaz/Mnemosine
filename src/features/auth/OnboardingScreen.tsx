@@ -3,7 +3,7 @@ import { View, StyleSheet, ScrollView, Alert, Image, TouchableOpacity } from 're
 import { Appbar, TextInput, Button, Text, Card, Title, ProgressBar, List, Divider } from 'react-native-paper';
 import * as ImagePicker from 'expo-image-picker';
 import { getDb } from '../../core/database';
-import { supabase } from '../../core/supabase';
+import { supabase, uploadAvatar } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
 import { generateLifecycleStages } from '../../core/chrono_engine';
 import SmartDropdown from '../../components/SmartDropdown';
@@ -169,13 +169,23 @@ export default function OnboardingScreen() {
     try {
       const db = await getDb();
 
+      // Subir avatar a Supabase Storage si es un archivo local
+      let finalAvatarUrl = avatarUrl;
+      if (avatarUrl.startsWith('file://')) {
+        try {
+          finalAvatarUrl = await uploadAvatar(userId, avatarUrl);
+        } catch (uploadErr) {
+          console.warn('Fallo al subir avatar a Supabase Storage:', uploadErr);
+        }
+      }
+
       // 1. Guardar localmente en SQLite user_profile
       await db.runAsync(
         'INSERT OR REPLACE INTO user_profile (id, username, full_name, avatar_url, birth_date, hometown, country, life_events) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         userId,
         finalUsername,
         fullName.trim(),
-        avatarUrl,
+        finalAvatarUrl,
         birthDate.trim(),
         hometown.trim(),
         country.trim(),
@@ -194,7 +204,7 @@ export default function OnboardingScreen() {
           id: userId,
           username: finalUsername,
           full_name: fullName.trim(),
-          avatar_url: avatarUrl,
+          avatar_url: finalAvatarUrl,
           updated_at: new Date().toISOString(),
         });
 

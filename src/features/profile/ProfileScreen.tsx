@@ -4,7 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Appbar, TextInput, Button, Text, Card, Title, Paragraph, List, Divider } from 'react-native-paper';
 import * as ImagePicker from 'expo-image-picker';
 import { getDb } from '../../core/database';
-import { supabase } from '../../core/supabase';
+import { supabase, uploadAvatar } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
 import { v4 as uuidv4 } from 'uuid';
 import 'react-native-get-random-values';
@@ -142,12 +142,23 @@ export default function ProfileScreen() {
       const db = await getDb();
       const currentUserId = session?.user?.id || profileId || uuidv4();
       
+      // Subir avatar a Supabase Storage si es un archivo local
+      let finalAvatarUrl = avatarUrl;
+      if (avatarUrl.startsWith('file://')) {
+        try {
+          finalAvatarUrl = await uploadAvatar(currentUserId, avatarUrl);
+          setAvatarUrl(finalAvatarUrl);
+        } catch (uploadErr) {
+          console.warn('Fallo al subir avatar a Supabase Storage:', uploadErr);
+        }
+      }
+
       await db.runAsync(
         'INSERT OR REPLACE INTO user_profile (id, username, full_name, avatar_url, birth_date, hometown, country, life_events) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         currentUserId,
         username,
         fullName,
-        avatarUrl,
+        finalAvatarUrl,
         birthDate.trim(),
         hometown.trim(),
         country.trim(),
@@ -168,7 +179,7 @@ export default function ProfileScreen() {
           id: currentUserId,
           username: username,
           full_name: fullName,
-          avatar_url: avatarUrl,
+          avatar_url: finalAvatarUrl,
           updated_at: new Date().toISOString(),
         });
         if (syncError && syncError.code !== '42P01') {

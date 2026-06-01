@@ -46,3 +46,40 @@ export const getSupabase = async (): Promise<SupabaseClient> => {
   return _supabase;
 };
 
+/**
+ * Uploads a local file to Supabase storage bucket 'user_assets' and returns its public URL.
+ */
+export const uploadAvatar = async (userId: string, localUri: string): Promise<string> => {
+  if (!localUri || !localUri.startsWith('file://')) {
+    return localUri;
+  }
+  
+  try {
+    const response = await fetch(localUri);
+    const blob = await response.blob();
+    const fileExt = localUri.split('.').pop() || 'jpg';
+    // Path: avatars/userId-timestamp.ext
+    const filePath = `avatars/${userId}-${Date.now()}.${fileExt}`;
+
+    const { error } = await supabase.storage
+      .from('user_assets')
+      .upload(filePath, blob, {
+        contentType: `image/${fileExt}`,
+        upsert: true
+      });
+
+    if (error) {
+      throw error;
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('user_assets')
+      .getPublicUrl(filePath);
+
+    return publicUrl;
+  } catch (error) {
+    console.error('Error uploading avatar:', error);
+    throw error;
+  }
+};
+
