@@ -3,6 +3,7 @@ import { View, StyleSheet, ActivityIndicator, Alert, Image, ScrollView } from 'r
 import { Appbar, Card, Button, Text, Title, Paragraph, Divider } from 'react-native-paper';
 import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
+import { getDb } from '../../core/database';
 
 export default function MemberProfileScreen({ route, navigation }: any) {
   const { targetUser: initialTargetUser } = route.params; // Contiene id, username, full_name, avatar_url
@@ -185,6 +186,24 @@ export default function MemberProfileScreen({ route, navigation }: any) {
               } else {
                 setConnectionState('NONE');
                 setConnectionId(null);
+                
+                // Desvincular localmente para que no quede como nodo fantasma
+                try {
+                  const db = await getDb();
+                  const localPeople = await db.getAllAsync<any>("SELECT * FROM entities WHERE type = 'PERSON'");
+                  for (const p of localPeople) {
+                    const meta = p.metadata ? JSON.parse(p.metadata) : {};
+                    if (meta.user_id === targetUser.id) {
+                      meta.is_linked = false;
+                      meta.user_id = null;
+                      meta.username = '';
+                      await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(meta), p.id);
+                    }
+                  }
+                } catch (dbErr) {
+                  console.warn('Error al desvincular localmente:', dbErr);
+                }
+
                 Alert.alert('Conexión Eliminada', 'Ya no estás conectado con esta persona.');
               }
             } catch (e) {

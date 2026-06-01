@@ -262,6 +262,10 @@ export default function FamilyTreeScreen({ navigation }: any) {
   };
 
   const handleDelete = async (id: string) => {
+    const person = people.find(p => p.id === id);
+    const meta = person && person.metadata ? JSON.parse(person.metadata) : {};
+    const targetUserId = meta.user_id;
+
     Alert.alert(
       'Eliminar Persona',
       '¿Estás seguro de que quieres eliminar a esta persona del árbol? Se conservarán sus recuerdos pero ya no aparecerá en la red.',
@@ -272,9 +276,61 @@ export default function FamilyTreeScreen({ navigation }: any) {
           style: 'destructive',
           onPress: async () => {
             try {
+              // Si estaba vinculada, borrar la conexión en Supabase
+              if (targetUserId && myId) {
+                await supabase
+                  .from('connections')
+                  .delete()
+                  .or(`and(sender_id.eq.${myId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${myId})`);
+              }
+
               const db = await getDb();
               await db.runAsync("DELETE FROM memory_entities WHERE entity_id = ?", id);
               await db.runAsync("DELETE FROM entities WHERE id = ?", id);
+              setModalVisible(false);
+              await loadPeople();
+            } catch (err) {
+              console.error(err);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleUnlink = (id: string) => {
+    const person = people.find(p => p.id === id);
+    const meta = person && person.metadata ? JSON.parse(person.metadata) : {};
+    const targetUserId = meta.user_id;
+
+    Alert.alert(
+      'Desvincular de la App',
+      '¿Estás seguro de que quieres desvincular a esta persona? Seguirá existiendo en tu árbol de forma local, pero perderán la conexión en la red social y su foto/nombre ya no se actualizarán automáticamente.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Desvincular',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              if (targetUserId && myId) {
+                await supabase
+                  .from('connections')
+                  .delete()
+                  .or(`and(sender_id.eq.${myId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${myId})`);
+              }
+
+              const db = await getDb();
+              meta.is_linked = false;
+              meta.user_id = null;
+              meta.username = '';
+              
+              await db.runAsync(
+                "UPDATE entities SET metadata = ? WHERE id = ?",
+                JSON.stringify(meta),
+                id
+              );
+
               setModalVisible(false);
               await loadPeople();
             } catch (err) {
@@ -491,6 +547,18 @@ export default function FamilyTreeScreen({ navigation }: any) {
                   disabled={isLinked || saving}
                   placeholder="Ej: sofiagomez"
                 />
+
+                {isLinked && selectedPerson && (
+                  <Button
+                    mode="outlined"
+                    onPress={() => handleUnlink(selectedPerson.id)}
+                    style={{ borderColor: '#d32f2f', marginBottom: 12, borderRadius: 8 }}
+                    textColor="#d32f2f"
+                    disabled={saving}
+                  >
+                    Desvincular de la App
+                  </Button>
+                )}
 
                 <Button
                   mode="contained"
