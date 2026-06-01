@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, StyleSheet, ScrollView, Alert, Image, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Appbar, TextInput, Button, Text, Card, Title, Paragraph, List, Divider } from 'react-native-paper';
@@ -51,6 +51,7 @@ export default function ProfileScreen() {
   const [username, setUsername] = useState('');
   const [fullName, setFullName] = useState('');
   const [avatarUrl, setAvatarUrl] = useState(PRESET_AVATARS[0]);
+  const pendingBase64Ref = useRef<string | undefined>(undefined);
 
   // Campos existentes de la IA
   const [birthDate, setBirthDate] = useState('');
@@ -78,28 +79,38 @@ export default function ProfileScreen() {
         setLifeEvents(profile.life_events || '');
         setUsername(profile.username || '');
         setFullName(profile.full_name || '');
-        setAvatarUrl(profile.avatar_url || PRESET_AVATARS[0]);
+        // Solo usar avatar_url si es una URL remota (https://), no file:// locales que pueden expirar
+        const savedAvatar = profile.avatar_url || '';
+        if (savedAvatar.startsWith('http')) {
+          setAvatarUrl(savedAvatar);
+        } else if (savedAvatar) {
+          // Es una URI local, verificar si Supabase tiene una URL mejor
+          try {
+            const { data: remoteProfile } = await supabase
+              .from('profiles')
+              .select('avatar_url')
+              .eq('id', session.user.id)
+              .maybeSingle();
+            if (remoteProfile?.avatar_url && remoteProfile.avatar_url.startsWith('http')) {
+              setAvatarUrl(remoteProfile.avatar_url);
+              // Actualizar SQLite con la URL remota
+              await db.runAsync('UPDATE user_profile SET avatar_url = ? WHERE id = ?', remoteProfile.avatar_url, session.user.id);
+            } else {
+              setAvatarUrl(savedAvatar);
+            }
+          } catch (_) {
+            setAvatarUrl(savedAvatar);
+          }
+        } else {
+          setAvatarUrl(PRESET_AVATARS[0]);
+        }
       } else {
-        // Inicializar datos por defecto del email de Supabase si hay sesión
         if (session?.user?.email) {
           const defaultUsername = session.user.email.split('@')[0];
           setUsername(defaultUsername);
           setFullName(defaultUsername.charAt(0).toUpperCase() + defaultUsername.slice(1));
         }
       }
-
-      // Refrescar avatar desde Supabase (puede haber sido cambiado en otro dispositivo)
-      try {
-        const { data: remoteProfile } = await supabase
-          .from('profiles')
-          .select('avatar_url')
-          .eq('id', session.user.id)
-          .maybeSingle();
-
-        if (remoteProfile?.avatar_url) {
-          setAvatarUrl(remoteProfile.avatar_url);
-        }
-      } catch (_) {}
     } catch (e) {
       console.error(e);
     }
@@ -132,6 +143,7 @@ export default function ProfileScreen() {
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const selectedUri = result.assets[0].uri;
         const base64Data = result.assets[0].base64 || undefined;
+        pendingBase64Ref.current = base64Data;
         setAvatarUrl(selectedUri);
         saveAvatarToServer(selectedUri, base64Data);
       }
@@ -150,20 +162,31 @@ export default function ProfileScreen() {
     if (!currentUserId) return;
 
     try {
-      // Subir a Supabase Storage si es archivo local
       let finalUrl = newAvatarUrl;
+      let uploadSucceeded = false;
+
+      // Subir a Supabase Storage si es archivo local
       if (newAvatarUrl.startsWith('file://') || newAvatarUrl.startsWith('content://')) {
         try {
-          finalUrl = await uploadAvatar(currentUserId, newAvatarUrl, base64Data);
+          const result = await uploadAvatar(currentUserId, newAvatarUrl, base64Data);
+          // Solo aceptar como éxito si devolvió una URL remota (no la misma file://)
+          if (result.startsWith('http')) {
+            finalUrl = result;
+            uploadSucceeded = true;
+            pendingBase64Ref.current = undefined;
+          }
         } catch (uploadErr) {
           console.warn('Fallo al subir avatar:', uploadErr);
         }
+      } else {
+        // Es una URL remota (preset o ya subida), no necesita upload
+        uploadSucceeded = true;
       }
 
-      // Actualizar estado local
+      // Actualizar estado visual
       setAvatarUrl(finalUrl);
 
-      // Guardar en SQLite
+      // Guardar en SQLite siempre (incluso file:// como cache local temporal)
       const db = await getDb();
       await db.runAsync(
         'UPDATE user_profile SET avatar_url = ? WHERE id = ?',
@@ -171,14 +194,17 @@ export default function ProfileScreen() {
         currentUserId
       );
 
-      // Sincronizar con Supabase profiles
-      await supabase.from('profiles').upsert({
-        id: currentUserId,
-        avatar_url: finalUrl,
-        updated_at: new Date().toISOString(),
-      });
-
-      console.log('[Profile] Avatar sincronizado:', finalUrl);
+      // Solo sincronizar con Supabase profiles si tenemos una URL remota válida
+      if (uploadSucceeded && finalUrl.startsWith('http')) {
+        await supabase.from('profiles').upsert({
+          id: currentUserId,
+          avatar_url: finalUrl,
+          updated_at: new Date().toISOString(),
+        });
+        console.log('[Profile] Avatar sincronizado OK:', finalUrl);
+      } else {
+        console.warn('[Profile] Avatar guardado solo localmente (upload falló). URI:', finalUrl.substring(0, 60));
+      }
     } catch (e) {
       console.warn('[Profile] Error sincronizando avatar:', e);
     }
@@ -204,10 +230,14 @@ export default function ProfileScreen() {
       
       // Subir avatar a Supabase Storage si es un archivo local
       let finalAvatarUrl = avatarUrl;
-      if (avatarUrl.startsWith('file://')) {
+      if (avatarUrl.startsWith('file://') || avatarUrl.startsWith('content://')) {
         try {
-          finalAvatarUrl = await uploadAvatar(currentUserId, avatarUrl);
-          setAvatarUrl(finalAvatarUrl);
+          const result = await uploadAvatar(currentUserId, avatarUrl, pendingBase64Ref.current);
+          if (result.startsWith('http')) {
+            finalAvatarUrl = result;
+            setAvatarUrl(finalAvatarUrl);
+            pendingBase64Ref.current = undefined;
+          }
         } catch (uploadErr) {
           console.warn('Fallo al subir avatar a Supabase Storage:', uploadErr);
         }
@@ -235,13 +265,17 @@ export default function ProfileScreen() {
 
       // Sincronizar en la nube con Supabase profiles
       try {
-        const { error: syncError } = await supabase.from('profiles').upsert({
+        // Solo incluir avatar_url remoto en la sincronización
+        const profileData: any = {
           id: currentUserId,
           username: username,
           full_name: fullName,
-          avatar_url: finalAvatarUrl,
           updated_at: new Date().toISOString(),
-        });
+        };
+        if (finalAvatarUrl.startsWith('http')) {
+          profileData.avatar_url = finalAvatarUrl;
+        }
+        const { error: syncError } = await supabase.from('profiles').upsert(profileData);
         if (syncError && syncError.code !== '42P01') {
           console.warn('Fallo al sincronizar con Supabase profiles:', syncError);
         }
@@ -289,7 +323,7 @@ export default function ProfileScreen() {
         {/* Cabecera Social de Perfil */}
         <View style={styles.profileHeaderCard}>
           <TouchableOpacity onPress={handleAvatarPress} style={styles.avatarContainer}>
-            <Image source={{ uri: avatarUrl, cache: 'reload' }} style={styles.avatarImage} />
+            <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
             <View style={styles.avatarEditBadge}>
               <Text style={styles.avatarEditIcon}>✏️</Text>
             </View>

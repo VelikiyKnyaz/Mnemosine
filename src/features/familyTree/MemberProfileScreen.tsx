@@ -253,7 +253,6 @@ export default function MemberProfileScreen({ route, navigation }: any) {
               <Image
                 source={{
                   uri: targetUser?.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder',
-                  cache: 'reload',
                 }}
                 style={styles.avatar}
               />

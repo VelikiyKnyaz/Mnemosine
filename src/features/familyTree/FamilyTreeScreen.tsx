@@ -299,7 +299,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
           <Image
             source={{
               uri: avatar || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + item.name,
-              cache: 'reload',
             }}
             style={styles.avatar}
           />
@@ -368,7 +367,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
                 navigation.navigate('MemberProfile', { targetUser: searchResult });
               }}
             >
-              <Image source={{ uri: searchResult.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder', cache: 'reload' }} style={styles.resultAvatar} />
+              <Image source={{ uri: searchResult.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder' }} style={styles.resultAvatar} />
               <View style={styles.resultText}>
                 <Text style={styles.resultName}>{searchResult.full_name}</Text>
                 <Text style={styles.resultUsername}>@{searchResult.username}</Text>
