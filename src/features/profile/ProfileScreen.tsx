@@ -113,12 +113,14 @@ export default function ProfileScreen() {
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
+        base64: true,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const selectedUri = result.assets[0].uri;
+        const base64Data = result.assets[0].base64 || undefined;
         setAvatarUrl(selectedUri);
-        saveAvatarToServer(selectedUri);
+        saveAvatarToServer(selectedUri, base64Data);
       }
     } catch (e) {
       console.warn('Error al seleccionar imagen de la galería:', e);
@@ -130,7 +132,7 @@ export default function ProfileScreen() {
    * Guarda el avatar inmediatamente tanto en SQLite como en Supabase profiles.
    * Se llama automáticamente al cambiar foto desde galería o preset.
    */
-  const saveAvatarToServer = async (newAvatarUrl: string) => {
+  const saveAvatarToServer = async (newAvatarUrl: string, base64Data?: string) => {
     const currentUserId = session?.user?.id || profileId;
     if (!currentUserId) return;
 
@@ -139,7 +141,7 @@ export default function ProfileScreen() {
       let finalUrl = newAvatarUrl;
       if (newAvatarUrl.startsWith('file://') || newAvatarUrl.startsWith('content://')) {
         try {
-          finalUrl = await uploadAvatar(currentUserId, newAvatarUrl);
+          finalUrl = await uploadAvatar(currentUserId, newAvatarUrl, base64Data);
         } catch (uploadErr) {
           console.warn('Fallo al subir avatar:', uploadErr);
         }

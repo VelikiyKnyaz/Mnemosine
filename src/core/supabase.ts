@@ -2,6 +2,33 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { getConfig } from './config';
 
+// Polyfill simple para decodificar base64 a Uint8Array sin dependencias externas (compatible con Snack)
+const decodeBase64 = (base64: string): Uint8Array => {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const lookup = new Uint8Array(256);
+  for (let i = 0; i < chars.length; i++) {
+    lookup[chars.charCodeAt(i)] = i;
+  }
+
+  let bufferLength = base64.length * 0.75;
+  if (base64[base64.length - 1] === '=') bufferLength--;
+  if (base64[base64.length - 2] === '=') bufferLength--;
+
+  const bytes = new Uint8Array(bufferLength);
+  let p = 0;
+  for (let i = 0; i < base64.length; i += 4) {
+    const encoded1 = lookup[base64.charCodeAt(i)];
+    const encoded2 = lookup[base64.charCodeAt(i + 1)];
+    const encoded3 = lookup[base64.charCodeAt(i + 2)];
+    const encoded4 = lookup[base64.charCodeAt(i + 3)];
+
+    bytes[p++] = (encoded1 << 2) | (encoded2 >> 4);
+    if (encoded3 !== 64) bytes[p++] = ((encoded2 & 15) << 4) | (encoded3 >> 2);
+    if (encoded4 !== 64) bytes[p++] = ((encoded3 & 3) << 6) | (encoded4 & 63);
+  }
+  return bytes;
+};
+
 // Inicialización estática preferida desde variables de entorno de Expo, con fallbacks para Expo Snack
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://eknupuhacgqfgmbrxrys.supabase.co';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVrbnVwdWhhY2dxZmdtYnJ4cnlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1MTA5MDEsImV4cCI6MjA5MzA4NjkwMX0.HYcHhS7P36D-QOoonosyil8779iUG-fT-iHbIdOZjK4';
@@ -48,9 +75,9 @@ export const getSupabase = async (): Promise<SupabaseClient> => {
 
 /**
  * Uploads a local file (from gallery) to Supabase storage bucket 'user_assets' and returns its public URL.
- * Uses FormData which is the correct approach for React Native file uploads.
+ * Uses ArrayBuffer/Blob para evitar el bug de React Native en Android donde FormData elimina los headers de Auth (causando RLS 403).
  */
-export const uploadAvatar = async (userId: string, localUri: string): Promise<string> => {
+export const uploadAvatar = async (userId: string, localUri: string, base64Data?: string): Promise<string> => {
   // Solo subir archivos locales (file:// o content:// en Android)
   if (!localUri || (!localUri.startsWith('file://') && !localUri.startsWith('content://'))) {
     return localUri;
@@ -60,20 +87,30 @@ export const uploadAvatar = async (userId: string, localUri: string): Promise<st
     const fileExt = localUri.split('.').pop()?.split('?')[0] || 'jpg';
     const filePath = `avatars/${userId}-${Date.now()}.${fileExt}`;
 
-    // React Native: crear FormData con el objeto URI (no fetch+blob)
-    const formData = new FormData();
-    formData.append('file', {
-      uri: localUri,
-      name: `avatar.${fileExt}`,
-      type: `image/${fileExt === 'png' ? 'png' : 'jpeg'}`,
-    } as any);
+    let error;
 
-    const { error } = await supabase.storage
-      .from('user_assets')
-      .upload(filePath, formData, {
-        contentType: 'multipart/form-data',
-        upsert: true
-      });
+    if (base64Data) {
+      // Snack / Android seguro: Usamos el string base64 directo desde ImagePicker
+      const arrayBuffer = decodeBase64(base64Data);
+      const res = await supabase.storage
+        .from('user_assets')
+        .upload(filePath, arrayBuffer, {
+          contentType: `image/${fileExt === 'png' ? 'png' : 'jpeg'}`,
+          upsert: true
+        });
+      error = res.error;
+    } else {
+      // Fallback si no hay base64 (fetch puro devolviendo blob y lo enviamos sin FormData)
+      const response = await fetch(localUri);
+      const blob = await response.blob();
+      const res = await supabase.storage
+        .from('user_assets')
+        .upload(filePath, blob, {
+          contentType: `image/${fileExt === 'png' ? 'png' : 'jpeg'}`,
+          upsert: true
+        });
+      error = res.error;
+    }
 
     if (error) {
       console.error('Supabase storage upload error:', error);
