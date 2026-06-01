@@ -270,9 +270,8 @@ export default function MemberProfileScreen({ route, navigation }: any) {
                     onPress={handleCancelRequest}
                     loading={actionLoading}
                     disabled={actionLoading}
-                    style={[styles.actionBtn, { marginTop: 10 }]}
+                    style={[styles.actionBtn, { marginTop: 10, borderColor: '#B00020' }]}
                     textColor="#B00020"
-                    style={{ borderColor: '#B00020' }}
                   >
                     Cancelar Solicitud
                   </Button>
@@ -298,9 +297,8 @@ export default function MemberProfileScreen({ route, navigation }: any) {
                       onPress={handleCancelRequest}
                       loading={actionLoading}
                       disabled={actionLoading}
-                      style={styles.halfBtn}
+                      style={[styles.halfBtn, { borderColor: '#B00020' }]}
                       textColor="#B00020"
-                      style={{ borderColor: '#B00020' }}
                     >
                       Rechazar
                     </Button>
@@ -316,9 +314,8 @@ export default function MemberProfileScreen({ route, navigation }: any) {
                     onPress={handleRemoveConnection}
                     loading={actionLoading}
                     disabled={actionLoading}
-                    style={[styles.actionBtn, { marginTop: 12 }]}
+                    style={[styles.actionBtn, { marginTop: 12, borderColor: '#B00020' }]}
                     textColor="#B00020"
-                    style={{ borderColor: '#B00020' }}
                   >
                     Eliminar Conexión
                   </Button>
