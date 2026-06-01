@@ -45,8 +45,9 @@ export default function OnboardingScreen() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
 
-  // Paso 1: Nombre Completo
+  // Paso 1: Nombre Completo y Usuario
   const [fullName, setFullName] = useState('');
+  const [username, setUsername] = useState('');
 
   // Paso 2: Datos de Contexto (IA)
   const [birthDate, setBirthDate] = useState('');
@@ -63,10 +64,21 @@ export default function OnboardingScreen() {
   const totalSteps = 3;
   const progress = step / totalSteps;
 
+  const validateUsername = (name: string) => /^[a-z0-9._]{3,30}$/.test(name);
+
   const handleNext = () => {
-    if (step === 1 && !fullName.trim()) {
-      Alert.alert('Falta Información', 'Por favor ingresa tu nombre completo.');
-      return;
+    if (step === 1) {
+      if (!fullName.trim()) {
+        Alert.alert('Falta Información', 'Por favor ingresa tu nombre completo.');
+        return;
+      }
+      if (!username.trim() || !validateUsername(username)) {
+        Alert.alert(
+          'Usuario Inválido',
+          'El nombre de usuario debe tener entre 3 y 30 caracteres, solo minúsculas, números, puntos y guiones bajos (sin espacios).'
+        );
+        return;
+      }
     }
     if (step === 2) {
       if (!birthDate.trim() || isNaN(parseInt(birthDate))) {
@@ -114,7 +126,7 @@ export default function OnboardingScreen() {
     setLoading(true);
 
     const userId = session.user.id;
-    const username = session.user.user_metadata?.username || 'user_' + userId.slice(0, 8);
+    const finalUsername = username.trim().toLowerCase();
 
     try {
       const db = await getDb();
@@ -123,7 +135,7 @@ export default function OnboardingScreen() {
       await db.runAsync(
         'INSERT OR REPLACE INTO user_profile (id, username, full_name, avatar_url, birth_date, hometown, country, life_events) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         userId,
-        username,
+        finalUsername,
         fullName.trim(),
         avatarUrl,
         birthDate.trim(),
@@ -142,7 +154,7 @@ export default function OnboardingScreen() {
       try {
         const { error: upsertError } = await supabase.from('profiles').upsert({
           id: userId,
-          username: username,
+          username: finalUsername,
           full_name: fullName.trim(),
           avatar_url: avatarUrl,
           updated_at: new Date().toISOString(),
@@ -188,6 +200,17 @@ export default function OnboardingScreen() {
                 onChangeText={setFullName}
                 style={styles.input}
                 placeholder="Ej: Sofía Gómez"
+                mode="outlined"
+                activeOutlineColor="#6200ee"
+                disabled={loading}
+              />
+              <TextInput
+                label="Nombre de Usuario (@)"
+                value={username}
+                onChangeText={(text) => setUsername(text.toLowerCase())}
+                style={styles.input}
+                placeholder="Ej: sofiagomez"
+                autoCapitalize="none"
                 mode="outlined"
                 activeOutlineColor="#6200ee"
                 disabled={loading}

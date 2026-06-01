@@ -74,6 +74,17 @@ export default function FamilyTreeScreen({ navigation }: any) {
     if (isFocused) {
       handleSyncAndLoad();
     }
+    
+    if (myId) {
+      const channel = supabase.channel('connections_tree')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, () => {
+          handleSyncAndLoad();
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }
   }, [isFocused, myId]);
 
   const handleSearch = async () => {

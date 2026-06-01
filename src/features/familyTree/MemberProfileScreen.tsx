@@ -52,7 +52,18 @@ export default function MemberProfileScreen({ route, navigation }: any) {
 
   useEffect(() => {
     fetchConnectionStatus();
-  }, [targetUser?.id]);
+    
+    // Real-time listener para conexiones
+    const channel = supabase.channel('connections_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, () => {
+        fetchConnectionStatus();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [targetUser?.id, myId]);
 
   const handleRequestConnection = async () => {
     if (!myId || !targetUser?.id) return;
@@ -64,16 +75,15 @@ export default function MemberProfileScreen({ route, navigation }: any) {
           sender_id: myId,
           receiver_id: targetUser.id,
           status: 'PENDING',
-        })
-        .select()
-        .single();
+          updated_at: new Date().toISOString()
+        });
 
       if (error) {
         Alert.alert('Error', 'No se pudo enviar la solicitud de conexión.');
         console.error(error);
       } else {
         setConnectionState('PENDING_SENT');
-        setConnectionId(data.id);
+        // connectionId will be updated by the real-time listener
         Alert.alert('Solicitud Enviada', `Se envió la solicitud de conexión a @${targetUser.username}.`);
       }
     } catch (e) {

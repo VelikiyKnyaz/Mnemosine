@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, StyleSheet, ScrollView, Alert, Image, TouchableOpacity } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Appbar, TextInput, Button, Text, Card, Title, Paragraph, List, Divider } from 'react-native-paper';
 import * as ImagePicker from 'expo-image-picker';
 import { getDb } from '../../core/database';
@@ -90,9 +91,13 @@ export default function ProfileScreen() {
     }
   };
 
-  useEffect(() => {
-    loadProfile();
-  }, [session]);
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+    }, [session])
+  );
+
+  const validateUsername = (name: string) => /^[a-z0-9._]{3,30}$/.test(name);
 
   const pickImage = async () => {
     try {
@@ -131,8 +136,17 @@ export default function ProfileScreen() {
   };
 
   const handleSave = async () => {
-    if (!username.trim()) {
+    const finalUsername = username.trim().toLowerCase();
+    
+    if (!finalUsername) {
       Alert.alert('Error', 'El nombre de usuario es obligatorio.');
+      return;
+    }
+    if (!validateUsername(finalUsername)) {
+      Alert.alert(
+        'Usuario Inválido',
+        'El nombre de usuario debe tener entre 3 y 30 caracteres, solo minúsculas, números, puntos y guiones bajos (sin espacios).'
+      );
       return;
     }
     setLoading(true);
@@ -143,7 +157,7 @@ export default function ProfileScreen() {
       await db.runAsync(
         'INSERT OR REPLACE INTO user_profile (id, username, full_name, avatar_url, birth_date, hometown, country, life_events) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         currentUserId,
-        username.trim().toLowerCase(),
+        finalUsername,
         fullName.trim(),
         avatarUrl,
         birthDate.trim(),
@@ -164,7 +178,7 @@ export default function ProfileScreen() {
       try {
         const { error: syncError } = await supabase.from('profiles').upsert({
           id: currentUserId,
-          username: username.trim().toLowerCase(),
+          username: finalUsername,
           full_name: fullName.trim(),
           avatar_url: avatarUrl,
           updated_at: new Date().toISOString(),
