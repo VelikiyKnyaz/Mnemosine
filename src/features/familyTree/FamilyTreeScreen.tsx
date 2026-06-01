@@ -76,13 +76,23 @@ export default function FamilyTreeScreen({ navigation }: any) {
     }
     
     if (myId) {
-      const channel = supabase.channel('connections_tree')
+      // Listener para cambios en conexiones
+      const connChannel = supabase.channel('connections_tree')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, () => {
           handleSyncAndLoad();
         })
         .subscribe();
+
+      // Listener para cambios en perfiles (ej: cuando alguien actualiza su foto)
+      const profileChannel = supabase.channel('profiles_tree')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+          handleSyncAndLoad();
+        })
+        .subscribe();
+
       return () => {
-        supabase.removeChannel(channel);
+        supabase.removeChannel(connChannel);
+        supabase.removeChannel(profileChannel);
       };
     }
   }, [isFocused, myId]);
