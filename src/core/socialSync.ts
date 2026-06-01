@@ -56,7 +56,11 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
     for (const profile of profiles) {
       const friendId = profile.id;
       const remoteName = profile.full_name || `@${profile.username}`;
-      const remoteAvatar = profile.avatar_url || `https://api.dicebear.com/7.x/adventurer/png?seed=${profile.username}`;
+      // Solo usar avatar_url si es una URL remota válida (ignorar file:// de uploads fallidos)
+      const rawAvatar = profile.avatar_url || '';
+      const remoteAvatar = rawAvatar.startsWith('http') 
+        ? rawAvatar 
+        : `https://api.dicebear.com/7.x/adventurer/png?seed=${profile.username}`;
 
       // Check if this friend is already linked to a local node
       let existingNode = null;

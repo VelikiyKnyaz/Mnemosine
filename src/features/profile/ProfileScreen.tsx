@@ -201,12 +201,13 @@ export default function ProfileScreen() {
           avatar_url: finalUrl,
           updated_at: new Date().toISOString(),
         });
-        console.log('[Profile] Avatar sincronizado OK:', finalUrl);
-      } else {
-        console.warn('[Profile] Avatar guardado solo localmente (upload falló). URI:', finalUrl.substring(0, 60));
+        Alert.alert('✅ Foto Actualizada', 'Tu foto de perfil se subió y sincronizó correctamente.');
+      } else if (newAvatarUrl.startsWith('file://') || newAvatarUrl.startsWith('content://')) {
+        Alert.alert('❌ Error al subir foto', 'No se pudo subir la imagen al servidor. La foto se guardó solo localmente. Intenta de nuevo.');
       }
     } catch (e) {
       console.warn('[Profile] Error sincronizando avatar:', e);
+      Alert.alert('❌ Error', 'Ocurrió un error al sincronizar la foto: ' + String(e));
     }
   };
 

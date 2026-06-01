@@ -30,6 +30,10 @@ export default function MemberProfileScreen({ route, navigation }: any) {
         .maybeSingle();
 
       if (!error && data) {
+        // Sanitizar avatar_url: file:// de otro dispositivo no funciona aquí
+        if (data.avatar_url && !data.avatar_url.startsWith('http')) {
+          data.avatar_url = `https://api.dicebear.com/7.x/adventurer/png?seed=${data.username || 'placeholder'}`;
+        }
         setTargetUser(data);
       }
     } catch (_) {}
