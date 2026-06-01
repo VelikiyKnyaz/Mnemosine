@@ -14,16 +14,13 @@ export default function RegisterScreen({ navigation }: any) {
   const handleRegister = async () => {
     const cleanUsername = username.trim().toLowerCase();
 
-    // Validar longitud
-    if (cleanUsername.length < 3) {
-      Alert.alert('Formato Inválido', 'El nombre de usuario debe tener al menos 3 caracteres.');
-      return;
-    }
-
-    // Validar caracteres permitidos
-    const usernameRegex = /^[a-zA-Z0-9_]+$/;
+    // Validar longitud y caracteres permitidos (Estilo Instagram: a-z, 0-9, ., _, sin espacios, 3-30 chars)
+    const usernameRegex = /^[a-z0-9._]{3,30}$/;
     if (!usernameRegex.test(cleanUsername)) {
-      Alert.alert('Formato Inválido', 'El nombre de usuario solo puede tener letras, números y guiones bajos (_).');
+      Alert.alert(
+        'Formato Inválido',
+        'El nombre de usuario debe tener entre 3 y 30 caracteres y solo contener letras minúsculas, números, puntos y guiones bajos (sin espacios).'
+      );
       return;
     }
 

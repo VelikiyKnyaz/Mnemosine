@@ -46,8 +46,9 @@ export default function OnboardingScreen() {
   const [loading, setLoading] = useState(false);
 
   // Paso 1: Nombre Completo y Usuario
+  const session = useAuthStore((state) => state.session);
   const [fullName, setFullName] = useState('');
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(session?.user?.user_metadata?.username || '');
 
   // Paso 2: Datos de Contexto (IA)
   const [birthDate, setBirthDate] = useState('');
@@ -58,7 +59,6 @@ export default function OnboardingScreen() {
   // Paso 3: Avatar / Foto de Perfil
   const [avatarUrl, setAvatarUrl] = useState(PRESET_AVATARS[0]);
 
-  const session = useAuthStore((state) => state.session);
   const setNeedsOnboarding = useAuthStore((state) => state.setNeedsOnboarding);
 
   const totalSteps = 3;
