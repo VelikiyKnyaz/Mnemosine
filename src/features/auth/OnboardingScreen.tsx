@@ -48,7 +48,22 @@ export default function OnboardingScreen() {
   // Paso 1: Nombre Completo y Usuario
   const session = useAuthStore((state) => state.session);
   const [fullName, setFullName] = useState('');
-  const [username, setUsername] = useState(session?.user?.user_metadata?.username || '');
+  
+  // Generar un usuario por defecto a partir del correo si no hay uno previo
+  const getDefaultUsername = () => {
+    if (session?.user?.user_metadata?.username) {
+      return session.user.user_metadata.username;
+    }
+    if (session?.user?.email) {
+      // Extrae la parte del email antes del @, lo hace minuscula y quita caracteres no permitidos
+      return session.user.email.split('@')[0]
+        .toLowerCase()
+        .replace(/[^a-z0-9._]/g, '')
+        .substring(0, 30);
+    }
+    return '';
+  };
+  const [username, setUsername] = useState(getDefaultUsername());
 
   // Paso 2: Datos de Contexto (IA)
   const [birthDate, setBirthDate] = useState('');
@@ -66,7 +81,7 @@ export default function OnboardingScreen() {
 
   const validateUsername = (name: string) => /^[a-z0-9._]{3,30}$/.test(name);
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step === 1) {
       if (!fullName.trim()) {
         Alert.alert('Falta Información', 'Por favor ingresa tu nombre completo.');
@@ -78,6 +93,29 @@ export default function OnboardingScreen() {
           'El nombre de usuario debe tener entre 3 y 30 caracteres, solo minúsculas, números, puntos y guiones bajos (sin espacios).'
         );
         return;
+      }
+
+      // Validar unicidad del nombre de usuario en Supabase profiles
+      setLoading(true);
+      try {
+        const cleanUsername = username.trim().toLowerCase();
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id, username')
+          .eq('username', cleanUsername)
+          .maybeSingle();
+
+        if (error && error.code !== 'PGRST116' && error.code !== '42P01') {
+          console.warn('Error de Supabase consultando profiles:', error);
+        } else if (data && data.id !== session?.user?.id) {
+          Alert.alert('Nombre ocupado', 'El nombre de usuario ya está registrado por otra cuenta. Intenta con uno diferente.');
+          setLoading(false);
+          return;
+        }
+      } catch (e) {
+        console.warn('Fallo al comprobar disponibilidad del username:', e);
+      } finally {
+        setLoading(false);
       }
     }
     if (step === 2) {

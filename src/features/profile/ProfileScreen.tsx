@@ -66,9 +66,10 @@ export default function ProfileScreen() {
   const session = useAuthStore((state) => state.session);
 
   const loadProfile = async () => {
+    if (!session?.user?.id) return;
     try {
       const db = await getDb();
-      const profile = await db.getFirstAsync<any>('SELECT * FROM user_profile LIMIT 1');
+      const profile = await db.getFirstAsync<any>('SELECT * FROM user_profile WHERE id = ?', session.user.id);
       if (profile) {
         setProfileId(profile.id);
         setBirthDate(profile.birth_date || '');
@@ -136,19 +137,6 @@ export default function ProfileScreen() {
   };
 
   const handleSave = async () => {
-    const finalUsername = username.trim().toLowerCase();
-    
-    if (!finalUsername) {
-      Alert.alert('Error', 'El nombre de usuario es obligatorio.');
-      return;
-    }
-    if (!validateUsername(finalUsername)) {
-      Alert.alert(
-        'Usuario Inválido',
-        'El nombre de usuario debe tener entre 3 y 30 caracteres, solo minúsculas, números, puntos y guiones bajos (sin espacios).'
-      );
-      return;
-    }
     setLoading(true);
     try {
       const db = await getDb();
@@ -157,8 +145,8 @@ export default function ProfileScreen() {
       await db.runAsync(
         'INSERT OR REPLACE INTO user_profile (id, username, full_name, avatar_url, birth_date, hometown, country, life_events) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         currentUserId,
-        finalUsername,
-        fullName.trim(),
+        username,
+        fullName,
         avatarUrl,
         birthDate.trim(),
         hometown.trim(),
@@ -178,8 +166,8 @@ export default function ProfileScreen() {
       try {
         const { error: syncError } = await supabase.from('profiles').upsert({
           id: currentUserId,
-          username: finalUsername,
-          full_name: fullName.trim(),
+          username: username,
+          full_name: fullName,
           avatar_url: avatarUrl,
           updated_at: new Date().toISOString(),
         });
@@ -266,31 +254,7 @@ export default function ProfileScreen() {
           </Card>
         )}
 
-        {/* Formulario Social Principal */}
-        <Card style={styles.formCard}>
-          <Card.Content>
-            <Text variant="titleMedium" style={styles.sectionTitle}>Datos Personales</Text>
-            <TextInput
-              label="Nombre Completo"
-              value={fullName}
-              onChangeText={setFullName}
-              style={styles.input}
-              placeholder="Ej: Sofía Gómez"
-              mode="outlined"
-              activeOutlineColor="#6200ee"
-            />
-            <TextInput
-              label="Nombre de Usuario (@)"
-              value={username}
-              onChangeText={setUsername}
-              style={styles.input}
-              placeholder="Ej: sofiagomez"
-              autoCapitalize="none"
-              mode="outlined"
-              activeOutlineColor="#6200ee"
-            />
-          </Card.Content>
-        </Card>
+
 
         {/* Acordeón para Datos de la IA */}
         <List.Accordion

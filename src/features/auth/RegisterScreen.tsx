@@ -6,24 +6,11 @@ import { useAuthStore } from '../../core/store';
 
 export default function RegisterScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
-  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const setSession = useAuthStore((state) => state.setSession);
 
   const handleRegister = async () => {
-    const cleanUsername = username.trim().toLowerCase();
-
-    // Validar longitud y caracteres permitidos (Estilo Instagram: a-z, 0-9, ., _, sin espacios, 3-30 chars)
-    const usernameRegex = /^[a-z0-9._]{3,30}$/;
-    if (!usernameRegex.test(cleanUsername)) {
-      Alert.alert(
-        'Formato Inválido',
-        'El nombre de usuario debe tener entre 3 y 30 caracteres y solo contener letras minúsculas, números, puntos y guiones bajos (sin espacios).'
-      );
-      return;
-    }
-
     // Validación de variables de entorno o fallbacks cargados
     const activeSupabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://eknupuhacgqfgmbrxrys.supabase.co';
     if (!activeSupabaseUrl || activeSupabaseUrl.includes('placeholder')) {
@@ -36,36 +23,10 @@ export default function RegisterScreen({ navigation }: any) {
 
     setLoading(true);
 
-    // Validar unicidad del nombre de usuario en Supabase profiles
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('username')
-        .eq('username', cleanUsername)
-        .maybeSingle();
-
-      if (error && error.code !== 'PGRST116' && error.code !== '42P01') {
-        // Ignoramos error 42P01 (relation "profiles" does not exist) para no bloquear el testing
-        // si la tabla aún no ha sido creada en la base de datos de producción
-        console.warn('Error de Supabase consultando profiles:', error);
-      } else if (data) {
-        setLoading(false);
-        Alert.alert('Nombre ocupado', 'El nombre de usuario ya está registrado por otra cuenta. Intenta con uno diferente.');
-        return;
-      }
-    } catch (e) {
-      console.warn('Fallo al comprobar disponibilidad del username:', e);
-    }
-
-    // Registro del usuario en Supabase con el username en raw_user_meta_data
+    // Registro del usuario en Supabase
     const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
-      options: {
-        data: {
-          username: cleanUsername,
-        }
-      }
     });
 
     setLoading(false);
@@ -85,14 +46,6 @@ export default function RegisterScreen({ navigation }: any) {
   return (
     <View style={styles.container}>
       <Text variant="headlineMedium" style={styles.title}>Crear Cuenta</Text>
-      <TextInput
-        label="Nombre de Usuario (@)"
-        value={username}
-        onChangeText={setUsername}
-        autoCapitalize="none"
-        style={styles.input}
-        placeholder="Ej: sofiagomez"
-      />
       <TextInput
         label="Email"
         value={email}
