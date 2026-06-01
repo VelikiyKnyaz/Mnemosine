@@ -174,6 +174,7 @@ export default function NotificationsScreen() {
           <Image
             source={{
               uri: item.sender.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder',
+              cache: 'reload',
             }}
             style={styles.avatar}
           />

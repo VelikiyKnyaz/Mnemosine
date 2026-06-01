@@ -5,9 +5,12 @@ import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
 
 export default function MemberProfileScreen({ route, navigation }: any) {
-  const { targetUser } = route.params; // Contiene id, username, full_name, avatar_url
+  const { targetUser: initialTargetUser } = route.params; // Contiene id, username, full_name, avatar_url
   const session = useAuthStore((state) => state.session);
   const myId = session?.user?.id;
+
+  // Perfil actualizado en vivo desde Supabase (en lugar de usar datos estáticos de navegación)
+  const [targetUser, setTargetUser] = useState(initialTargetUser);
 
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -15,6 +18,22 @@ export default function MemberProfileScreen({ route, navigation }: any) {
   // Estado de conexión: null = no hay relación, 'PENDING_SENT' = enviada por mí, 'PENDING_RECEIVED' = recibida, 'ACCEPTED' = conectados
   const [connectionState, setConnectionState] = useState<'NONE' | 'PENDING_SENT' | 'PENDING_RECEIVED' | 'ACCEPTED'>('NONE');
   const [connectionId, setConnectionId] = useState<string | null>(null);
+
+  // Obtener perfil actualizado desde Supabase al montar
+  const fetchLatestProfile = async () => {
+    if (!initialTargetUser?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, username, full_name, avatar_url')
+        .eq('id', initialTargetUser.id)
+        .maybeSingle();
+
+      if (!error && data) {
+        setTargetUser(data);
+      }
+    } catch (_) {}
+  };
 
   const fetchConnectionStatus = async () => {
     if (!myId || !targetUser?.id) return;
@@ -51,6 +70,7 @@ export default function MemberProfileScreen({ route, navigation }: any) {
   };
 
   useEffect(() => {
+    fetchLatestProfile();
     fetchConnectionStatus();
     
     // Real-time listener para conexiones
@@ -63,7 +83,7 @@ export default function MemberProfileScreen({ route, navigation }: any) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [targetUser?.id, myId]);
+  }, [initialTargetUser?.id, myId]);
 
   const handleRequestConnection = async () => {
     if (!myId || !targetUser?.id) return;
@@ -233,6 +253,7 @@ export default function MemberProfileScreen({ route, navigation }: any) {
               <Image
                 source={{
                   uri: targetUser?.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder',
+                  cache: 'reload',
                 }}
                 style={styles.avatar}
               />

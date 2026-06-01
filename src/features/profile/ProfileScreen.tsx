@@ -87,6 +87,19 @@ export default function ProfileScreen() {
           setFullName(defaultUsername.charAt(0).toUpperCase() + defaultUsername.slice(1));
         }
       }
+
+      // Refrescar avatar desde Supabase (puede haber sido cambiado en otro dispositivo)
+      try {
+        const { data: remoteProfile } = await supabase
+          .from('profiles')
+          .select('avatar_url')
+          .eq('id', session.user.id)
+          .maybeSingle();
+
+        if (remoteProfile?.avatar_url) {
+          setAvatarUrl(remoteProfile.avatar_url);
+        }
+      } catch (_) {}
     } catch (e) {
       console.error(e);
     }
@@ -276,7 +289,7 @@ export default function ProfileScreen() {
         {/* Cabecera Social de Perfil */}
         <View style={styles.profileHeaderCard}>
           <TouchableOpacity onPress={handleAvatarPress} style={styles.avatarContainer}>
-            <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+            <Image source={{ uri: avatarUrl, cache: 'reload' }} style={styles.avatarImage} />
             <View style={styles.avatarEditBadge}>
               <Text style={styles.avatarEditIcon}>✏️</Text>
             </View>
