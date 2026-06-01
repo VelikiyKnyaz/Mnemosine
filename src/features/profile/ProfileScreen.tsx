@@ -116,11 +116,56 @@ export default function ProfileScreen() {
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        setAvatarUrl(result.assets[0].uri);
+        const selectedUri = result.assets[0].uri;
+        setAvatarUrl(selectedUri);
+        saveAvatarToServer(selectedUri);
       }
     } catch (e) {
       console.warn('Error al seleccionar imagen de la galería:', e);
       Alert.alert('Error', 'No se pudo seleccionar la imagen.');
+    }
+  };
+
+  /**
+   * Guarda el avatar inmediatamente tanto en SQLite como en Supabase profiles.
+   * Se llama automáticamente al cambiar foto desde galería o preset.
+   */
+  const saveAvatarToServer = async (newAvatarUrl: string) => {
+    const currentUserId = session?.user?.id || profileId;
+    if (!currentUserId) return;
+
+    try {
+      // Subir a Supabase Storage si es archivo local
+      let finalUrl = newAvatarUrl;
+      if (newAvatarUrl.startsWith('file://') || newAvatarUrl.startsWith('content://')) {
+        try {
+          finalUrl = await uploadAvatar(currentUserId, newAvatarUrl);
+        } catch (uploadErr) {
+          console.warn('Fallo al subir avatar:', uploadErr);
+        }
+      }
+
+      // Actualizar estado local
+      setAvatarUrl(finalUrl);
+
+      // Guardar en SQLite
+      const db = await getDb();
+      await db.runAsync(
+        'UPDATE user_profile SET avatar_url = ? WHERE id = ?',
+        finalUrl,
+        currentUserId
+      );
+
+      // Sincronizar con Supabase profiles
+      await supabase.from('profiles').upsert({
+        id: currentUserId,
+        avatar_url: finalUrl,
+        updated_at: new Date().toISOString(),
+      });
+
+      console.log('[Profile] Avatar sincronizado:', finalUrl);
+    } catch (e) {
+      console.warn('[Profile] Error sincronizando avatar:', e);
     }
   };
 
@@ -251,6 +296,7 @@ export default function ProfileScreen() {
                     onPress={() => {
                       setAvatarUrl(url);
                       setShowAvatarPicker(false);
+                      saveAvatarToServer(url);
                     }}
                     style={[
                       styles.avatarPickerItem,

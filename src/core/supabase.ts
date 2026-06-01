@@ -47,28 +47,36 @@ export const getSupabase = async (): Promise<SupabaseClient> => {
 };
 
 /**
- * Uploads a local file to Supabase storage bucket 'user_assets' and returns its public URL.
+ * Uploads a local file (from gallery) to Supabase storage bucket 'user_assets' and returns its public URL.
+ * Uses FormData which is the correct approach for React Native file uploads.
  */
 export const uploadAvatar = async (userId: string, localUri: string): Promise<string> => {
-  if (!localUri || !localUri.startsWith('file://')) {
+  // Solo subir archivos locales (file:// o content:// en Android)
+  if (!localUri || (!localUri.startsWith('file://') && !localUri.startsWith('content://'))) {
     return localUri;
   }
   
   try {
-    const response = await fetch(localUri);
-    const blob = await response.blob();
-    const fileExt = localUri.split('.').pop() || 'jpg';
-    // Path: avatars/userId-timestamp.ext
+    const fileExt = localUri.split('.').pop()?.split('?')[0] || 'jpg';
     const filePath = `avatars/${userId}-${Date.now()}.${fileExt}`;
+
+    // React Native: crear FormData con el objeto URI (no fetch+blob)
+    const formData = new FormData();
+    formData.append('file', {
+      uri: localUri,
+      name: `avatar.${fileExt}`,
+      type: `image/${fileExt === 'png' ? 'png' : 'jpeg'}`,
+    } as any);
 
     const { error } = await supabase.storage
       .from('user_assets')
-      .upload(filePath, blob, {
-        contentType: `image/${fileExt}`,
+      .upload(filePath, formData, {
+        contentType: 'multipart/form-data',
         upsert: true
       });
 
     if (error) {
+      console.error('Supabase storage upload error:', error);
       throw error;
     }
 
@@ -76,10 +84,12 @@ export const uploadAvatar = async (userId: string, localUri: string): Promise<st
       .from('user_assets')
       .getPublicUrl(filePath);
 
+    console.log('[Avatar Upload] Subida exitosa:', publicUrl);
     return publicUrl;
   } catch (error) {
-    console.error('Error uploading avatar:', error);
-    throw error;
+    console.error('[Avatar Upload] Error subiendo avatar:', error);
+    // Devolver la URI original en caso de fallo para no perder la referencia
+    return localUri;
   }
 };
 
