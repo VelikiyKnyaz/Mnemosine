@@ -75,7 +75,7 @@ export const getSupabase = async (): Promise<SupabaseClient> => {
 
 /**
  * Uploads a local file (from gallery) to Supabase storage bucket 'user_assets' and returns its public URL.
- * Uses ArrayBuffer/Blob para evitar el bug de React Native en Android donde FormData elimina los headers de Auth (causando RLS 403).
+ * Verifica sesión activa antes de subir. Usa Uint8Array desde base64 para máxima compatibilidad con Expo Snack/Android.
  */
 export const uploadAvatar = async (userId: string, localUri: string, base64Data?: string): Promise<string> => {
   // Solo subir archivos locales (file:// o content:// en Android)
@@ -84,36 +84,68 @@ export const uploadAvatar = async (userId: string, localUri: string, base64Data?
   }
   
   try {
+    // 1. Verificar que hay sesión activa (el token JWT es lo que autoriza contra RLS)
+    const { data: { session: currentSession }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) {
+      console.error('[Avatar Upload] Error obteniendo sesión:', sessionError);
+    }
+    if (!currentSession) {
+      console.error('[Avatar Upload] ⚠️ NO HAY SESIÓN ACTIVA. El upload será rechazado por RLS.');
+      console.error('[Avatar Upload] userId recibido:', userId);
+      // Intentar refrescar la sesión
+      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError || !refreshData.session) {
+        console.error('[Avatar Upload] No se pudo refrescar la sesión:', refreshError);
+        return localUri; // Retornar URI local, no tiene sentido intentar subir sin auth
+      }
+      console.log('[Avatar Upload] Sesión refrescada exitosamente');
+    } else {
+      console.log('[Avatar Upload] ✅ Sesión activa. User ID del token:', currentSession.user.id);
+      console.log('[Avatar Upload] Token expira:', new Date((currentSession.expires_at || 0) * 1000).toISOString());
+    }
+
     const fileExt = localUri.split('.').pop()?.split('?')[0] || 'jpg';
     const filePath = `avatars/${userId}-${Date.now()}.${fileExt}`;
+    const contentType = `image/${fileExt === 'png' ? 'png' : 'jpeg'}`;
+
+    console.log('[Avatar Upload] Intentando subir a:', filePath, '| contentType:', contentType, '| base64:', !!base64Data);
 
     let error;
 
     if (base64Data) {
-      // Snack / Android seguro: Usamos el string base64 directo desde ImagePicker
+      // Ruta principal: Usamos el string base64 directo desde ImagePicker
       const arrayBuffer = decodeBase64(base64Data);
+      console.log('[Avatar Upload] Uint8Array creado, tamaño:', arrayBuffer.byteLength, 'bytes');
       const res = await supabase.storage
         .from('user_assets')
         .upload(filePath, arrayBuffer, {
-          contentType: `image/${fileExt === 'png' ? 'png' : 'jpeg'}`,
+          contentType,
           upsert: true
         });
       error = res.error;
     } else {
-      // Fallback si no hay base64 (fetch puro devolviendo blob y lo enviamos sin FormData)
+      // Fallback si no hay base64
       const response = await fetch(localUri);
       const blob = await response.blob();
+      console.log('[Avatar Upload] Blob creado, tamaño:', blob.size, 'bytes');
       const res = await supabase.storage
         .from('user_assets')
         .upload(filePath, blob, {
-          contentType: `image/${fileExt === 'png' ? 'png' : 'jpeg'}`,
+          contentType,
           upsert: true
         });
       error = res.error;
     }
 
     if (error) {
-      console.error('Supabase storage upload error:', error);
+      console.error('[Avatar Upload] Supabase storage upload error:', JSON.stringify(error));
+      // Log extra para diagnóstico RLS
+      if (error.message?.includes('row-level security') || (error as any).statusCode === '403') {
+        console.error('[Avatar Upload] 🔒 ERROR RLS: La política de storage en Supabase NO permite esta operación.');
+        console.error('[Avatar Upload] Verificar en Supabase Dashboard > Storage > Policies del bucket "user_assets":');
+        console.error('[Avatar Upload]   - Debe existir una policy INSERT para authenticated users');
+        console.error('[Avatar Upload]   - Ejemplo SQL: CREATE POLICY "Allow authenticated uploads" ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = \'user_assets\');');
+      }
       throw error;
     }
 
@@ -121,7 +153,7 @@ export const uploadAvatar = async (userId: string, localUri: string, base64Data?
       .from('user_assets')
       .getPublicUrl(filePath);
 
-    console.log('[Avatar Upload] Subida exitosa:', publicUrl);
+    console.log('[Avatar Upload] ✅ Subida exitosa:', publicUrl);
     return publicUrl;
   } catch (error) {
     console.error('[Avatar Upload] Error subiendo avatar:', error);
