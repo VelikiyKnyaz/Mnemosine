@@ -26,16 +26,40 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
       return;
     }
 
-    if (!connections || connections.length === 0) {
+    // 2. Extract unique friend IDs
+    const friendIds = connections ? connections.map(c => 
+      c.sender_id === myId ? c.receiver_id : c.sender_id
+    ) : [];
+
+    // 3. Fetch all local PERSON entities to compare and prune deleted links
+    const localPeople = await db.getAllAsync<any>("SELECT * FROM entities WHERE type = 'PERSON'");
+
+    // 3.5. Unlink any local node that is marked as linked but is NO LONGER in friendIds
+    for (const p of localPeople) {
+      if (p.metadata) {
+        try {
+          const meta = JSON.parse(p.metadata);
+          if (meta.is_linked && meta.user_id && !friendIds.includes(meta.user_id)) {
+            // This person was unlinked remotely!
+            meta.is_linked = false;
+            meta.user_id = null;
+            meta.username = '';
+            
+            await db.runAsync(
+              "UPDATE entities SET metadata = ? WHERE id = ?",
+              JSON.stringify(meta),
+              p.id
+            );
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (friendIds.length === 0) {
       return;
     }
 
-    // 2. Extract unique friend IDs
-    const friendIds = connections.map(c => 
-      c.sender_id === myId ? c.receiver_id : c.sender_id
-    );
-
-    // 3. Fetch profiles of these friends from Supabase
+    // 4. Fetch profiles of these friends from Supabase
     const { data: profiles, error: profileError } = await supabase
       .from('profiles')
       .select('id, username, full_name, avatar_url')
@@ -49,9 +73,6 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
     if (!profiles || profiles.length === 0) {
       return;
     }
-
-    // 4. Fetch all local PERSON entities to compare
-    const localPeople = await db.getAllAsync<any>("SELECT * FROM entities WHERE type = 'PERSON'");
 
     for (const profile of profiles) {
       const friendId = profile.id;
