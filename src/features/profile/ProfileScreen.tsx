@@ -201,13 +201,9 @@ export default function ProfileScreen() {
           avatar_url: finalUrl,
           updated_at: new Date().toISOString(),
         });
-        Alert.alert('✅ Foto Actualizada', 'Tu foto de perfil se subió y sincronizó correctamente.');
-      } else if (newAvatarUrl.startsWith('file://') || newAvatarUrl.startsWith('content://')) {
-        Alert.alert('❌ Error al subir foto', 'No se pudo subir la imagen al servidor. La foto se guardó solo localmente. Intenta de nuevo.');
       }
     } catch (e) {
       console.warn('[Profile] Error sincronizando avatar:', e);
-      Alert.alert('❌ Error', 'Ocurrió un error al sincronizar la foto: ' + String(e));
     }
   };
 
@@ -424,19 +420,18 @@ export default function ProfileScreen() {
               mode="outlined"
               activeOutlineColor="#6200ee"
             />
+            <Button
+              mode="contained"
+              onPress={handleSave}
+              loading={loading}
+              style={styles.saveButton}
+              buttonColor="#6200ee"
+              textColor="#ffffff"
+            >
+              Guardar Contexto
+            </Button>
           </View>
         </List.Accordion>
-
-        <Button
-          mode="contained"
-          onPress={handleSave}
-          loading={loading}
-          style={styles.saveButton}
-          buttonColor="#6200ee"
-          textColor="#ffffff"
-        >
-          Guardar Cambios
-        </Button>
       </ScrollView>
     </View>
   );
