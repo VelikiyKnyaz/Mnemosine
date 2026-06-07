@@ -6,80 +6,7 @@ import { getConfig } from './config';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
-const COMMON_EMOTION_MAPPINGS: Record<string, string> = {
-  // Raíces
-  'alegre': 'Alegría',
-  'feliz': 'Alegría',
-  'felicidad': 'Alegría',
-  'triste': 'Tristeza',
-  'pena': 'Tristeza',
-  'enojado': 'Ira',
-  'enojada': 'Ira',
-  'rabia': 'Ira',
-  'furia': 'Ira',
-  'molesto': 'Ira',
-  'molesta': 'Ira',
-  'asustado': 'Miedo',
-  'asustada': 'Miedo',
-  'temor': 'Miedo',
-  'tranquilo': 'Calma',
-  'tranquila': 'Calma',
-  'relajado': 'Calma',
-  'relajada': 'Calma',
-  'sereno': 'Calma',
-  'serena': 'Calma',
-  'sorprendido': 'Sorpresa',
-  'sorprendida': 'Sorpresa',
-  'asombrado': 'Sorpresa',
-  'asombrada': 'Sorpresa',
-  // Secundarias/Hojas comunes
-  'nostalgico': 'Melancolía',
-  'nostálgico': 'Melancolía',
-  'nostalgica': 'Melancolía',
-  'nostálgica': 'Melancolía',
-  'nostalgia': 'Melancolía',
-  'melancolico': 'Melancolía',
-  'melancólico': 'Melancolía',
-  'melancolica': 'Melancolía',
-  'melancólica': 'Melancolía',
-  'culpabilidad': 'Culpable',
-  'arrepentido': 'Arrepentimiento',
-  'arrepentida': 'Arrepentimiento',
-  'avergonzado': 'Vergüenza',
-  'avergonzada': 'Vergüenza',
-  'frustrado': 'Frustración',
-  'frustrada': 'Frustración',
-  'ansioso': 'Ansiedad',
-  'ansiosa': 'Ansiedad',
-  'preocupado': 'Preocupación',
-  'preocupada': 'Preocupación',
-  'agobiado': 'Agobio',
-  'agobiada': 'Agobio',
-  'inseguro': 'Inseguridad',
-  'insegura': 'Inseguridad',
-  'aburrido': 'Aburrimiento',
-  'aburrida': 'Aburrimiento',
-  'decepcionado': 'Decepción',
-  'decepcionada': 'Decepción',
-  'agradecido': 'Agradecimiento',
-  'agradecida': 'Agradecimiento',
-  'satisfecho': 'Satisfacción',
-  'satisfecha': 'Satisfacción',
-  'impaciente': 'Impaciencia',
-  'irritado': 'Irritación',
-  'irritada': 'Irritación',
-  'entusiasmado': 'Entusiasmo',
-  'entusiasmada': 'Entusiasmo',
-  'curioso': 'Curiosidad',
-  'curiosa': 'Curiosidad',
-  'esperanzado': 'Esperanza',
-  'esperanzada': 'Esperanza',
-  'valiente': 'Valentía',
-  'orgulloso': 'Orgullo',
-  'orgullosa': 'Orgullo',
-  'inspirado': 'Inspiración',
-  'inspirada': 'Inspiración',
-};
+
 
 const normalizeString = (str: string): string => {
   return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -403,13 +330,18 @@ export const processPendingMemories = async () => {
             }
 
             if (entity.type === 'EMOTION') {
-              const nameLower = entity.name.trim().toLowerCase();
-              const matchedKey = emotionsMapLower.get(nameLower) || COMMON_EMOTION_MAPPINGS[nameLower];
-              if (matchedKey) {
-                entity.name = matchedKey; // Corregir casing o aplicar mapeo robusto
+              let name = entity.name.trim();
+              if (name.length > 0) {
+                // Si coincide con alguna emoción predefinida de la app, usar ese casing exacto
+                const matchedKey = emotionsMapLower.get(name.toLowerCase());
+                if (matchedKey) {
+                  entity.name = matchedKey;
+                } else {
+                  // Si es cualquier otra emoción deliberada libremente, capitalizar la primera letra
+                  entity.name = name.charAt(0).toUpperCase() + name.slice(1);
+                }
                 return true;
               }
-              console.warn(`Filtering out invalid emotion extracted by AI: ${entity.name}`);
               return false;
             }
             return true;
