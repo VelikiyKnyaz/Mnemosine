@@ -1,6 +1,6 @@
 import { getDb, inheritCoordinatesFromParent } from './database';
 import { transcribeAudio, extractMemoryData, segmentMemoryText } from './ai_service';
-import { EMOTIONS_HIERARCHY } from './emotions';
+import { ALL_EMOTION_NAMES } from './emotions';
 import { calculateDatesFromMarkers, generateLifecycleStages } from './chrono_engine';
 import { getConfig } from './config';
 import 'react-native-get-random-values';
@@ -315,17 +315,9 @@ export const processPendingMemories = async () => {
         // POST-PROCESSING: Deterministic code-level fixes
         // =====================================================================
 
-        // FIX 2: Normalize emotion names to match hierarchy labels (case-insensitive)
-        const emotionsMapLower = new Map<string, string>();
-        for (const root of Object.keys(EMOTIONS_HIERARCHY)) {
-          emotionsMapLower.set(root.toLowerCase(), root);
-          for (const cat of Object.keys(EMOTIONS_HIERARCHY[root])) {
-            emotionsMapLower.set(cat.toLowerCase(), cat);
-            for (const leaf of EMOTIONS_HIERARCHY[root][cat]) {
-              emotionsMapLower.set(leaf.toLowerCase(), leaf);
-            }
-          }
-        }
+        // FIX 2: Map emotion indices to exact names from ALL_EMOTION_NAMES.
+        // The AI returns a numeric index; we resolve it to the exact predefined name.
+        // ANY invalid index is REJECTED — impossible to create non-existent emotion tags.
 
         if (aiData.entities) {
           aiData.entities = aiData.entities.filter(entity => {
@@ -335,18 +327,21 @@ export const processPendingMemories = async () => {
             }
 
             if (entity.type === 'EMOTION') {
-              let name = entity.name.trim();
-              if (name.length > 0) {
-                // Si coincide con alguna emoción predefinida de la app, usar ese casing exacto
-                const matchedKey = emotionsMapLower.get(name.toLowerCase());
-                if (matchedKey) {
-                  entity.name = matchedKey;
-                } else {
-                  // Si es cualquier otra emoción deliberada libremente, capitalizar la primera letra
-                  entity.name = name.charAt(0).toUpperCase() + name.slice(1);
-                }
+              const raw = entity.name.trim();
+              const idx = parseInt(raw, 10);
+              if (!isNaN(idx) && idx >= 0 && idx < ALL_EMOTION_NAMES.length) {
+                entity.name = ALL_EMOTION_NAMES[idx];
                 return true;
               }
+              // Fallback: if AI returned the exact name instead of index, validate it
+              const nameLower = raw.toLowerCase();
+              const exactMatch = ALL_EMOTION_NAMES.find(n => n.toLowerCase() === nameLower);
+              if (exactMatch) {
+                entity.name = exactMatch;
+                return true;
+              }
+              // REJECT: not a valid index or name
+              console.warn(`Rejected invalid emotion: "${raw}"`);
               return false;
             }
             return true;

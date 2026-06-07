@@ -198,3 +198,16 @@ export const EMOTIONS_DESCRIPTIONS: Record<string, string> = {
   "Entusiasta": "Respuesta cálida, exaltada e inspirada hacia un estímulo inesperado que despierta alto interés o motivación.",
   "Enérgico": "Descarga de energía fisiológica y motora en respuesta a una novedad estimulante que invita a la acción rápida."
 };
+
+// Lista plana indexada: raíz → categorías → hojas, en orden determinístico.
+// Usada por ai_service (prompt) y ai_processor (mapeo de índice → nombre exacto).
+export const ALL_EMOTION_NAMES: string[] = [];
+for (const root of Object.keys(EMOTIONS_HIERARCHY)) {
+  ALL_EMOTION_NAMES.push(root);
+  for (const cat of Object.keys(EMOTIONS_HIERARCHY[root])) {
+    ALL_EMOTION_NAMES.push(cat);
+    for (const leaf of EMOTIONS_HIERARCHY[root][cat]) {
+      ALL_EMOTION_NAMES.push(leaf);
+    }
+  }
+}
