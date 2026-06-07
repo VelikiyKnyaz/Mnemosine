@@ -186,6 +186,8 @@ export default function FamilyTreeScreen({ navigation }: any) {
       let linkStatus = isLinked;
 
       // Si se ingresó un nombre de usuario de la App, validar y conectar
+      let connStatus = selectedPerson ? JSON.parse(selectedPerson.metadata || '{}').connection_status : null;
+
       if (finalUsername && !isLinked) {
         const { data: targetProfile, error: profileErr } = await supabase
           .from('profiles')
@@ -202,7 +204,8 @@ export default function FamilyTreeScreen({ navigation }: any) {
         targetUserId = targetProfile.id;
         finalName = targetProfile.full_name || finalName;
         finalAvatarUrl = targetProfile.avatar_url || finalAvatarUrl;
-        linkStatus = true;
+        linkStatus = false; // Se inicia en false porque requiere la aceptación remota
+        connStatus = 'PENDING_SENT';
 
         // Enviar solicitud de conexión en Supabase
         if (myId && myId !== targetUserId) {
@@ -230,6 +233,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
         username: finalUsername,
         user_id: targetUserId || (selectedPerson ? JSON.parse(selectedPerson.metadata || '{}').user_id : null),
         is_linked: linkStatus,
+        connection_status: linkStatus ? 'ACCEPTED' : connStatus,
       };
 
       if (selectedPerson) {
@@ -363,9 +367,13 @@ export default function FamilyTreeScreen({ navigation }: any) {
             <Text style={styles.cardSubtitle}>
               {relation ? `${relation} • ` : ''}{item.mentions} recuerdos
             </Text>
-            {meta.is_linked && (
-              <Text style={styles.linkedBadge}>👥 Vinculado a la app</Text>
-            )}
+            {meta.connection_status === 'ACCEPTED' || meta.is_linked ? (
+              <Text style={styles.linkedBadge}>👥 Conectado</Text>
+            ) : meta.connection_status === 'PENDING_SENT' ? (
+              <Text style={[styles.linkedBadge, { color: '#f57c00' }]}>📨 Solicitud enviada</Text>
+            ) : meta.connection_status === 'PENDING_RECEIVED' ? (
+              <Text style={[styles.linkedBadge, { color: '#0288d1' }]}>📥 Solicitud recibida</Text>
+            ) : null}
           </View>
           <IconButton
             icon="pencil-outline"

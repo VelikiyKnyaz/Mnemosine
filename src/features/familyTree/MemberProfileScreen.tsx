@@ -118,6 +118,25 @@ export default function MemberProfileScreen({ route, navigation }: any) {
     }
   };
 
+  const unlinkLocalPerson = async (userId: string) => {
+    try {
+      const db = await getDb();
+      const localPeople = await db.getAllAsync<any>("SELECT * FROM entities WHERE type = 'PERSON'");
+      for (const p of localPeople) {
+        const meta = p.metadata ? JSON.parse(p.metadata) : {};
+        if (meta.user_id === userId) {
+          meta.is_linked = false;
+          meta.user_id = null;
+          meta.username = '';
+          meta.connection_status = null;
+          await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(meta), p.id);
+        }
+      }
+    } catch (dbErr) {
+      console.warn('Error al desvincular localmente:', dbErr);
+    }
+  };
+
   const handleCancelRequest = async () => {
     if (!connectionId) return;
     setActionLoading(true);
@@ -132,7 +151,8 @@ export default function MemberProfileScreen({ route, navigation }: any) {
       } else {
         setConnectionState('NONE');
         setConnectionId(null);
-        Alert.alert('Cancelado', 'La solicitud de conexión ha sido cancelada.');
+        await unlinkLocalPerson(targetUser.id);
+        Alert.alert('Cancelado', 'La solicitud de conexión ha sido cancelada o rechazada.');
       }
     } catch (e) {
       console.error(e);
@@ -187,22 +207,7 @@ export default function MemberProfileScreen({ route, navigation }: any) {
                 setConnectionState('NONE');
                 setConnectionId(null);
                 
-                // Desvincular localmente para que no quede como nodo fantasma
-                try {
-                  const db = await getDb();
-                  const localPeople = await db.getAllAsync<any>("SELECT * FROM entities WHERE type = 'PERSON'");
-                  for (const p of localPeople) {
-                    const meta = p.metadata ? JSON.parse(p.metadata) : {};
-                    if (meta.user_id === targetUser.id) {
-                      meta.is_linked = false;
-                      meta.user_id = null;
-                      meta.username = '';
-                      await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(meta), p.id);
-                    }
-                  }
-                } catch (dbErr) {
-                  console.warn('Error al desvincular localmente:', dbErr);
-                }
+                await unlinkLocalPerson(targetUser.id);
 
                 Alert.alert('Conexión Eliminada', 'Ya no estás conectado con esta persona.');
               }

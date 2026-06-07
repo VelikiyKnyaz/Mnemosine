@@ -14,11 +14,10 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
   try {
     const db = await getDb();
 
-    // 1. Fetch all ACCEPTED connections involving the current user
+    // 1. Fetch all connections (pending or accepted) involving the current user
     const { data: connections, error: connError } = await supabase
       .from('connections')
       .select('*')
-      .eq('status', 'ACCEPTED')
       .or(`sender_id.eq.${myId},receiver_id.eq.${myId}`);
 
     if (connError) {
@@ -34,16 +33,17 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
     // 3. Fetch all local PERSON entities to compare and prune deleted links
     const localPeople = await db.getAllAsync<any>("SELECT * FROM entities WHERE type = 'PERSON'");
 
-    // 3.5. Unlink any local node that is marked as linked but is NO LONGER in friendIds
+    // 3.5. Unlink any local node that is marked as linked or pending, but is NO LONGER in friendIds
     for (const p of localPeople) {
       if (p.metadata) {
         try {
           const meta = JSON.parse(p.metadata);
-          if (meta.is_linked && meta.user_id && !friendIds.includes(meta.user_id)) {
+          if ((meta.is_linked || meta.connection_status) && meta.user_id && !friendIds.includes(meta.user_id)) {
             // This person was unlinked remotely!
             meta.is_linked = false;
             meta.user_id = null;
             meta.username = '';
+            meta.connection_status = null;
             
             await db.runAsync(
               "UPDATE entities SET metadata = ? WHERE id = ?",
@@ -74,17 +74,34 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
       return;
     }
 
+    // Construir mapa de perfiles para acceso rápido
+    const profilesMap = new Map();
     for (const profile of profiles) {
-      const friendId = profile.id;
+      profilesMap.set(profile.id, profile);
+    }
+
+    // 5. Procesar cada conexión activa y sincronizar el estado
+    for (const conn of connections || []) {
+      const friendId = conn.sender_id === myId ? conn.receiver_id : conn.sender_id;
+      const profile = profilesMap.get(friendId);
+      if (!profile) continue;
+
+      const isAccepted = conn.status === 'ACCEPTED';
+      const connectionStatus = isAccepted
+        ? 'ACCEPTED'
+        : (conn.sender_id === myId ? 'PENDING_SENT' : 'PENDING_RECEIVED');
+      const isLinked = isAccepted;
+
       const remoteName = profile.full_name || `@${profile.username}`;
-      // Solo usar avatar_url si es una URL remota válida (ignorar file:// de uploads fallidos)
       const rawAvatar = profile.avatar_url || '';
       const remoteAvatar = rawAvatar.startsWith('http') 
         ? rawAvatar 
         : `https://api.dicebear.com/7.x/adventurer/png?seed=${profile.username}`;
 
-      // Check if this friend is already linked to a local node
+      // Check if this friend is already linked to a local node (Priority Matching)
       let existingNode = null;
+
+      // Prioridad 1: Buscar por exact user_id
       for (const p of localPeople) {
         if (p.metadata) {
           try {
@@ -97,23 +114,83 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
         }
       }
 
+      // Prioridad 2: Buscar por username local (en minúsculas, sólo si no está asociado a otro user_id)
+      if (!existingNode) {
+        for (const p of localPeople) {
+          if (p.metadata) {
+            try {
+              const meta = JSON.parse(p.metadata);
+              if (!meta.user_id && meta.username && meta.username.toLowerCase() === profile.username.toLowerCase()) {
+                existingNode = p;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+      }
+
+      // Prioridad 3: Buscar por coincidencia exacta de nombre local con el nombre o username de Supabase
+      if (!existingNode) {
+        for (const p of localPeople) {
+          const nameLower = p.name ? p.name.trim().toLowerCase() : '';
+          const profileNameLower = profile.full_name ? profile.full_name.trim().toLowerCase() : '';
+          const profileUsernameLower = profile.username ? profile.username.trim().toLowerCase() : '';
+          const formattedUsernameLower = `@${profileUsernameLower}`;
+
+          let hasUserId = false;
+          try {
+            const meta = p.metadata ? JSON.parse(p.metadata) : {};
+            if (meta.user_id) hasUserId = true;
+          } catch (_) {}
+
+          if (!hasUserId && (
+            nameLower === profileNameLower ||
+            nameLower === profileUsernameLower ||
+            nameLower === formattedUsernameLower
+          )) {
+            existingNode = p;
+            break;
+          }
+        }
+      }
+
       if (existingNode) {
-        // Node exists -> sync details and lock it
+        // Node exists -> sync details
         const currentMeta = JSON.parse(existingNode.metadata || '{}');
         const updatedMeta = {
           ...currentMeta,
           user_id: friendId,
           avatar_url: remoteAvatar,
           username: profile.username,
-          is_linked: true,
+          is_linked: isLinked,
+          connection_status: connectionStatus,
         };
+
+        const nameToSave = isAccepted ? remoteName : (existingNode.name || remoteName);
 
         await db.runAsync(
           "UPDATE entities SET name = ?, metadata = ? WHERE id = ?",
-          remoteName,
+          nameToSave,
           JSON.stringify(updatedMeta),
           existingNode.id
         );
+
+        // Si la conexión es aceptada, verificar si ya se creó la tarea de parentesco. Si no, crearla.
+        if (isAccepted) {
+          const existingTask = await db.getFirstAsync<any>(
+            "SELECT id FROM inbox_tasks WHERE entity_id = ? AND ambiguity_type = 'RELATIONSHIP'",
+            existingNode.id
+          );
+          if (!existingTask) {
+            const taskId = uuidv4();
+            await db.runAsync(
+              "INSERT INTO inbox_tasks (id, entity_id, ambiguity_type, question, status) VALUES (?, ?, 'RELATIONSHIP', ?, 'PENDING')",
+              taskId,
+              existingNode.id,
+              `¿Qué relación tienes con ${nameToSave}?`
+            );
+          }
+        }
       } else {
         // Node does not exist -> Create new local PERSON node
         const newNodeId = uuidv4();
@@ -121,7 +198,8 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
           user_id: friendId,
           avatar_url: remoteAvatar,
           username: profile.username,
-          is_linked: true,
+          is_linked: isLinked,
+          connection_status: connectionStatus,
         };
 
         await db.runAsync(
@@ -131,14 +209,16 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
           JSON.stringify(newMeta)
         );
 
-        // Add task in inbox_tasks
-        const taskId = uuidv4();
-        await db.runAsync(
-          "INSERT INTO inbox_tasks (id, entity_id, ambiguity_type, question, status) VALUES (?, ?, 'RELATIONSHIP', ?, 'PENDING')",
-          taskId,
-          newNodeId,
-          `¿Qué relación tienes con ${remoteName}?`
-        );
+        // Add task in inbox_tasks if connection is accepted
+        if (isAccepted) {
+          const taskId = uuidv4();
+          await db.runAsync(
+            "INSERT INTO inbox_tasks (id, entity_id, ambiguity_type, question, status) VALUES (?, ?, 'RELATIONSHIP', ?, 'PENDING')",
+            taskId,
+            newNodeId,
+            `¿Qué relación tienes con ${remoteName}?`
+          );
+        }
       }
     }
   } catch (err) {
