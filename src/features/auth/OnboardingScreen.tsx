@@ -171,11 +171,12 @@ export default function OnboardingScreen() {
 
       // Subir avatar a Supabase Storage si es un archivo local
       let finalAvatarUrl = avatarUrl;
-      if (avatarUrl.startsWith('file://')) {
+      if (avatarUrl.startsWith('file://') || avatarUrl.startsWith('content://')) {
         try {
           finalAvatarUrl = await uploadAvatar(userId, avatarUrl);
         } catch (uploadErr) {
           console.warn('Fallo al subir avatar a Supabase Storage:', uploadErr);
+          // finalAvatarUrl se queda como file:// para cache local, pero no se enviará a profiles
         }
       }
 
@@ -200,16 +201,19 @@ export default function OnboardingScreen() {
 
       // 2. Intentar guardar de forma remota en la tabla 'profiles' de Supabase
       try {
-        const { error: upsertError } = await supabase.from('profiles').upsert({
+        const profileData: any = {
           id: userId,
           username: finalUsername,
           full_name: fullName.trim(),
-          avatar_url: finalAvatarUrl,
           updated_at: new Date().toISOString(),
-        });
+        };
+        // Solo incluir avatar_url si es una URL remota válida (nunca file://)
+        if (finalAvatarUrl.startsWith('http')) {
+          profileData.avatar_url = finalAvatarUrl;
+        }
+        const { error: upsertError } = await supabase.from('profiles').upsert(profileData);
 
         if (upsertError && upsertError.code !== '42P01') {
-          // Ignoramos error 42P01 (relation "profiles" does not exist) para no bloquear al usuario
           console.warn('Fallo al sincronizar perfil con Supabase:', upsertError);
         }
       } catch (err) {

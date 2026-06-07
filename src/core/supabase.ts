@@ -76,62 +76,69 @@ export const getSupabase = async (): Promise<SupabaseClient> => {
 /**
  * Uploads a local file (from gallery) to Supabase storage bucket 'user_assets' and returns its public URL.
  * Verifica sesión activa antes de subir. Usa Uint8Array desde base64 para máxima compatibilidad con Expo Snack/Android.
+ * NUNCA devuelve un file:// URI — si falla el upload, lanza un error.
  */
 export const uploadAvatar = async (userId: string, localUri: string, base64Data?: string): Promise<string> => {
-  // Solo subir archivos locales (file:// o content:// en Android)
-  if (!localUri || (!localUri.startsWith('file://') && !localUri.startsWith('content://'))) {
+  // Si ya es una URL remota, devolverla directamente
+  if (!localUri || localUri.startsWith('http')) {
     return localUri;
+  }
+
+  // Verificar que es un archivo local válido
+  if (!localUri.startsWith('file://') && !localUri.startsWith('content://')) {
+    console.warn('[Avatar Upload] URI no reconocida, ignorando:', localUri.substring(0, 30));
+    return '';
   }
   
-  try {
-    // Verificar que hay sesión activa (el token JWT es lo que autoriza contra RLS)
-    const { data: { session: currentSession } } = await supabase.auth.getSession();
-    if (!currentSession) {
-      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-      if (refreshError || !refreshData.session) {
-        return localUri;
-      }
+  // Verificar que hay sesión activa (el token JWT es lo que autoriza contra RLS)
+  const { data: { session: currentSession } } = await supabase.auth.getSession();
+  if (!currentSession) {
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+    if (refreshError || !refreshData.session) {
+      throw new Error('[Avatar Upload] No hay sesión activa para subir avatar');
     }
-
-    const fileExt = localUri.split('.').pop()?.split('?')[0] || 'jpg';
-    const filePath = `avatars/${userId}-${Date.now()}.${fileExt}`;
-    const contentType = `image/${fileExt === 'png' ? 'png' : 'jpeg'}`;
-
-    let error;
-
-    if (base64Data) {
-      const arrayBuffer = decodeBase64(base64Data);
-      const res = await supabase.storage
-        .from('user_assets')
-        .upload(filePath, arrayBuffer, {
-          contentType,
-          upsert: true
-        });
-      error = res.error;
-    } else {
-      const response = await fetch(localUri);
-      const blob = await response.blob();
-      const res = await supabase.storage
-        .from('user_assets')
-        .upload(filePath, blob, {
-          contentType,
-          upsert: true
-        });
-      error = res.error;
-    }
-
-    if (error) {
-      throw error;
-    }
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('user_assets')
-      .getPublicUrl(filePath);
-
-    return publicUrl;
-  } catch (error) {
-    console.error('[Avatar Upload] Error:', error);
-    return localUri;
   }
+
+  const fileExt = localUri.split('.').pop()?.split('?')[0] || 'jpg';
+  // Nombre de archivo estable por usuario: siempre sobreescribe al actualizar
+  const filePath = `avatars/${userId}.${fileExt}`;
+  const contentType = `image/${fileExt === 'png' ? 'png' : 'jpeg'}`;
+
+  let error;
+
+  if (base64Data) {
+    console.log('[Avatar Upload] Subiendo desde base64...');
+    const arrayBuffer = decodeBase64(base64Data);
+    const res = await supabase.storage
+      .from('user_assets')
+      .upload(filePath, arrayBuffer, {
+        contentType,
+        upsert: true
+      });
+    error = res.error;
+  } else {
+    console.log('[Avatar Upload] Subiendo desde fetch blob...');
+    const response = await fetch(localUri);
+    const blob = await response.blob();
+    const res = await supabase.storage
+      .from('user_assets')
+      .upload(filePath, blob, {
+        contentType,
+        upsert: true
+      });
+    error = res.error;
+  }
+
+  if (error) {
+    console.error('[Avatar Upload] Error al subir a Storage:', error);
+    throw error;
+  }
+
+  const { data: { publicUrl } } = supabase.storage
+    .from('user_assets')
+    .getPublicUrl(filePath);
+
+  console.log('[Avatar Upload] Subida exitosa. Public URL:', publicUrl);
+  return publicUrl;
 };
 

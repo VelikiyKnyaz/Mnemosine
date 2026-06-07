@@ -163,39 +163,31 @@ export default function ProfileScreen() {
 
     try {
       let finalUrl = newAvatarUrl;
-      let uploadSucceeded = false;
 
       // Subir a Supabase Storage si es archivo local
       if (newAvatarUrl.startsWith('file://') || newAvatarUrl.startsWith('content://')) {
         try {
-          const result = await uploadAvatar(currentUserId, newAvatarUrl, base64Data);
-          // Solo aceptar como éxito si devolvió una URL remota (no la misma file://)
-          if (result.startsWith('http')) {
-            finalUrl = result;
-            uploadSucceeded = true;
-            pendingBase64Ref.current = undefined;
-          }
+          finalUrl = await uploadAvatar(currentUserId, newAvatarUrl, base64Data);
+          pendingBase64Ref.current = undefined;
         } catch (uploadErr) {
-          console.warn('Fallo al subir avatar:', uploadErr);
+          console.warn('Fallo al subir avatar a Storage, se conservará sólo localmente:', uploadErr);
+          // Guardar localmente el file:// como cache, pero NO sincronizar con Supabase profiles
+          setAvatarUrl(newAvatarUrl);
+          const db = await getDb();
+          await db.runAsync('UPDATE user_profile SET avatar_url = ? WHERE id = ?', newAvatarUrl, currentUserId);
+          return;
         }
-      } else {
-        // Es una URL remota (preset o ya subida), no necesita upload
-        uploadSucceeded = true;
       }
 
-      // Actualizar estado visual
+      // Actualizar estado visual con URL remota
       setAvatarUrl(finalUrl);
 
-      // Guardar en SQLite siempre (incluso file:// como cache local temporal)
+      // Guardar en SQLite con la URL remota
       const db = await getDb();
-      await db.runAsync(
-        'UPDATE user_profile SET avatar_url = ? WHERE id = ?',
-        finalUrl,
-        currentUserId
-      );
+      await db.runAsync('UPDATE user_profile SET avatar_url = ? WHERE id = ?', finalUrl, currentUserId);
 
-      // Solo sincronizar con Supabase profiles si tenemos una URL remota válida
-      if (uploadSucceeded && finalUrl.startsWith('http')) {
+      // Sincronizar con Supabase profiles (solo si tenemos URL remota)
+      if (finalUrl.startsWith('http')) {
         await supabase.from('profiles').upsert({
           id: currentUserId,
           avatar_url: finalUrl,
@@ -229,14 +221,12 @@ export default function ProfileScreen() {
       let finalAvatarUrl = avatarUrl;
       if (avatarUrl.startsWith('file://') || avatarUrl.startsWith('content://')) {
         try {
-          const result = await uploadAvatar(currentUserId, avatarUrl, pendingBase64Ref.current);
-          if (result.startsWith('http')) {
-            finalAvatarUrl = result;
-            setAvatarUrl(finalAvatarUrl);
-            pendingBase64Ref.current = undefined;
-          }
+          finalAvatarUrl = await uploadAvatar(currentUserId, avatarUrl, pendingBase64Ref.current);
+          setAvatarUrl(finalAvatarUrl);
+          pendingBase64Ref.current = undefined;
         } catch (uploadErr) {
-          console.warn('Fallo al subir avatar a Supabase Storage:', uploadErr);
+          console.warn('Fallo al subir avatar a Supabase Storage (se usará solo local):', uploadErr);
+          // Se mantiene la URI local en finalAvatarUrl — no se enviará a Supabase profiles
         }
       }
 
