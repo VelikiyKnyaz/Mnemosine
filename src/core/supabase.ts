@@ -134,6 +134,36 @@ export const uploadAvatar = async (userId: string, localUri: string, base64Data?
     throw error;
   }
 
+  // Limpiar avatares obsoletos del storage (ej. de extensiones anteriores o timestamps viejos)
+  try {
+    const { data: existingFiles, error: listError } = await supabase.storage
+      .from('user_assets')
+      .list('avatars', { search: userId });
+
+    if (listError) {
+      console.warn('[Avatar Upload] Error al listar archivos para limpieza:', listError);
+    } else if (existingFiles && existingFiles.length > 0) {
+      const newFileName = `${userId}.${fileExt}`;
+      const filesToDelete = existingFiles
+        .filter(f => (f.name.startsWith(`${userId}.`) || f.name.startsWith(`${userId}-`)) && f.name !== newFileName)
+        .map(f => `avatars/${f.name}`);
+
+      if (filesToDelete.length > 0) {
+        console.log('[Avatar Upload] Eliminando archivos de avatar obsoletos para evitar bloat:', filesToDelete);
+        const { error: removeError } = await supabase.storage
+          .from('user_assets')
+          .remove(filesToDelete);
+        if (removeError) {
+          console.warn('[Avatar Upload] Error al eliminar archivos obsoletos:', removeError);
+        } else {
+          console.log('[Avatar Upload] Limpieza de avatares obsoletos completada con éxito.');
+        }
+      }
+    }
+  } catch (cleanError) {
+    console.warn('[Avatar Upload] Error inesperado durante la limpieza de Storage:', cleanError);
+  }
+
   const { data: { publicUrl } } = supabase.storage
     .from('user_assets')
     .getPublicUrl(filePath);
