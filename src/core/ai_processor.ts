@@ -347,6 +347,16 @@ export const processPendingMemories = async () => {
             return true;
           });
 
+          // MAX 1 EMOTION: keep only the first valid one from AI processing
+          let emotionFound = false;
+          aiData.entities = aiData.entities.filter(entity => {
+            if (entity.type === 'EMOTION') {
+              if (emotionFound) return false;
+              emotionFound = true;
+            }
+            return true;
+          });
+
           // FIX 3: Location fallback - if no location extracted but space_context exists, inject it
           const hasLocation = aiData.entities.some(e => e.type === 'LOCATION');
           if (!hasLocation && memory.space_context) {

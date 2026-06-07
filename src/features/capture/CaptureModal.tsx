@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, Modal, TouchableOpacity } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, StyleSheet, Modal, TouchableOpacity, TextInput as RNTextInput } from 'react-native';
 import { TextInput, Button, Text, IconButton } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { processPendingMemories } from '../../core/ai_processor';
@@ -16,6 +16,15 @@ interface CaptureModalProps {
 export default function CaptureModal({ visible, onDismiss, initialQuestion }: CaptureModalProps) {
   const [text, setText] = useState('');
   const { isRecording, recordUri, startRecording, stopRecording, cancelRecording, setRecordUri } = useAudioRecorder();
+  const inputRef = useRef<RNTextInput>(null);
+
+  // Force keyboard open when modal becomes visible
+  useEffect(() => {
+    if (visible) {
+      const timer = setTimeout(() => inputRef.current?.focus(), 300);
+      return () => clearTimeout(timer);
+    }
+  }, [visible]);
 
   const handleSave = async () => {
     if (!text.trim() && !recordUri) return;
@@ -64,6 +73,7 @@ export default function CaptureModal({ visible, onDismiss, initialQuestion }: Ca
         )}
 
         <TextInput
+          ref={inputRef}
           mode="flat"
           placeholder="¿Qué tienes en mente?"
           multiline
