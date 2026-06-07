@@ -1,9 +1,22 @@
 // AI Service - Lee la API Key de AsyncStorage (configurada desde el Panel Admin)
 import { getConfig } from './config';
-import { ALL_EMOTION_NAMES } from './emotions';
+import { EMOTIONS_HIERARCHY, ALL_EMOTION_NAMES } from './emotions';
 
-// Lista indexada compacta: "0:Alegría,1:Optimismo,..." — la IA devuelve el índice, no el nombre
-const EMOTION_INDEX_STR = ALL_EMOTION_NAMES.map((n, i) => `${i}:${n}`).join(',');
+// Genera string jerárquico indexado: "0:Alegría(1:Optimismo(2:Bromista,3:Jueguetón),4:Poder(...))"
+// La IA ve la estructura general→específica y elige el índice del nivel apropiado
+function buildHierarchicalIndexStr(): string {
+  const indexOf = (name: string) => ALL_EMOTION_NAMES.indexOf(name);
+  return Object.entries(EMOTIONS_HIERARCHY).map(([root, cats]) => {
+    const ri = indexOf(root);
+    const catsStr = Object.entries(cats).map(([cat, leaves]) => {
+      const ci = indexOf(cat);
+      const leavesStr = leaves.map(l => `${indexOf(l)}:${l}`).join(',');
+      return `${ci}:${cat}(${leavesStr})`;
+    }).join(',');
+    return `${ri}:${root}(${catsStr})`;
+  }).join(',');
+}
+const EMOTION_TREE_STR = buildHierarchicalIndexStr();
 
 
 export interface AICategorization {
@@ -59,7 +72,7 @@ export const extractMemoryData = async (
   const systemPrompt = `Extract metadata from a personal memory into JSON.
 
 KNOWN: [${existingEntitiesContext}]
-EMOTIONS: {${EMOTION_INDEX_STR}}
+EMOTIONS: {${EMOTION_TREE_STR}}
 CONTEXT_TIME: [${timeContext}]
 CONTEXT_LOCATION: [${spaceContext}]
 
