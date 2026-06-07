@@ -6,6 +6,81 @@ import { getConfig } from './config';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
+const COMMON_EMOTION_MAPPINGS: Record<string, string> = {
+  // Raíces
+  'alegre': 'Alegría',
+  'feliz': 'Alegría',
+  'felicidad': 'Alegría',
+  'triste': 'Tristeza',
+  'pena': 'Tristeza',
+  'enojado': 'Ira',
+  'enojada': 'Ira',
+  'rabia': 'Ira',
+  'furia': 'Ira',
+  'molesto': 'Ira',
+  'molesta': 'Ira',
+  'asustado': 'Miedo',
+  'asustada': 'Miedo',
+  'temor': 'Miedo',
+  'tranquilo': 'Calma',
+  'tranquila': 'Calma',
+  'relajado': 'Calma',
+  'relajada': 'Calma',
+  'sereno': 'Calma',
+  'serena': 'Calma',
+  'sorprendido': 'Sorpresa',
+  'sorprendida': 'Sorpresa',
+  'asombrado': 'Sorpresa',
+  'asombrada': 'Sorpresa',
+  // Secundarias/Hojas comunes
+  'nostalgico': 'Melancolía',
+  'nostálgico': 'Melancolía',
+  'nostalgica': 'Melancolía',
+  'nostálgica': 'Melancolía',
+  'nostalgia': 'Melancolía',
+  'melancolico': 'Melancolía',
+  'melancólico': 'Melancolía',
+  'melancolica': 'Melancolía',
+  'melancólica': 'Melancolía',
+  'culpabilidad': 'Culpable',
+  'arrepentido': 'Arrepentimiento',
+  'arrepentida': 'Arrepentimiento',
+  'avergonzado': 'Vergüenza',
+  'avergonzada': 'Vergüenza',
+  'frustrado': 'Frustración',
+  'frustrada': 'Frustración',
+  'ansioso': 'Ansiedad',
+  'ansiosa': 'Ansiedad',
+  'preocupado': 'Preocupación',
+  'preocupada': 'Preocupación',
+  'agobiado': 'Agobio',
+  'agobiada': 'Agobio',
+  'inseguro': 'Inseguridad',
+  'insegura': 'Inseguridad',
+  'aburrido': 'Aburrimiento',
+  'aburrida': 'Aburrimiento',
+  'decepcionado': 'Decepción',
+  'decepcionada': 'Decepción',
+  'agradecido': 'Agradecimiento',
+  'agradecida': 'Agradecimiento',
+  'satisfecho': 'Satisfacción',
+  'satisfecha': 'Satisfacción',
+  'impaciente': 'Impaciencia',
+  'irritado': 'Irritación',
+  'irritada': 'Irritación',
+  'entusiasmado': 'Entusiasmo',
+  'entusiasmada': 'Entusiasmo',
+  'curioso': 'Curiosidad',
+  'curiosa': 'Curiosidad',
+  'esperanzado': 'Esperanza',
+  'esperanzada': 'Esperanza',
+  'valiente': 'Valentía',
+  'orgulloso': 'Orgullo',
+  'orgullosa': 'Orgullo',
+  'inspirado': 'Inspiración',
+  'inspirada': 'Inspiración',
+};
+
 const normalizeString = (str: string): string => {
   return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 };
@@ -313,7 +388,7 @@ export const processPendingMemories = async () => {
         // POST-PROCESSING: Deterministic code-level fixes
         // =====================================================================
 
-        // FIX 2: Filter emotions to only allow valid ones from EMOTIONS_DESCRIPTIONS
+        // FIX 2: Filter emotions to only allow valid ones from EMOTIONS_DESCRIPTIONS, mapping common variations
         const validEmotionsKeys = Object.keys(EMOTIONS_DESCRIPTIONS);
         const emotionsMapLower = new Map<string, string>();
         for (const key of validEmotionsKeys) {
@@ -322,10 +397,16 @@ export const processPendingMemories = async () => {
 
         if (aiData.entities) {
           aiData.entities = aiData.entities.filter(entity => {
+            // Normalizar el tipo de la entidad a mayúsculas
+            if (entity.type) {
+              entity.type = entity.type.toUpperCase() as any;
+            }
+
             if (entity.type === 'EMOTION') {
-              const matchedKey = emotionsMapLower.get(entity.name.trim().toLowerCase());
+              const nameLower = entity.name.trim().toLowerCase();
+              const matchedKey = emotionsMapLower.get(nameLower) || COMMON_EMOTION_MAPPINGS[nameLower];
               if (matchedKey) {
-                entity.name = matchedKey; // Correct casing
+                entity.name = matchedKey; // Corregir casing o aplicar mapeo robusto
                 return true;
               }
               console.warn(`Filtering out invalid emotion extracted by AI: ${entity.name}`);
@@ -421,8 +502,8 @@ export const processPendingMemories = async () => {
         // UPDATE MEMORY
         // =====================================================================
         await db.runAsync(
-          "UPDATE memories SET raw_text = ?, start_date = ?, end_date = ?, emotion_reason = ?, sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
-          textToProcess.trim(), dates.start_date, dates.end_date, aiData.emotion_reason || null, memory.id
+          "UPDATE memories SET raw_text = ?, start_date = ?, end_date = ?, sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
+          textToProcess.trim(), dates.start_date, dates.end_date, memory.id
         );
 
         // =====================================================================

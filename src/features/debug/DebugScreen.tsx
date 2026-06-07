@@ -208,7 +208,6 @@ export default function DebugScreen() {
             <Paragraph><Text style={{fontWeight: 'bold'}}>Estado de Sync:</Text> {m.sync_status}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Inicio:</Text> {m.start_date || 'N/A'}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Fin:</Text> {m.end_date || 'N/A'}</Paragraph>
-            <Paragraph><Text style={{fontWeight: 'bold'}}>Análisis de Emociones (IA):</Text> {m.emotion_reason || 'N/A'}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Audio URI:</Text> {m.audio_uri || 'Ninguno'}</Paragraph>
           </Card.Content>
         </Card>
