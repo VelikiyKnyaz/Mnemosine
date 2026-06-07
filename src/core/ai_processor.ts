@@ -1,6 +1,6 @@
 import { getDb, inheritCoordinatesFromParent } from './database';
 import { transcribeAudio, extractMemoryData, segmentMemoryText } from './ai_service';
-import { EMOTIONS_DESCRIPTIONS } from './emotions';
+import { EMOTIONS_HIERARCHY } from './emotions';
 import { calculateDatesFromMarkers, generateLifecycleStages } from './chrono_engine';
 import { getConfig } from './config';
 import 'react-native-get-random-values';
@@ -315,11 +315,16 @@ export const processPendingMemories = async () => {
         // POST-PROCESSING: Deterministic code-level fixes
         // =====================================================================
 
-        // FIX 2: Filter emotions to only allow valid ones from EMOTIONS_DESCRIPTIONS, mapping common variations
-        const validEmotionsKeys = Object.keys(EMOTIONS_DESCRIPTIONS);
+        // FIX 2: Normalize emotion names to match hierarchy labels (case-insensitive)
         const emotionsMapLower = new Map<string, string>();
-        for (const key of validEmotionsKeys) {
-          emotionsMapLower.set(key.toLowerCase(), key);
+        for (const root of Object.keys(EMOTIONS_HIERARCHY)) {
+          emotionsMapLower.set(root.toLowerCase(), root);
+          for (const cat of Object.keys(EMOTIONS_HIERARCHY[root])) {
+            emotionsMapLower.set(cat.toLowerCase(), cat);
+            for (const leaf of EMOTIONS_HIERARCHY[root][cat]) {
+              emotionsMapLower.set(leaf.toLowerCase(), leaf);
+            }
+          }
         }
 
         if (aiData.entities) {

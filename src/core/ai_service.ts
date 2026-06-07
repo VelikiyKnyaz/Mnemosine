@@ -1,6 +1,12 @@
 // AI Service - Lee la API Key de AsyncStorage (configurada desde el Panel Admin)
 import { getConfig } from './config';
-// La IA deliberará libremente las emociones sin necesidad de pasarle un diccionario jerárquico.
+import { EMOTIONS_HIERARCHY } from './emotions';
+
+// Representación compacta de la jerarquía: "Alegría(Optimismo,Poder,...),Tristeza(Culpable,...)"
+// Solo raíces + categorías intermedias — las hojas son demasiado granulares para el prompt
+const EMOTION_LABELS = Object.entries(EMOTIONS_HIERARCHY)
+  .map(([root, cats]) => `${root}(${Object.keys(cats).join(',')})`)
+  .join(',');
 
 
 export interface AICategorization {
@@ -56,6 +62,7 @@ export const extractMemoryData = async (
   const systemPrompt = `Extract metadata from a personal memory into JSON.
 
 KNOWN: [${existingEntitiesContext}]
+EMOTIONS: [${EMOTION_LABELS}]
 CONTEXT_TIME: [${timeContext}]
 CONTEXT_LOCATION: [${spaceContext}]
 
@@ -64,7 +71,7 @@ OUTPUT:
   CRITICAL: Do not assume, guess, or invent a specific year, month, or day if there is no explicit certainty in the text. If the reference is vague, relative (e.g., "luego", "más tarde", "ese día"), or context-dependent, use the CONTEXT_TIME provided to infer the date details if appropriate. If no certainty, use "fuzzy:TEXT" or map to a KNOWN stage under entities.
 - entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT, TIME, EMOTION.
   RULES FOR ENTITIES:
-  * EMOTION: Analyze the text and infer the user's emotional state. If there is ANY emotional tone, feeling, or state described or implied (even subtle ones), extract it as an EMOTION entity. Represent the emotion as a single capitalized noun (e.g., 'Alegría', 'Tristeza', 'Nostalgia', 'Melancolía', 'Frustración', 'Enojo', 'Preocupación', 'Agobio', 'Calma', 'Entusiasmo'). Do not extract an emotion if the text is completely neutral and factual.
+  * EMOTION: Interpret the emotional tone of the text and pick the best matching label(s) from EMOTIONS. Skip only if the text is completely neutral and factual.
   * LOCATION: You must extract EXACTLY ONE LOCATION entity — the MOST SPECIFIC physical place where the core events of this fragment happened.
     - SPECIFICITY HIERARCHY (from most to least specific): room/hall/space inside a building > building/establishment/landmark/venue > park/plaza/neighborhood > city/town/village > state/region/department > country. ALWAYS choose the HIGHEST specificity level mentioned in the text.
     - If the text mentions a specific building, landmark, venue, park, or any named physical space AND ALSO mentions the city/state/country that contains it, you MUST extract the specific place as the LOCATION and put the city/state/country in 'parent_name'. The territory is NEVER the LOCATION when a more specific place inside it is mentioned.
