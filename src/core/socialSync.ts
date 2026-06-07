@@ -420,3 +420,57 @@ export async function rejectSharedMemory(sharedMemoryId: string): Promise<boolea
   }
 }
 
+/**
+ * Checks all PERSON entities linked to a memory, and if they are linked/connected friends
+ * who have not yet received this memory, creates a PENDING SHARE_PROMPT task in the inbox.
+ */
+export async function checkAndCreateShareTasks(db: any, memoryId: string): Promise<void> {
+  try {
+    const linkedPeople = await db.getAllAsync(
+      `SELECT e.id, e.name, e.metadata 
+       FROM entities e
+       JOIN memory_entities me ON e.id = me.entity_id
+       WHERE me.memory_id = ? AND e.type = 'PERSON'`,
+      memoryId
+    );
+
+    for (const p of linkedPeople) {
+      if (p.metadata) {
+        try {
+          const meta = JSON.parse(p.metadata);
+          if (meta.is_linked && meta.user_id) {
+            // Check if already shared
+            const alreadyShared = await db.getFirstAsync(
+              "SELECT 1 FROM shared_memories_log WHERE memory_id = ? AND friend_user_id = ?",
+              memoryId,
+              meta.user_id
+            );
+            if (!alreadyShared) {
+              // Check if a PENDING share task already exists
+              const taskExists = await db.getFirstAsync(
+                "SELECT 1 FROM inbox_tasks WHERE memory_id = ? AND entity_id = ? AND ambiguity_type = 'SHARE_PROMPT' AND status = 'PENDING'",
+                memoryId,
+                p.id
+              );
+              if (!taskExists) {
+                await db.runAsync(
+                  "INSERT INTO inbox_tasks (id, memory_id, entity_id, ambiguity_type, question) VALUES (?, ?, ?, 'SHARE_PROMPT', ?)",
+                  uuidv4(),
+                  memoryId,
+                  p.id,
+                  `¿Quieres compartir este recuerdo con ${p.name}?`
+                );
+                console.log(`[Social Sync] Suggested sharing memory ${memoryId} with connected friend ${p.name} (user_id: ${meta.user_id})`);
+              }
+            }
+          }
+        } catch (parseErr) {
+          console.warn('[Social Sync] Error parsing entity metadata in checkAndCreateShareTasks:', parseErr);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Social Sync] Error in checkAndCreateShareTasks:', err);
+  }
+}
+

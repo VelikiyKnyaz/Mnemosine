@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import TimeCascadeSelector from './TimeCascadeSelector';
 import CustomTimePeriodsScreen from '../features/profile/CustomTimePeriodsScreen';
 import EmotionCascadeSelector from './EmotionCascadeSelector';
-import { shareMemoryWithFriend } from '../core/socialSync';
+import { shareMemoryWithFriend, checkAndCreateShareTasks } from '../core/socialSync';
 
 interface MemoryEditModalProps {
   memory: any; // Requires at least { id/memory_id, raw_text }
@@ -146,6 +146,9 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
         }
       }
 
+      // Check and create share tasks for any other connected friends mentioned
+      await checkAndCreateShareTasks(db, memId);
+
       onSaved();
       onClose();
     } catch (e) {
@@ -242,6 +245,10 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
         const pivotId = uuidv4();
         await db.runAsync("INSERT INTO memory_entities (id, memory_id, entity_id) VALUES (?, ?, ?)", pivotId, memId, entityId);
       }
+
+      // Check and create share tasks for any connected friends mentioned
+      await checkAndCreateShareTasks(db, memId);
+
       setAddingType(null);
       loadEntities();
       onSaved();

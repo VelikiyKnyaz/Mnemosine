@@ -3,6 +3,7 @@ import { transcribeAudio, extractMemoryData, segmentMemoryText } from './ai_serv
 import { ALL_EMOTION_NAMES } from './emotions';
 import { calculateDatesFromMarkers, generateLifecycleStages } from './chrono_engine';
 import { getConfig } from './config';
+import { checkAndCreateShareTasks } from './socialSync';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -487,7 +488,7 @@ export const processPendingMemories = async () => {
                 "SELECT id, latitude FROM entities WHERE id = ?", aliasMatch.entity_id
               ) as {id: string, latitude: number | null} | null
             : await db.getFirstAsync(
-                "SELECT id, latitude FROM entities WHERE name = ? AND type = ?",
+                "SELECT id, latitude FROM entities WHERE name = ? AND type = ? COLLATE NOCASE",
                 entity.name, entity.type
               ) as {id: string, latitude: number | null} | null;
 
@@ -551,53 +552,7 @@ export const processPendingMemories = async () => {
         }
 
         // Detección de personas conectadas para sugerir compartir recuerdo
-        try {
-          const linkedPeople = await db.getAllAsync<any>(
-            `SELECT e.id, e.name, e.metadata 
-             FROM entities e
-             JOIN memory_entities me ON e.id = me.entity_id
-             WHERE me.memory_id = ? AND e.type = 'PERSON'`,
-            memory.id
-          );
-
-          for (const p of linkedPeople) {
-            if (p.metadata) {
-              try {
-                const meta = JSON.parse(p.metadata);
-                if (meta.is_linked && meta.user_id) {
-                  // Check if already shared
-                  const alreadyShared = await db.getFirstAsync<any>(
-                    "SELECT 1 FROM shared_memories_log WHERE memory_id = ? AND friend_user_id = ?",
-                    memory.id,
-                    meta.user_id
-                  );
-                  if (!alreadyShared) {
-                    // Check if a PENDING share task already exists
-                    const taskExists = await db.getFirstAsync<any>(
-                      "SELECT 1 FROM inbox_tasks WHERE memory_id = ? AND entity_id = ? AND ambiguity_type = 'SHARE_PROMPT' AND status = 'PENDING'",
-                      memory.id,
-                      p.id
-                    );
-                    if (!taskExists) {
-                      await db.runAsync(
-                        "INSERT INTO inbox_tasks (id, memory_id, entity_id, ambiguity_type, question) VALUES (?, ?, ?, 'SHARE_PROMPT', ?)",
-                        uuidv4(),
-                        memory.id,
-                        p.id,
-                        `¿Quieres compartir este recuerdo con ${p.name}?`
-                      );
-                      console.log(`Suggested sharing memory ${memory.id} with connected friend ${p.name} (user_id: ${meta.user_id})`);
-                    }
-                  }
-                }
-              } catch (parseErr) {
-                console.warn('Error parsing entity metadata in share check:', parseErr);
-              }
-            }
-          }
-        } catch (shareCheckErr) {
-          console.error('Error checking for shared memory suggestions:', shareCheckErr);
-        }
+        await checkAndCreateShareTasks(db, memory.id);
 
         console.log(`Memory ${memory.id} processed successfully.`);
 
