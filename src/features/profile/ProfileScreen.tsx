@@ -279,6 +279,140 @@ export default function ProfileScreen() {
     }
   };
 
+  /**
+   * DIAGNÓSTICO EXHAUSTIVO DE AVATARES
+   * Revisa cada punto del pipeline para identificar dónde se rompe la sincronización de fotos.
+   */
+  const runAvatarDiagnostics = async () => {
+    const myId = session?.user?.id;
+    if (!myId) {
+      Alert.alert('Diagnóstico', 'No hay sesión activa.');
+      return;
+    }
+
+    let report = '';
+
+    try {
+      // 1. Qué hay en SQLite local (user_profile)
+      const db = await getDb();
+      const localProfile = await db.getFirstAsync<any>('SELECT id, username, avatar_url FROM user_profile WHERE id = ?', myId);
+      report += `=== MI PERFIL LOCAL (SQLite) ===\n`;
+      report += `user_id: ${myId}\n`;
+      report += `username: ${localProfile?.username || '(vacío)'}\n`;
+      report += `avatar_url: ${localProfile?.avatar_url || '(vacío)'}\n`;
+      report += `tipo: ${localProfile?.avatar_url?.startsWith('http') ? 'REMOTA ✅' : localProfile?.avatar_url?.startsWith('file') ? 'LOCAL file:// ⚠️' : 'OTRO ❓'}\n\n`;
+
+      // 2. Qué hay en Supabase profiles
+      const { data: remoteProfile, error: remoteErr } = await supabase
+        .from('profiles')
+        .select('id, username, full_name, avatar_url')
+        .eq('id', myId)
+        .maybeSingle();
+      report += `=== MI PERFIL REMOTO (Supabase profiles) ===\n`;
+      if (remoteErr) {
+        report += `ERROR: ${JSON.stringify(remoteErr)}\n\n`;
+      } else if (!remoteProfile) {
+        report += `NO EXISTE perfil remoto para este usuario ⚠️\n\n`;
+      } else {
+        report += `username: ${remoteProfile.username || '(vacío)'}\n`;
+        report += `full_name: ${remoteProfile.full_name || '(vacío)'}\n`;
+        report += `avatar_url: ${remoteProfile.avatar_url || '(vacío)'}\n`;
+        report += `tipo: ${remoteProfile.avatar_url?.startsWith('http') ? 'REMOTA ✅' : remoteProfile.avatar_url?.startsWith('file') ? 'LOCAL file:// 🔴 ESTE ES EL BUG' : remoteProfile.avatar_url ? 'OTRO ❓' : 'VACÍO ⚠️'}\n`;
+
+        // 2b. Si la URL es remota, probar si es accesible
+        if (remoteProfile.avatar_url?.startsWith('http')) {
+          try {
+            const testRes = await fetch(remoteProfile.avatar_url, { method: 'HEAD' });
+            report += `accesible: ${testRes.ok ? 'SÍ ✅' : `NO ❌ status=${testRes.status}`}\n`;
+          } catch (fetchErr: any) {
+            report += `accesible: NO ❌ error=${fetchErr.message}\n`;
+          }
+        }
+        report += '\n';
+      }
+
+      // 3. Conexiones activas y sus perfiles
+      const { data: conns, error: connErr } = await supabase
+        .from('connections')
+        .select('*')
+        .or(`sender_id.eq.${myId},receiver_id.eq.${myId}`);
+
+      report += `=== CONEXIONES (${conns?.length || 0}) ===\n`;
+      if (connErr) {
+        report += `ERROR: ${JSON.stringify(connErr)}\n\n`;
+      } else if (conns && conns.length > 0) {
+        for (const conn of conns) {
+          const friendId = conn.sender_id === myId ? conn.receiver_id : conn.sender_id;
+          const { data: friendProfile } = await supabase
+            .from('profiles')
+            .select('username, full_name, avatar_url')
+            .eq('id', friendId)
+            .maybeSingle();
+
+          report += `— ${friendProfile?.full_name || '?'} (@${friendProfile?.username || '?'}) | status=${conn.status}\n`;
+          report += `  avatar_url remoto: ${friendProfile?.avatar_url || '(vacío)'}\n`;
+          const urlType = friendProfile?.avatar_url?.startsWith('http') ? 'REMOTA ✅' : friendProfile?.avatar_url?.startsWith('file') ? 'file:// 🔴' : friendProfile?.avatar_url ? 'OTRO' : 'VACÍO ⚠️';
+          report += `  tipo: ${urlType}\n`;
+
+          // Verificar accesibilidad
+          if (friendProfile?.avatar_url?.startsWith('http')) {
+            try {
+              const testRes = await fetch(friendProfile.avatar_url, { method: 'HEAD' });
+              report += `  accesible: ${testRes.ok ? 'SÍ ✅' : `NO ❌ status=${testRes.status}`}\n`;
+            } catch (fetchErr: any) {
+              report += `  accesible: NO ❌ error=${fetchErr.message}\n`;
+            }
+          }
+        }
+        report += '\n';
+      } else {
+        report += `(ninguna)\n\n`;
+      }
+
+      // 4. Entidades PERSON locales con metadata de avatar
+      const localPeople = await db.getAllAsync<any>("SELECT id, name, metadata FROM entities WHERE type = 'PERSON'");
+      report += `=== ENTIDADES PERSON LOCALES (${localPeople.length}) ===\n`;
+      for (const p of localPeople) {
+        const meta = p.metadata ? JSON.parse(p.metadata) : {};
+        report += `— ${p.name} | is_linked=${meta.is_linked || false} | conn_status=${meta.connection_status || 'N/A'}\n`;
+        report += `  avatar_url: ${meta.avatar_url || '(vacío)'}\n`;
+        const urlType = meta.avatar_url?.startsWith('http') ? 'REMOTA' : meta.avatar_url?.startsWith('file') ? 'file://' : meta.avatar_url ? 'OTRO' : 'VACÍO';
+        report += `  tipo: ${urlType}\n`;
+      }
+      report += '\n';
+
+      // 5. Listar archivos en el bucket user_assets/avatars/
+      const { data: storageFiles, error: storageErr } = await supabase.storage
+        .from('user_assets')
+        .list('avatars', { limit: 20 });
+      report += `=== SUPABASE STORAGE (user_assets/avatars/) ===\n`;
+      if (storageErr) {
+        report += `ERROR al listar bucket: ${JSON.stringify(storageErr)}\n`;
+      } else if (storageFiles && storageFiles.length > 0) {
+        for (const f of storageFiles) {
+          const { data: { publicUrl } } = supabase.storage.from('user_assets').getPublicUrl(`avatars/${f.name}`);
+          report += `— ${f.name} (${f.metadata?.size || '?'} bytes)\n`;
+          report += `  publicUrl: ${publicUrl}\n`;
+          // Probar accesibilidad
+          try {
+            const testRes = await fetch(publicUrl, { method: 'HEAD' });
+            report += `  accesible: ${testRes.ok ? 'SÍ ✅' : `NO ❌ status=${testRes.status}`}\n`;
+          } catch (fetchErr: any) {
+            report += `  accesible: NO ❌ error=${fetchErr.message}\n`;
+          }
+        }
+      } else {
+        report += `(vacío o sin acceso)\n`;
+      }
+
+    } catch (err: any) {
+      report += `\n\nERROR GENERAL: ${err.message || JSON.stringify(err)}\n`;
+    }
+
+    console.log('[AVATAR DIAGNOSTICS]\n' + report);
+    Alert.alert('Diagnóstico de Avatares', report, [{ text: 'OK' }], { cancelable: true });
+  };
+
   const handleLogout = async () => {
     Alert.alert('Cerrar sesión', '¿Estás seguro de que quieres salir?', [
       { text: 'Cancelar', style: 'cancel' },
@@ -303,6 +437,7 @@ export default function ProfileScreen() {
     <View style={styles.container}>
       <Appbar.Header style={styles.appbar}>
         <Appbar.Content title="Mi Perfil" titleStyle={styles.headerTitle} />
+        <Appbar.Action icon="bug-outline" onPress={runAvatarDiagnostics} />
         <Appbar.Action icon="logout" onPress={handleLogout} title="Cerrar Sesión" />
       </Appbar.Header>
 
