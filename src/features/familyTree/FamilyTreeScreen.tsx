@@ -350,7 +350,11 @@ export default function FamilyTreeScreen({ navigation }: any) {
     const meta = item.metadata ? JSON.parse(item.metadata) : {};
     const nickname = meta.nickname;
     const relation = meta.relationship;
-    const avatar = meta.avatar_url;
+    const rawAvatar = meta.avatar_url;
+    // Cache-buster: forzar recarga de imágenes remotas que puedan estar cacheadas
+    const avatar = rawAvatar && rawAvatar.startsWith('http')
+      ? `${rawAvatar}${rawAvatar.includes('?') ? '&' : '?'}t=${Date.now()}`
+      : rawAvatar;
     const displayName = nickname ? `${item.name} (${nickname})` : item.name;
 
     return (
@@ -359,6 +363,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
           <Image
             source={{
               uri: avatar || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + item.name,
+              cache: 'reload',
             }}
             style={styles.avatar}
           />
@@ -431,7 +436,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
                 navigation.navigate('MemberProfile', { targetUser: searchResult });
               }}
             >
-              <Image source={{ uri: searchResult.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder' }} style={styles.resultAvatar} />
+              <Image source={{ uri: (searchResult.avatar_url ? `${searchResult.avatar_url}${searchResult.avatar_url.includes('?') ? '&' : '?'}t=${Date.now()}` : 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder'), cache: 'reload' }} style={styles.resultAvatar} />
               <View style={styles.resultText}>
                 <Text style={styles.resultName}>{searchResult.full_name}</Text>
                 <Text style={styles.resultUsername}>@{searchResult.username}</Text>

@@ -280,7 +280,11 @@ export default function MemberProfileScreen({ route, navigation }: any) {
             <Card.Content style={styles.avatarSection}>
               <Image
                 source={{
-                  uri: targetUser?.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder',
+                  uri: (() => {
+                    const url = targetUser?.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder';
+                    return url.startsWith('http') ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : url;
+                  })(),
+                  cache: 'reload',
                 }}
                 style={styles.avatar}
               />

@@ -258,7 +258,11 @@ export default function NotificationsScreen() {
         <Card.Content style={styles.cardContent}>
           <Image
             source={{
-              uri: item.sender.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder',
+              uri: (() => {
+                const url = item.sender.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder';
+                return url.startsWith('http') ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : url;
+              })(),
+              cache: 'reload',
             }}
             style={styles.avatar}
           />
@@ -327,7 +331,11 @@ export default function NotificationsScreen() {
           <Card.Content style={styles.cardContent}>
             <Image
               source={{
-                uri: item.sender.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder',
+                uri: (() => {
+                  const url = item.sender.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder';
+                  return url.startsWith('http') ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : url;
+                })(),
+                cache: 'reload',
               }}
               style={styles.avatar}
             />
