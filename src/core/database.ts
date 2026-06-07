@@ -141,7 +141,8 @@ export const initDatabase = async () => {
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_unique ON entity_aliases(alias);',
     'ALTER TABLE memories ADD COLUMN time_context TEXT;',
     'ALTER TABLE memories ADD COLUMN space_context TEXT;',
-    'ALTER TABLE memories ADD COLUMN emotion_reason TEXT;'
+    'ALTER TABLE memories ADD COLUMN emotion_reason TEXT;',
+    'ALTER TABLE memories ADD COLUMN title TEXT;'
   ];
 
   for (const query of migrations) {

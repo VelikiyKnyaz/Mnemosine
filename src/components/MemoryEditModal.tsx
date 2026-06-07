@@ -15,6 +15,7 @@ interface MemoryEditModalProps {
 }
 
 export default function MemoryEditModal({ memory, visible, onClose, onSaved }: MemoryEditModalProps) {
+  const [editTitle, setEditTitle] = useState('');
   const [editText, setEditText] = useState('');
   const [entities, setEntities] = useState<any[]>([]);
   const [allEntities, setAllEntities] = useState<any[]>([]);
@@ -33,6 +34,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
 
   useEffect(() => {
     if (visible && memory) {
+      setEditTitle(memory.title || '');
       setEditText(memory.raw_text || '');
       setAddingType(null);
       setNewTagQuery('');
@@ -81,7 +83,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     const memId = memory.id || memory.memory_id;
     try {
       const db = await getDb();
-      await db.runAsync("UPDATE memories SET raw_text = ? WHERE id = ?", editText, memId);
+      await db.runAsync("UPDATE memories SET title = ?, raw_text = ? WHERE id = ?", editTitle.trim() || null, editText, memId);
       onSaved();
       onClose();
     } catch (e) {
@@ -305,6 +307,15 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
           <ScrollView ref={scrollRef} style={{maxHeight: 500}}>
             <TextInput
               mode="outlined"
+              label="Título"
+              value={editTitle}
+              onChangeText={setEditTitle}
+              style={{marginBottom: 10}}
+              dense
+            />
+            <TextInput
+              mode="outlined"
+              label="Contenido"
               multiline
               value={editText}
               onChangeText={setEditText}
@@ -322,7 +333,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
 
           <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 15}}>
             <Button mode="text" onPress={handleDelete} textColor="#B00020" icon="delete">Eliminar</Button>
-            <Button mode="contained" onPress={handleSaveText}>Guardar Texto</Button>
+            <Button mode="contained" onPress={handleSaveText}>Guardar</Button>
           </View>
         </View>
         

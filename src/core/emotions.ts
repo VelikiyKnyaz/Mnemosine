@@ -1,6 +1,6 @@
 export const EMOTIONS_HIERARCHY: Record<string, Record<string, string[]>> = {
   "Alegría": {
-    "Optimismo": ["Bromista", "Jueguetón"],
+    "Optimismo": ["Bromista", "Juguetón"],
     "Poder": ["Provocación", "Valentía"],
     "Orgullo": ["Presuntuoso", "Importante"],
     "Creatividad": ["Inspiración", "Ingenio"],
@@ -63,7 +63,7 @@ export const EMOTIONS_DESCRIPTIONS: Record<string, string> = {
   "Alegría": "Estado emocional positivo, caracterizado por una sensación de bienestar, vitalidad y satisfacción general.",
   "Optimismo": "Disposición mental orientada a esperar resultados positivos o favorables del futuro.",
   "Bromista": "Expresión lúdica y humorística orientada a generar risa o distensión en el entorno social.",
-  "Jueguetón": "Disposición activa hacia el disfrute, la exploración sin presiones y la interacción recreativa.",
+  "Juguetón": "Disposición activa hacia el disfrute, la exploración sin presiones y la interacción recreativa.",
   "Poder": "Sensación de control, eficacia y capacidad para influir en el entorno propio o ajeno.",
   "Provocación": "Estímulo intencional hacia otros para generar una reacción, a menudo como demostración de seguridad.",
   "Valentía": "Capacidad psicológica de afrontar situaciones adversas o peligrosas a pesar de experimentar temor.",

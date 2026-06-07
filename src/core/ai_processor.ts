@@ -443,9 +443,10 @@ export const processPendingMemories = async () => {
         // =====================================================================
         // UPDATE MEMORY
         // =====================================================================
+        const memoryTitle = aiData.title?.trim() || null;
         await db.runAsync(
-          "UPDATE memories SET raw_text = ?, start_date = ?, end_date = ?, sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
-          textToProcess.trim(), dates.start_date, dates.end_date, memory.id
+          "UPDATE memories SET raw_text = ?, title = ?, start_date = ?, end_date = ?, sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
+          textToProcess.trim(), memoryTitle, dates.start_date, dates.end_date, memory.id
         );
 
         // =====================================================================
