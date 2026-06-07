@@ -1,6 +1,25 @@
 // AI Service - Lee la API Key de AsyncStorage (configurada desde el Panel Admin)
 import { getConfig } from './config';
-import { EMOTIONS_DESCRIPTIONS } from './emotions';
+import { EMOTIONS_HIERARCHY, EMOTIONS_DESCRIPTIONS } from './emotions';
+
+const buildEmotionsHierarchyString = (): string => {
+  let result = '';
+  for (const root of Object.keys(EMOTIONS_HIERARCHY)) {
+    result += `${root}:\n`;
+    const subCategories = EMOTIONS_HIERARCHY[root];
+    for (const sub of Object.keys(subCategories)) {
+      const leafs = subCategories[sub];
+      if (leafs && leafs.length > 0) {
+        result += `  - ${sub}: ${leafs.join(', ')}\n`;
+      } else {
+        result += `  - ${sub}\n`;
+      }
+    }
+  }
+  return result;
+};
+
+const EMOTIONS_HIERARCHY_STR = buildEmotionsHierarchyString();
 
 export interface AICategorization {
   title: string;
@@ -53,12 +72,11 @@ export const extractMemoryData = async (
   const apiKey = await getConfig('OPENAI_API_KEY');
   if (!apiKey) throw new Error('API Key no configurada. Ve al Panel Admin para ingresarla.');
 
-  const allowedEmotions = Object.keys(EMOTIONS_DESCRIPTIONS).join(', ');
-
   const systemPrompt = `Extract metadata from a personal memory into JSON.
 
 KNOWN: [${existingEntitiesContext}]
-ALLOWED_EMOTIONS: [${allowedEmotions}]
+EMOTIONS_HIERARCHY:
+${EMOTIONS_HIERARCHY_STR}
 CONTEXT_TIME: [${timeContext}]
 CONTEXT_LOCATION: [${spaceContext}]
 
@@ -67,7 +85,12 @@ OUTPUT:
   CRITICAL: Do not assume, guess, or invent a specific year, month, or day if there is no explicit certainty in the text. If the reference is vague, relative (e.g., "luego", "más tarde", "ese día"), or context-dependent, use the CONTEXT_TIME provided to infer the date details if appropriate. If no certainty, use "fuzzy:TEXT" or map to a KNOWN stage under entities.
 - entities: Extract all referenced PERSON, LOCATION, EVENT, OBJECT, TIME, EMOTION.
   RULES FOR ENTITIES:
-  * EMOTION: Analyze the text and infer the user's emotional state. Extract one or more emotions strictly using ONLY the exact labels from ALLOWED_EMOTIONS.
+  * EMOTION: Analyze the text and infer the user's emotional state. If there is ANY emotional undertone, assign one or more emotions from the EMOTIONS_HIERARCHY. Do not ignore subtle cues, but do not force an emotion if the text is completely neutral or factual.
+    Choose the appropriate level of specificity from the hierarchy tree:
+    - Specific Leaf level (e.g., 'Bromista', 'Jueguetón', 'Furia'): Assign ONLY if there is clear, concrete evidence in the text.
+    - Sub-emotion level (e.g., 'Optimismo', 'Locura'): Assign if the feeling is clear but lacks the concrete leaf-level nuances.
+    - Root level (e.g., 'Alegría', 'Ira'): Assign if you only have general indications of the positive/negative tone but cannot specify further.
+    Each extracted emotion name must match EXACTLY the spelling of a label in the hierarchy.
   * LOCATION: You must extract EXACTLY ONE LOCATION entity — the MOST SPECIFIC physical place where the core events of this fragment happened.
     - SPECIFICITY HIERARCHY (from most to least specific): room/hall/space inside a building > building/establishment/landmark/venue > park/plaza/neighborhood > city/town/village > state/region/department > country. ALWAYS choose the HIGHEST specificity level mentioned in the text.
     - If the text mentions a specific building, landmark, venue, park, or any named physical space AND ALSO mentions the city/state/country that contains it, you MUST extract the specific place as the LOCATION and put the city/state/country in 'parent_name'. The territory is NEVER the LOCATION when a more specific place inside it is mentioned.
