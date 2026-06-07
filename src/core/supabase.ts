@@ -138,7 +138,12 @@ export const uploadAvatar = async (userId: string, localUri: string, base64Data?
     .from('user_assets')
     .getPublicUrl(filePath);
 
-  console.log('[Avatar Upload] Subida exitosa. Public URL:', publicUrl);
-  return publicUrl;
+  // Añadir un parámetro de versión para romper la caché estricta de React Native Image y Supabase CDN.
+  // Esto asegura que, aunque el archivo en Storage se sobrescriba con el mismo nombre, 
+  // la URL resultante sea "nueva" y la app cargue la imagen actualizada inmediatamente.
+  const versionedUrl = `${publicUrl}?v=${Date.now()}`;
+
+  console.log('[Avatar Upload] Subida exitosa. Public URL:', versionedUrl);
+  return versionedUrl;
 };
 
