@@ -23,10 +23,10 @@ const EMOTIONS_HIERARCHY_STR = buildEmotionsHierarchyString();
 
 export interface AICategorization {
   title: string;
-  sentiment: number;
   time_markers: string[];
   entities: { name: string; type: 'PERSON' | 'LOCATION' | 'EVENT' | 'OBJECT' | 'TIME' | 'EMOTION'; parent_name?: string }[];
   ambiguities: string[];
+  emotion_reason: string;
 }
 
 export const transcribeAudio = async (audioUri: string): Promise<string> => {
@@ -103,10 +103,10 @@ OUTPUT:
   * FOCUS & RELEVANCE: Only extract entities that are active parts of the memory being described. Do NOT extract entities mentioned purely as narrative connectors, passive comparisons, or references to other past/future memories.
   * GENERAL: If a reference conceptually matches a KNOWN entity, return the KNOWN name. Do not inject unreferenced KNOWN entities.
 - parent_name: For the LOCATION entity, set parent_name to the containing territory (city/state/country). If uncertain, add "ENTITY_AMBIGUOUS" to ambiguities.
-- sentiment: Float from -1.0 to 1.0.
+- emotion_reason: A string explaining why you chose those specific emotions, or if you assigned NONE, explain exactly why no emotion was detected in the text. Keep it concise.
 - title: Max 5 words.
 
-{"title":"","sentiment":0,"time_markers":[],"entities":[{"name":"","type":"","parent_name":null}],"ambiguities":[]}
+{"title":"","time_markers":[],"entities":[{"name":"","type":"","parent_name":null}],"ambiguities":[],"emotion_reason":""}
   `.trim();
 
   try {

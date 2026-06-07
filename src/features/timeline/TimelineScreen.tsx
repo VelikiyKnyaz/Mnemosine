@@ -180,8 +180,7 @@ const MemoryCardItem = ({ item, onEdit, expanded, onToggleExpand, styles }: any)
       <View style={styles.cardFooter}>
         {item.audio_uri ? <Text style={styles.audioHint}>🎤 Audio</Text> : <View />}
         <Text style={styles.statusHint}>
-          {item.sync_status === 'PROCESSED_LOCAL' ? '✨ IA' : '⏳ Procesando'} 
-          {item.sentiment_score !== null && ` • ${(item.sentiment_score > 0 ? '+' : '')}${item.sentiment_score}`}
+          {item.sync_status === 'PROCESSED_LOCAL' ? '✨ IA' : '⏳ Procesando'}
         </Text>
       </View>
     </TouchableOpacity>

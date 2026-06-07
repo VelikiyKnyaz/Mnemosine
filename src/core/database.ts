@@ -73,6 +73,7 @@ export const initDatabase = async () => {
       timestamp_inferred INTEGER,
       sync_status TEXT DEFAULT 'DRAFT',
       sentiment_score REAL,
+      emotion_reason TEXT,
       time_context TEXT,
       space_context TEXT,
       created_at INTEGER DEFAULT (cast(strftime('%s','now') as int))
@@ -139,7 +140,8 @@ export const initDatabase = async () => {
     );`,
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_unique ON entity_aliases(alias);',
     'ALTER TABLE memories ADD COLUMN time_context TEXT;',
-    'ALTER TABLE memories ADD COLUMN space_context TEXT;'
+    'ALTER TABLE memories ADD COLUMN space_context TEXT;',
+    'ALTER TABLE memories ADD COLUMN emotion_reason TEXT;'
   ];
 
   for (const query of migrations) {
