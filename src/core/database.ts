@@ -142,7 +142,17 @@ export const initDatabase = async () => {
     'ALTER TABLE memories ADD COLUMN time_context TEXT;',
     'ALTER TABLE memories ADD COLUMN space_context TEXT;',
     'ALTER TABLE memories ADD COLUMN emotion_reason TEXT;',
-    'ALTER TABLE memories ADD COLUMN title TEXT;'
+    'ALTER TABLE memories ADD COLUMN title TEXT;',
+    'ALTER TABLE memories ADD COLUMN author_id TEXT;',
+    'ALTER TABLE memories ADD COLUMN author_username TEXT;',
+    'ALTER TABLE memories ADD COLUMN author_fullname TEXT;',
+    `CREATE TABLE IF NOT EXISTS shared_memories_log (
+      memory_id TEXT NOT NULL,
+      friend_user_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER DEFAULT (cast(strftime('%s','now') as int)),
+      PRIMARY KEY (memory_id, friend_user_id)
+    );`
   ];
 
   for (const query of migrations) {

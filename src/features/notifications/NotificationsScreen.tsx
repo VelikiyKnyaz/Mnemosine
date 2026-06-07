@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, FlatList, Alert, Image, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, FlatList, Alert, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Appbar, Card, Text, Button, IconButton } from 'react-native-paper';
 import { supabase } from '../../core/supabase';
 import { useAuthStore } from '../../core/store';
 import { useIsFocused } from '@react-navigation/native';
-import { syncConnections } from '../../core/socialSync';
+import { syncConnections, fetchPendingSharedMemories, acceptSharedMemory, rejectSharedMemory } from '../../core/socialSync';
 
 interface ConnectionRequest {
   id: string;
@@ -21,7 +21,8 @@ interface ConnectionRequest {
 }
 
 export default function NotificationsScreen() {
-  const [requests, setRequests] = useState<ConnectionRequest[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [actionId, setActionId] = useState<string | null>(null);
 
@@ -33,17 +34,29 @@ export default function NotificationsScreen() {
     if (!myId) return;
     setLoading(true);
     try {
-      const { data: conns, error: connsError } = await supabase
-        .from('connections')
-        .select('*')
-        .eq('receiver_id', myId)
-        .eq('status', 'PENDING');
+      const [connsRes, sharedRes] = await Promise.all([
+        supabase
+          .from('connections')
+          .select('*')
+          .eq('receiver_id', myId)
+          .eq('status', 'PENDING'),
+        supabase
+          .from('shared_memories')
+          .select('*')
+          .eq('receiver_id', myId)
+          .eq('status', 'PENDING')
+      ]);
 
-      if (connsError) {
-        console.warn('Error loading connections:', connsError);
-      } else if (conns && conns.length > 0) {
-        const senderIds = conns.map(c => c.sender_id);
-        const { data: profiles, error: profilesError } = await supabase
+      const conns = connsRes.data || [];
+      const shared = sharedRes.data || [];
+
+      const connSenderIds = conns.map((c: any) => c.sender_id);
+      const sharedSenderIds = shared.map((s: any) => s.sender_id);
+      const senderIds = Array.from(new Set([...connSenderIds, ...sharedSenderIds]));
+
+      let profiles: any[] = [];
+      if (senderIds.length > 0) {
+        const { data: profs, error: profilesError } = await supabase
           .from('profiles')
           .select('id, username, full_name, avatar_url')
           .in('id', senderIds);
@@ -51,23 +64,47 @@ export default function NotificationsScreen() {
         if (profilesError) {
           console.warn('Error loading profiles:', profilesError);
         } else {
-          const formatted = conns.map(conn => {
-            const profile = profiles.find(p => p.id === conn.sender_id);
-            return {
-              ...conn,
-              sender: profile || {
-                id: conn.sender_id,
-                username: 'usuario',
-                full_name: 'Usuario de Mnemósine',
-                avatar_url: '',
-              }
-            };
-          });
-          setRequests(formatted);
+          profiles = profs || [];
         }
-      } else {
-        setRequests([]);
       }
+
+      const formattedConns = conns.map((conn: any) => {
+        const profile = profiles.find(p => p.id === conn.sender_id);
+        return {
+          id: conn.id,
+          type: 'CONNECTION_REQUEST',
+          created_at: conn.created_at,
+          sender: profile || {
+            id: conn.sender_id,
+            username: 'usuario',
+            full_name: 'Usuario de Mnemósine',
+            avatar_url: '',
+          },
+          raw: conn
+        };
+      });
+
+      const formattedShared = shared.map((sm: any) => {
+        const profile = profiles.find(p => p.id === sm.sender_id);
+        return {
+          id: sm.id,
+          type: 'SHARED_MEMORY',
+          created_at: sm.created_at,
+          sender: profile || {
+            id: sm.sender_id,
+            username: 'usuario',
+            full_name: 'Usuario de Mnemósine',
+            avatar_url: '',
+          },
+          raw: sm
+        };
+      });
+
+      const allNotifications = [...formattedConns, ...formattedShared].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+
+      setNotifications(allNotifications);
     } catch (e) {
       console.warn('Network request failed loading notifications:', e);
     } finally {
@@ -159,7 +196,55 @@ export default function NotificationsScreen() {
     );
   };
 
-  const renderItem = ({ item }: { item: ConnectionRequest }) => {
+  const handleAcceptSharedMemory = async (item: any) => {
+    setActionId(item.id);
+    try {
+      const success = await acceptSharedMemory(item.raw, item.sender);
+      if (success) {
+        Alert.alert('Añadido', 'El recuerdo ha sido añadido a tu colección.');
+        fetchRequests();
+      } else {
+        Alert.alert('Error', 'No se pudo añadir el recuerdo.');
+      }
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'Hubo un problema al aceptar el recuerdo.');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleRejectSharedMemory = async (item: any) => {
+    setActionId(item.id);
+    try {
+      const success = await rejectSharedMemory(item.id);
+      if (success) {
+        Alert.alert('Descartado', 'El recuerdo ha sido descartado.');
+        fetchRequests();
+      } else {
+        Alert.alert('Error', 'No se pudo descartar el recuerdo.');
+      }
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'Hubo un problema al descartar el recuerdo.');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const toggleExpand = (id: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const renderConnectionRequestNotification = (item: any) => {
     const isBusy = actionId === item.id;
     const timeText = new Date(item.created_at).toLocaleDateString('es-ES', {
       day: 'numeric',
@@ -191,7 +276,7 @@ export default function NotificationsScreen() {
           <View style={styles.actionRow}>
             <Button
               mode="contained"
-              onPress={() => handleAccept(item)}
+              onPress={() => handleAccept(item.raw)}
               loading={isBusy}
               disabled={isBusy}
               style={styles.acceptBtn}
@@ -202,7 +287,7 @@ export default function NotificationsScreen() {
             </Button>
             <Button
               mode="outlined"
-              onPress={() => handleReject(item)}
+              onPress={() => handleReject(item.raw)}
               disabled={isBusy}
               style={styles.rejectBtn}
               textColor="#d32f2f"
@@ -214,7 +299,7 @@ export default function NotificationsScreen() {
               icon="account-cancel-outline"
               iconColor="#d32f2f"
               size={20}
-              onPress={() => handleBlock(item)}
+              onPress={() => handleBlock(item.raw)}
               disabled={isBusy}
               style={styles.blockBtn}
             />
@@ -224,27 +309,119 @@ export default function NotificationsScreen() {
     );
   };
 
+  const renderSharedMemoryNotification = (item: any) => {
+    const isBusy = actionId === item.id;
+    const isExpanded = expandedIds.has(item.id);
+    const timeText = new Date(item.created_at).toLocaleDateString('es-ES', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const entitiesList = Array.isArray(item.raw.entities) ? item.raw.entities : [];
+
+    return (
+      <Card style={styles.card} mode="flat">
+        <TouchableOpacity activeOpacity={0.8} onPress={() => toggleExpand(item.id)}>
+          <Card.Content style={styles.cardContent}>
+            <Image
+              source={{
+                uri: item.sender.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder',
+              }}
+              style={styles.avatar}
+            />
+            <View style={styles.textContainer}>
+              <Text style={[styles.title, { color: '#2e7d32' }]}>
+                Mención en Recuerdo
+              </Text>
+              <Text style={styles.message}>
+                <Text style={{ fontWeight: 'bold' }}>{item.sender.full_name}</Text> (@{item.sender.username}) te ha mencionado en un recuerdo: "{item.raw.title || 'Recuerdo'}".
+              </Text>
+              <Text style={styles.time}>{timeText}</Text>
+              {!isExpanded && (
+                <Text style={{ fontSize: 11, color: '#6200ee', marginTop: 4, fontWeight: 'bold' }}>
+                  Presiona para leer contenido
+                </Text>
+              )}
+            </View>
+          </Card.Content>
+        </TouchableOpacity>
+
+        {isExpanded && (
+          <Card.Content style={styles.expandedContent}>
+            <View style={styles.divider} />
+            <Text style={styles.sharedTitleText}>{item.raw.title || 'Recuerdo'}</Text>
+            <Text style={styles.sharedBodyText}>{item.raw.raw_text}</Text>
+            {entitiesList.length > 0 && (
+              <View style={styles.tagsContainer}>
+                {entitiesList.map((ent: any, idx: number) => (
+                  <Text key={idx} style={styles.tagText}>
+                    #{ent.name}
+                  </Text>
+                ))}
+              </View>
+            )}
+          </Card.Content>
+        )}
+
+        <Card.Actions style={styles.actions}>
+          <View style={styles.actionRow}>
+            <Button
+              mode="contained"
+              onPress={() => handleAcceptSharedMemory(item)}
+              loading={isBusy}
+              disabled={isBusy}
+              style={styles.acceptBtn}
+              buttonColor="#2e7d32"
+              labelStyle={styles.btnLabel}
+            >
+              Añadir
+            </Button>
+            <Button
+              mode="outlined"
+              onPress={() => handleRejectSharedMemory(item)}
+              disabled={isBusy}
+              style={styles.rejectBtn}
+              textColor="#d32f2f"
+              labelStyle={styles.btnLabel}
+            >
+              Descartar
+            </Button>
+          </View>
+        </Card.Actions>
+      </Card>
+    );
+  };
+
+  const renderItem = ({ item }: { item: any }) => {
+    if (item.type === 'SHARED_MEMORY') {
+      return renderSharedMemoryNotification(item);
+    }
+    return renderConnectionRequestNotification(item);
+  };
+
   return (
     <View style={styles.container}>
       <Appbar.Header style={styles.appbar}>
         <Appbar.Content title="Notificaciones" titleStyle={styles.headerTitle} />
       </Appbar.Header>
 
-      {loading && requests.length === 0 ? (
+      {loading && notifications.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#6200ee" />
         </View>
-      ) : requests.length === 0 ? (
+      ) : notifications.length === 0 ? (
         <View style={styles.emptyContainer}>
           <IconButton icon="bell-off-outline" size={64} iconColor="#aaa" />
           <Text variant="titleMedium" style={styles.emptyTitle}>Todo al día</Text>
           <Text variant="bodyMedium" style={styles.emptySubtitle}>
-            No tienes solicitudes de conexión pendientes por el momento.
+            No tienes notificaciones pendientes por el momento.
           </Text>
         </View>
       ) : (
         <FlatList
-          data={requests}
+          data={notifications}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
@@ -362,5 +539,41 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#868e96',
     lineHeight: 20,
+  },
+  expandedContent: {
+    paddingVertical: 4,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#f1f3f5',
+    marginVertical: 8,
+  },
+  sharedTitleText: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#212529',
+    marginBottom: 6,
+  },
+  sharedBodyText: {
+    fontSize: 14,
+    color: '#495057',
+    lineHeight: 20,
+    fontStyle: 'italic',
+    marginBottom: 12,
+  },
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  tagText: {
+    fontSize: 11,
+    color: '#2e7d32',
+    backgroundColor: '#e8f5e9',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
 });

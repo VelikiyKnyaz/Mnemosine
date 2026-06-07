@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Modal, KeyboardAvoidingView, Platform, ScrollView, Alert, TouchableOpacity } from 'react-native';
-import { Text, TextInput, Button, IconButton, Chip } from 'react-native-paper';
+import { Text, TextInput, Button, IconButton, Chip, Checkbox } from 'react-native-paper';
 import { getDb } from '../core/database';
 import { v4 as uuidv4 } from 'uuid';
 import TimeCascadeSelector from './TimeCascadeSelector';
 import CustomTimePeriodsScreen from '../features/profile/CustomTimePeriodsScreen';
 import EmotionCascadeSelector from './EmotionCascadeSelector';
+import { shareMemoryWithFriend } from '../core/socialSync';
 
 interface MemoryEditModalProps {
   memory: any; // Requires at least { id/memory_id, raw_text }
@@ -32,6 +33,10 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
   const [customPeriodsVisible, setCustomPeriodsVisible] = useState(false);
   const [emotionSelectorVisible, setEmotionSelectorVisible] = useState(false);
 
+  // Sharing states
+  const [connectedFriends, setConnectedFriends] = useState<any[]>([]);
+  const [selectedShareUserIds, setSelectedShareUserIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     if (visible && memory) {
       setEditTitle(memory.title || '');
@@ -39,11 +44,13 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
       setAddingType(null);
       setNewTagQuery('');
       setRefiningEntity(null);
+      setSelectedShareUserIds(new Set());
       loadEntities();
     } else if (!visible) {
       setAddingType(null);
       setNewTagQuery('');
       setRefiningEntity(null);
+      setSelectedShareUserIds(new Set());
     }
   }, [visible, memory]);
 
@@ -53,13 +60,45 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     try {
       const db = await getDb();
       const associated = await db.getAllAsync<any>(
-        `SELECT e.id, e.name, e.type 
+        `SELECT e.id, e.name, e.type, e.metadata 
          FROM entities e 
          JOIN memory_entities me ON e.id = me.entity_id 
          WHERE me.memory_id = ?`,
         memId
       );
       setEntities(associated);
+
+      // Extract connected friends
+      const friends: any[] = [];
+      for (const e of associated) {
+        if (e.type === 'PERSON' && e.metadata) {
+          try {
+            const meta = JSON.parse(e.metadata);
+            if (meta.is_linked && meta.user_id) {
+              friends.push({
+                id: e.id,
+                name: e.name,
+                userId: meta.user_id,
+                username: meta.username || '',
+              });
+            }
+          } catch (_) {}
+        }
+      }
+
+      // Check which ones are already shared
+      const sharedRows = await db.getAllAsync<any>(
+        "SELECT friend_user_id FROM shared_memories_log WHERE memory_id = ?",
+        memId
+      );
+      const sharedUserIds = new Set(sharedRows.map(r => r.friend_user_id));
+
+      const processedFriends = friends.map(f => ({
+        ...f,
+        alreadyShared: sharedUserIds.has(f.userId)
+      }));
+
+      setConnectedFriends(processedFriends);
 
       const memRecord = await db.getFirstAsync("SELECT start_date, end_date FROM memories WHERE id = ?", memId) as { start_date: string | null, end_date: string | null } | null;
       if (memRecord) {
@@ -84,10 +123,34 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     try {
       const db = await getDb();
       await db.runAsync("UPDATE memories SET title = ?, raw_text = ? WHERE id = ?", editTitle.trim() || null, editText, memId);
+
+      // Perform sharing if any new friends are selected
+      if (selectedShareUserIds.size > 0) {
+        let sharedCount = 0;
+        for (const friendUserId of selectedShareUserIds) {
+          const success = await shareMemoryWithFriend(memId, friendUserId);
+          if (success) {
+            sharedCount++;
+            const friend = connectedFriends.find(f => f.userId === friendUserId);
+            if (friend) {
+              await db.runAsync(
+                "DELETE FROM inbox_tasks WHERE memory_id = ? AND entity_id = ? AND ambiguity_type = 'SHARE_PROMPT'",
+                memId,
+                friend.id
+              );
+            }
+          }
+        }
+        if (sharedCount > 0) {
+          Alert.alert('Compartido', `Recuerdo compartido con ${sharedCount} persona(s).`);
+        }
+      }
+
       onSaved();
       onClose();
     } catch (e) {
       console.error(e);
+      Alert.alert('Error', 'No se pudieron guardar los cambios.');
     }
   };
 
@@ -197,6 +260,85 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const toggleShareUser = (userId: string) => {
+    setSelectedShareUserIds(prev => {
+      const next = new Set(prev);
+      if (next.has(userId)) {
+        next.delete(userId);
+      } else {
+        next.add(userId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const unsharedFriends = connectedFriends.filter(f => !f.alreadyShared);
+    const isAllSelected = unsharedFriends.length > 0 && unsharedFriends.every(f => selectedShareUserIds.has(f.userId));
+
+    setSelectedShareUserIds(prev => {
+      const next = new Set(prev);
+      if (isAllSelected) {
+        for (const f of unsharedFriends) {
+          next.delete(f.userId);
+        }
+      } else {
+        for (const f of unsharedFriends) {
+          next.add(f.userId);
+        }
+      }
+      return next;
+    });
+  };
+
+  const renderSharingSection = () => {
+    if (connectedFriends.length === 0) return null;
+
+    const unsharedFriends = connectedFriends.filter(f => !f.alreadyShared);
+    const isAllSelected = unsharedFriends.length > 0 && unsharedFriends.every(f => selectedShareUserIds.has(f.userId));
+
+    return (
+      <View style={styles.shareSection}>
+        <Text style={styles.shareSectionTitle}>👥 Compartir con amigos mencionados</Text>
+        
+        {unsharedFriends.length > 1 && (
+          <TouchableOpacity style={styles.checkboxRow} onPress={toggleSelectAll}>
+            <Checkbox.Android
+              status={isAllSelected ? 'checked' : 'unchecked'}
+              onPress={toggleSelectAll}
+              color="#6200ee"
+            />
+            <Text style={styles.checkboxLabel}>Compartir con todos</Text>
+          </TouchableOpacity>
+        )}
+
+        {connectedFriends.map(friend => {
+          const isShared = friend.alreadyShared;
+          const isChecked = isShared || selectedShareUserIds.has(friend.userId);
+
+          return (
+            <TouchableOpacity 
+              key={friend.userId} 
+              style={styles.checkboxRow} 
+              onPress={() => !isShared && toggleShareUser(friend.userId)}
+              disabled={isShared}
+            >
+              <Checkbox.Android
+                status={isChecked ? 'checked' : 'unchecked'}
+                onPress={() => !isShared && toggleShareUser(friend.userId)}
+                disabled={isShared}
+                color="#6200ee"
+              />
+              <Text style={[styles.checkboxLabel, isShared && styles.sharedLabel]}>
+                {friend.name} (@{friend.username}){isShared ? ' (Ya compartido)' : ''}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
   };
 
   const renderSection = (title: string, type: string, icon: string, isSingle: boolean) => {
@@ -328,6 +470,8 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             {renderSection('Sentimientos', 'EMOTION', '❤️', false)}
             {renderSection('Lugar', 'LOCATION', '📍', true)}
             {renderSection('Momento/Fecha', 'TIME', '⏳', true)}
+            
+            {renderSharingSection()}
 
           </ScrollView>
 
@@ -414,14 +558,13 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
               }
 
               const existing = await db.getFirstAsync<{id: string}>("SELECT id FROM entities WHERE type = 'EMOTION' AND name = ?", emotionPath);
-              let entityId = existing?.id;
+              const entityId = (existing?.id || uuidv4()) as string;
               
-              if (!entityId) {
-                entityId = uuidv4();
+              if (!existing?.id) {
                 await db.runAsync("INSERT INTO entities (id, type, name, is_confirmed) VALUES (?, 'EMOTION', ?, 1)", entityId, emotionPath);
               }
 
-              const memId = memory.id || memory.memory_id;
+              const memId = (memory.id || memory.memory_id || '') as string;
               const pivot = await db.getFirstAsync("SELECT id FROM memory_entities WHERE memory_id = ? AND entity_id = ?", memId, entityId);
               if (!pivot) {
                 await db.runAsync("INSERT INTO memory_entities (id, memory_id, entity_id) VALUES (?, ?, ?)", uuidv4(), memId, entityId);
@@ -454,5 +597,34 @@ const styles = StyleSheet.create({
     padding: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+  },
+  shareSection: {
+    marginTop: 20,
+    marginBottom: 10,
+    padding: 14,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  shareSectionTitle: {
+    fontWeight: 'bold',
+    marginBottom: 12,
+    color: '#495057',
+    fontSize: 14,
+  },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  checkboxLabel: {
+    fontSize: 14,
+    color: '#212529',
+    marginLeft: 8,
+  },
+  sharedLabel: {
+    color: '#868e96',
+    textDecorationLine: 'line-through',
   },
 });

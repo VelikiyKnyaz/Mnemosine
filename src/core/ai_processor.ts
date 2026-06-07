@@ -491,18 +491,17 @@ export const processPendingMemories = async () => {
                 entity.name, entity.type
               ) as {id: string, latitude: number | null} | null;
 
-          let entityId = existingEntity?.id;
+          const entityId = existingEntity?.id || uuidv4();
 
-          if (!entityId) {
+          if (!existingEntity?.id) {
             // Create new entity without coordinates (LOCATION will be confirmed manually in Atlas)
-            entityId = uuidv4();
             await db.runAsync(
               "INSERT INTO entities (id, type, name, is_confirmed) VALUES (?, ?, ?, 0)",
               entityId, entity.type, entity.name
             );
           }
           
-          entityIdMap[entity.name] = entityId!;
+          entityIdMap[entity.name] = entityId;
         }
 
         for (const entity of aiData.entities) {
@@ -549,6 +548,55 @@ export const processPendingMemories = async () => {
               uuidv4(), memory.id, amb, question
             );
           }
+        }
+
+        // Detección de personas conectadas para sugerir compartir recuerdo
+        try {
+          const linkedPeople = await db.getAllAsync<any>(
+            `SELECT e.id, e.name, e.metadata 
+             FROM entities e
+             JOIN memory_entities me ON e.id = me.entity_id
+             WHERE me.memory_id = ? AND e.type = 'PERSON'`,
+            memory.id
+          );
+
+          for (const p of linkedPeople) {
+            if (p.metadata) {
+              try {
+                const meta = JSON.parse(p.metadata);
+                if (meta.is_linked && meta.user_id) {
+                  // Check if already shared
+                  const alreadyShared = await db.getFirstAsync<any>(
+                    "SELECT 1 FROM shared_memories_log WHERE memory_id = ? AND friend_user_id = ?",
+                    memory.id,
+                    meta.user_id
+                  );
+                  if (!alreadyShared) {
+                    // Check if a PENDING share task already exists
+                    const taskExists = await db.getFirstAsync<any>(
+                      "SELECT 1 FROM inbox_tasks WHERE memory_id = ? AND entity_id = ? AND ambiguity_type = 'SHARE_PROMPT' AND status = 'PENDING'",
+                      memory.id,
+                      p.id
+                    );
+                    if (!taskExists) {
+                      await db.runAsync(
+                        "INSERT INTO inbox_tasks (id, memory_id, entity_id, ambiguity_type, question) VALUES (?, ?, ?, 'SHARE_PROMPT', ?)",
+                        uuidv4(),
+                        memory.id,
+                        p.id,
+                        `¿Quieres compartir este recuerdo con ${p.name}?`
+                      );
+                      console.log(`Suggested sharing memory ${memory.id} with connected friend ${p.name} (user_id: ${meta.user_id})`);
+                    }
+                  }
+                }
+              } catch (parseErr) {
+                console.warn('Error parsing entity metadata in share check:', parseErr);
+              }
+            }
+          }
+        } catch (shareCheckErr) {
+          console.error('Error checking for shared memory suggestions:', shareCheckErr);
         }
 
         console.log(`Memory ${memory.id} processed successfully.`);

@@ -27,7 +27,7 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
     }
 
     // 2. Extract unique friend IDs
-    const friendIds = connections ? connections.map(c => 
+    const friendIds = connections ? connections.map((c: any) => 
       c.sender_id === myId ? c.receiver_id : c.sender_id
     ) : [];
 
@@ -145,3 +145,198 @@ export async function syncConnections(myId: string | undefined): Promise<void> {
     console.error('[Social Sync] Error performing sync:', err);
   }
 }
+
+/**
+ * Shares a local memory with a connected friend on Supabase.
+ */
+export async function shareMemoryWithFriend(memoryId: string, friendUserId: string): Promise<boolean> {
+  try {
+    const db = await getDb();
+    
+    // Fetch memory details
+    const mem = await db.getFirstAsync<any>(
+      "SELECT title, raw_text, fuzzy_date, start_date, end_date, time_context, space_context FROM memories WHERE id = ?",
+      memoryId
+    );
+    if (!mem) {
+      console.warn('[Social Sync] Memory not found for sharing:', memoryId);
+      return false;
+    }
+
+    // Fetch associated entities
+    const associated = await db.getAllAsync<any>(
+      `SELECT e.name, e.type, e.metadata 
+       FROM entities e 
+       JOIN memory_entities me ON e.id = me.entity_id 
+       WHERE me.memory_id = ?`,
+      memoryId
+    );
+
+    // Get current user ID
+    const { data: { session } } = await supabase.auth.getSession();
+    const myId = session?.user?.id;
+    if (!myId) {
+      console.warn('[Social Sync] User session not found for sharing');
+      return false;
+    }
+
+    // Insert to remote shared_memories
+    const { error } = await supabase
+      .from('shared_memories')
+      .insert({
+        sender_id: myId,
+        receiver_id: friendUserId,
+        memory_id: memoryId,
+        title: mem.title || '',
+        raw_text: mem.raw_text || '',
+        fuzzy_date: mem.fuzzy_date || '',
+        start_date: mem.start_date || null,
+        end_date: mem.end_date || null,
+        time_context: mem.time_context || '',
+        space_context: mem.space_context || '',
+        entities: associated,
+        status: 'PENDING'
+      });
+
+    if (error) {
+      console.error('[Social Sync] Error sharing memory on Supabase:', error);
+      return false;
+    }
+
+    // Log the share locally
+    await db.runAsync(
+      "INSERT OR REPLACE INTO shared_memories_log (memory_id, friend_user_id, status) VALUES (?, ?, 'SHARED')",
+      memoryId,
+      friendUserId
+    );
+
+    return true;
+  } catch (err) {
+    console.error('[Social Sync] Error in shareMemoryWithFriend:', err);
+    return false;
+  }
+}
+
+/**
+ * Fetches pending shared memories for the current user from Supabase.
+ */
+export async function fetchPendingSharedMemories(myId: string): Promise<any[]> {
+  try {
+    const { data, error } = await supabase
+      .from('shared_memories')
+      .select('*')
+      .eq('receiver_id', myId)
+      .eq('status', 'PENDING')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('[Social Sync] Error fetching shared memories:', error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error('[Social Sync] Error in fetchPendingSharedMemories:', err);
+    return [];
+  }
+}
+
+/**
+ * Accepts a shared memory, importing it and its entities into the local SQLite database.
+ */
+export async function acceptSharedMemory(sharedMemory: any, senderProfile: any): Promise<boolean> {
+  try {
+    const db = await getDb();
+    const localMemoryId = uuidv4();
+
+    // 1. Insert memory into SQLite
+    await db.runAsync(
+      `INSERT INTO memories (
+        id, raw_text, title, fuzzy_date, start_date, end_date, 
+        time_context, space_context, author_id, author_username, 
+        author_fullname, sync_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESSED_LOCAL')`,
+      localMemoryId,
+      sharedMemory.raw_text || '',
+      sharedMemory.title || 'Recuerdo Compartido',
+      sharedMemory.fuzzy_date || '',
+      sharedMemory.start_date || null,
+      sharedMemory.end_date || null,
+      sharedMemory.time_context || '',
+      sharedMemory.space_context || '',
+      sharedMemory.sender_id,
+      senderProfile?.username || 'usuario',
+      senderProfile?.full_name || 'Amigo de Mnemósine'
+    );
+
+    // 2. Import entities
+    const entitiesList = Array.isArray(sharedMemory.entities) ? sharedMemory.entities : [];
+    for (const ent of entitiesList) {
+      if (!ent.name || !ent.type) continue;
+      
+      // Check if entity already exists
+      const existing = await db.getFirstAsync<any>(
+        "SELECT id FROM entities WHERE name = ? AND type = ? COLLATE NOCASE",
+        ent.name, ent.type
+      );
+
+      let entityId = existing?.id;
+      if (!entityId) {
+        entityId = uuidv4();
+        const isConfirmed = ent.type === 'LOCATION' ? 0 : 1;
+        await db.runAsync(
+          "INSERT INTO entities (id, type, name, metadata, is_confirmed) VALUES (?, ?, ?, ?, ?)",
+          entityId,
+          ent.type,
+          ent.name,
+          ent.metadata ? (typeof ent.metadata === 'string' ? ent.metadata : JSON.stringify(ent.metadata)) : null,
+          isConfirmed
+        );
+      }
+
+      // Link to memory
+      await db.runAsync(
+        "INSERT INTO memory_entities (id, memory_id, entity_id, relationship_type) VALUES (?, ?, ?, 'MENTIONED')",
+        uuidv4(),
+        localMemoryId,
+        entityId
+      );
+    }
+
+    // 3. Update Supabase status to ACCEPTED
+    const { error } = await supabase
+      .from('shared_memories')
+      .update({ status: 'ACCEPTED' })
+      .eq('id', sharedMemory.id);
+
+    if (error) {
+      console.warn('[Social Sync] Error updating shared memory status on Supabase:', error);
+    }
+
+    return true;
+  } catch (err) {
+    console.error('[Social Sync] Error in acceptSharedMemory:', err);
+    return false;
+  }
+}
+
+/**
+ * Rejects a shared memory, marking it as REJECTED in Supabase.
+ */
+export async function rejectSharedMemory(sharedMemoryId: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('shared_memories')
+      .update({ status: 'REJECTED' })
+      .eq('id', sharedMemoryId);
+
+    if (error) {
+      console.warn('[Social Sync] Error rejecting shared memory:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('[Social Sync] Error in rejectSharedMemory:', err);
+    return false;
+  }
+}
+

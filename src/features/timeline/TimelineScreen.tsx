@@ -126,6 +126,10 @@ const resolveTimeMarkersWithAI = async (text: string): Promise<string[]> => {
 
 const MemoryCardItem = ({ item, onEdit, expanded, onToggleExpand, styles }: any) => {
   const [entities, setEntities] = useState<any[]>([]);
+  const session = useAuthStore((state) => state.session);
+  const myId = session?.user?.id;
+
+  const isShared = item.author_id && item.author_id !== myId;
 
   useEffect(() => {
     if (expanded) {
@@ -139,9 +143,18 @@ const MemoryCardItem = ({ item, onEdit, expanded, onToggleExpand, styles }: any)
   }, [expanded, item.id, item.memory_id]);
 
   const hasNoDate = !item.start_date && !item.end_date;
+  const cardStyle = [
+    styles.memoryCard,
+    isShared && { backgroundColor: '#f8f9ff', borderLeftColor: '#6200ee' }
+  ];
 
   return (
-    <TouchableOpacity activeOpacity={0.8} onPress={onToggleExpand} style={styles.memoryCard}>
+    <TouchableOpacity activeOpacity={0.8} onPress={onToggleExpand} style={cardStyle}>
+      {isShared && (
+        <Text style={{ fontSize: 11, color: '#6200ee', fontWeight: 'bold', marginBottom: 6 }}>
+          👥 De @{item.author_username || 'usuario'}
+        </Text>
+      )}
       <View style={styles.cardHeader}>
         <Text variant="titleMedium" style={styles.titleText}>{item.title || 'Recuerdo'}</Text>
         <View style={styles.dateContainer}>
@@ -171,9 +184,15 @@ const MemoryCardItem = ({ item, onEdit, expanded, onToggleExpand, styles }: any)
               ))}
             </View>
           )}
-          <Button mode="outlined" onPress={() => onEdit(item)} compact icon="pencil" style={{ alignSelf: 'flex-start' }}>
-            Editar Recuerdo
-          </Button>
+          {isShared ? (
+            <Text style={{ fontSize: 12, color: '#868e96', fontStyle: 'italic', marginTop: 4 }}>
+              Recuerdo compartido (sólo lectura)
+            </Text>
+          ) : (
+            <Button mode="outlined" onPress={() => onEdit(item)} compact icon="pencil" style={{ alignSelf: 'flex-start' }}>
+              Editar Recuerdo
+            </Button>
+          )}
         </View>
       )}
       

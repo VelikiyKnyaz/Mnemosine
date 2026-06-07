@@ -5,6 +5,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { getDb } from '../../core/database';
 import SmartDropdown from '../../components/SmartDropdown';
 import { useIsFocused } from '@react-navigation/native';
+import { shareMemoryWithFriend } from '../../core/socialSync';
 import 'react-native-get-random-values';
 
 const toDateStr = (d: Date) => d.toISOString().split('T')[0];
@@ -32,6 +33,7 @@ export default function InboxScreen({ navigation }: any) {
 
   // For RELATIONSHIP resolution
   const [selectedRelationship, setSelectedRelationship] = useState('');
+  const [sharingTaskId, setSharingTaskId] = useState<string | null>(null);
 
   const isFocused = useIsFocused();
 
@@ -39,7 +41,7 @@ export default function InboxScreen({ navigation }: any) {
     try {
       const db = await getDb();
       const rows = await db.getAllAsync<any>(`
-        SELECT it.*, m.raw_text
+        SELECT it.*, m.raw_text, m.title
         FROM inbox_tasks it
         LEFT JOIN memories m ON it.memory_id = m.id
         WHERE it.status = 'PENDING'
@@ -122,8 +124,46 @@ export default function InboxScreen({ navigation }: any) {
     }
   };
 
+  const handleShareTask = async (task: any) => {
+    setSharingTaskId(task.id);
+    try {
+      const db = await getDb();
+      const entity = await db.getFirstAsync<any>(
+        "SELECT metadata, name FROM entities WHERE id = ?",
+        task.entity_id
+      );
+      if (!entity) {
+        Alert.alert('Error', 'No se encontró la persona asociada.');
+        setSharingTaskId(null);
+        return;
+      }
+
+      const meta = JSON.parse(entity.metadata || '{}');
+      if (!meta.user_id) {
+        Alert.alert('Error', 'La persona no está vinculada a una cuenta.');
+        setSharingTaskId(null);
+        return;
+      }
+
+      const success = await shareMemoryWithFriend(task.memory_id, meta.user_id);
+      if (success) {
+        await db.runAsync("UPDATE inbox_tasks SET status = 'RESOLVED' WHERE id = ?", task.id);
+        Alert.alert('Compartido', `Recuerdo compartido con ${entity.name}`);
+        loadTasks();
+      } else {
+        Alert.alert('Error', 'No se pudo compartir el recuerdo. Verifica tu conexión a internet.');
+      }
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'Ocurrió un error inesperado al procesar.');
+    } finally {
+      setSharingTaskId(null);
+    }
+  };
+
   const dateTasks = tasks.filter(t => t.ambiguity_type === 'DATE_UNCLEAR');
   const relationshipTasks = tasks.filter(t => t.ambiguity_type === 'RELATIONSHIP');
+  const shareTasks = tasks.filter(t => t.ambiguity_type === 'SHARE_PROMPT');
 
   const renderDateTask = (task: any) => (
     <Card key={task.id} style={styles.card} mode="flat">
@@ -206,6 +246,39 @@ export default function InboxScreen({ navigation }: any) {
     </Card>
   );
 
+  const renderShareTask = (task: any) => {
+    const isBusy = sharingTaskId === task.id;
+    return (
+      <Card key={task.id} style={styles.card} mode="flat">
+        <Card.Content>
+          <Title style={{ fontSize: 15, fontWeight: 'bold', color: '#6200ee' }}>👥 Compartir Recuerdo</Title>
+          <Paragraph style={styles.questionText}>{task.question}</Paragraph>
+          <View style={styles.contextBox}>
+            <Text style={styles.contextLabel}>{task.title || 'Recuerdo'}</Text>
+            <Text style={styles.contextText}>"{task.raw_text}"</Text>
+          </View>
+        </Card.Content>
+        <Card.Actions style={styles.cardActions}>
+          <Button 
+            onPress={() => handleShareTask(task)} 
+            textColor="#6200ee" 
+            loading={isBusy} 
+            disabled={isBusy}
+          >
+            Compartir
+          </Button>
+          <Button 
+            textColor="#868e96" 
+            onPress={() => dismissTask(task.id)}
+            disabled={isBusy}
+          >
+            Ignorar
+          </Button>
+        </Card.Actions>
+      </Card>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <Appbar.Header style={styles.appbar}>
@@ -221,6 +294,13 @@ export default function InboxScreen({ navigation }: any) {
           </View>
         ) : (
           <View>
+            {shareTasks.length > 0 && (
+              <View style={styles.section}>
+                <Title style={styles.sectionTitle}>👥 Compartir Recuerdos</Title>
+                {shareTasks.map(renderShareTask)}
+              </View>
+            )}
+
             {dateTasks.length > 0 && (
               <View style={styles.section}>
                 <Title style={styles.sectionTitle}>📅 Fechas por Aclarar</Title>
