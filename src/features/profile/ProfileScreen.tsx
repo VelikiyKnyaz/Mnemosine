@@ -79,30 +79,43 @@ export default function ProfileScreen() {
         setLifeEvents(profile.life_events || '');
         setUsername(profile.username || '');
         setFullName(profile.full_name || '');
-        // Solo usar avatar_url si es una URL remota (https://), no file:// locales que pueden expirar
+        // 1. Obtener perfil remoto de Supabase para ver si necesita sanación
+        let remoteProfile = null;
+        try {
+          const { data } = await supabase.from('profiles').select('avatar_url').eq('id', session.user.id).maybeSingle();
+          remoteProfile = data;
+        } catch (_) {}
+
         const savedAvatar = profile.avatar_url || '';
+
+        // 2. Resolver cuál avatar usar y auto-sanar si es necesario
         if (savedAvatar.startsWith('http')) {
           setAvatarUrl(savedAvatar);
+          
+          // AUTO-SANACIÓN: Si localmente tenemos un HTTP válido pero Supabase tiene un file:// (por el bug anterior),
+          // forzamos una actualización en Supabase para arreglarlo para todos.
+          if (remoteProfile && (!remoteProfile.avatar_url || remoteProfile.avatar_url.startsWith('file://'))) {
+            console.log('[AUTO-HEAL] Corrigiendo avatar en Supabase usando la URL local válida...');
+            await supabase.from('profiles').update({ avatar_url: savedAvatar }).eq('id', session.user.id);
+          }
         } else if (savedAvatar) {
-          // Es una URI local, verificar si Supabase tiene una URL mejor
-          try {
-            const { data: remoteProfile } = await supabase
-              .from('profiles')
-              .select('avatar_url')
-              .eq('id', session.user.id)
-              .maybeSingle();
-            if (remoteProfile?.avatar_url && remoteProfile.avatar_url.startsWith('http')) {
-              setAvatarUrl(remoteProfile.avatar_url);
-              // Actualizar SQLite con la URL remota
-              await db.runAsync('UPDATE user_profile SET avatar_url = ? WHERE id = ?', remoteProfile.avatar_url, session.user.id);
-            } else {
-              setAvatarUrl(savedAvatar);
-            }
-          } catch (_) {
+          // Local es file:// o algo raro, ver si Supabase tiene uno mejor (HTTP)
+          if (remoteProfile?.avatar_url && remoteProfile.avatar_url.startsWith('http')) {
+            setAvatarUrl(remoteProfile.avatar_url);
+            // Actualizar SQLite con la URL remota buena
+            await db.runAsync('UPDATE user_profile SET avatar_url = ? WHERE id = ?', remoteProfile.avatar_url, session.user.id);
+          } else {
+            // Ambos son malos o file://, nos quedamos con el local temporalmente
             setAvatarUrl(savedAvatar);
           }
         } else {
-          setAvatarUrl(PRESET_AVATARS[0]);
+          // Ambos vacíos
+          if (remoteProfile?.avatar_url && remoteProfile.avatar_url.startsWith('http')) {
+            setAvatarUrl(remoteProfile.avatar_url);
+            await db.runAsync('UPDATE user_profile SET avatar_url = ? WHERE id = ?', remoteProfile.avatar_url, session.user.id);
+          } else {
+            setAvatarUrl(PRESET_AVATARS[0]);
+          }
         }
       } else {
         if (session?.user?.email) {
@@ -188,11 +201,14 @@ export default function ProfileScreen() {
 
       // Sincronizar con Supabase profiles (solo si tenemos URL remota)
       if (finalUrl.startsWith('http')) {
-        await supabase.from('profiles').upsert({
-          id: currentUserId,
+        const { error: syncErr } = await supabase.from('profiles').update({
           avatar_url: finalUrl,
           updated_at: new Date().toISOString(),
-        });
+        }).eq('id', currentUserId);
+        
+        if (syncErr) {
+          console.warn('[Profile] Error actualizando avatar en Supabase:', syncErr);
+        }
       }
     } catch (e) {
       console.warn('[Profile] Error sincronizando avatar:', e);
@@ -317,7 +333,20 @@ export default function ProfileScreen() {
         report += `username: ${remoteProfile.username || '(vacío)'}\n`;
         report += `full_name: ${remoteProfile.full_name || '(vacío)'}\n`;
         report += `avatar_url: ${remoteProfile.avatar_url || '(vacío)'}\n`;
-        report += `tipo: ${remoteProfile.avatar_url?.startsWith('http') ? 'REMOTA ✅' : remoteProfile.avatar_url?.startsWith('file') ? 'LOCAL file:// 🔴 ESTE ES EL BUG' : remoteProfile.avatar_url ? 'OTRO ❓' : 'VACÍO ⚠️'}\n`;
+        
+        const isRemoteBad = remoteProfile.avatar_url?.startsWith('file://');
+        report += `tipo: ${remoteProfile.avatar_url?.startsWith('http') ? 'REMOTA ✅' : isRemoteBad ? 'LOCAL file:// 🔴 ESTE ES EL BUG' : remoteProfile.avatar_url ? 'OTRO ❓' : 'VACÍO ⚠️'}\n`;
+
+        // INTENTO DE AUTO-SANACIÓN FORZADA
+        if (isRemoteBad && localProfile?.avatar_url?.startsWith('http')) {
+          report += `\n>> INTENTANDO AUTO-SANAR PERFIL REMOTO...\n`;
+          const { error: healErr } = await supabase.from('profiles').update({ avatar_url: localProfile.avatar_url }).eq('id', myId);
+          if (healErr) {
+             report += `>> FALLÓ SANACIÓN: ${JSON.stringify(healErr)}\n`;
+          } else {
+             report += `>> SANACIÓN EXITOSA! 🛠️\n`;
+          }
+        }
 
         // 2b. Si la URL es remota, probar si es accesible
         if (remoteProfile.avatar_url?.startsWith('http')) {
