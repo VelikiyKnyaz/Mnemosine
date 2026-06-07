@@ -328,6 +328,10 @@ export async function acceptSharedMemory(sharedMemory: any, senderProfile: any):
     const db = await getDb();
     const localMemoryId = uuidv4();
 
+    // Obtener la sesión del usuario activo (receptor) para poder hacer el intercambio de perspectiva
+    const { data: { session } } = await supabase.auth.getSession();
+    const myId = session?.user?.id;
+
     // 1. Insert memory into SQLite
     await db.runAsync(
       `INSERT INTO memories (
@@ -352,11 +356,37 @@ export async function acceptSharedMemory(sharedMemory: any, senderProfile: any):
     const entitiesList = Array.isArray(sharedMemory.entities) ? sharedMemory.entities : [];
     for (const ent of entitiesList) {
       if (!ent.name || !ent.type) continue;
+
+      let entName = ent.name;
+      let entMetadata = ent.metadata;
+
+      // Intercambio de perspectiva: Si la entidad representa al receptor (nosotros),
+      // la reemplazamos con los datos del emisor (nuestro amigo).
+      if (ent.type === 'PERSON' && myId) {
+        let isMe = false;
+        try {
+          const meta = typeof ent.metadata === 'string' ? JSON.parse(ent.metadata) : ent.metadata;
+          if (meta && meta.user_id === myId) {
+            isMe = true;
+          }
+        } catch (_) {}
+
+        if (isMe) {
+          entName = senderProfile?.full_name || `@${senderProfile?.username || 'usuario'}`;
+          entMetadata = {
+            user_id: sharedMemory.sender_id,
+            avatar_url: senderProfile?.avatar_url || `https://api.dicebear.com/7.x/adventurer/png?seed=${senderProfile?.username || 'usuario'}`,
+            username: senderProfile?.username || '',
+            is_linked: true,
+            connection_status: 'ACCEPTED'
+          };
+        }
+      }
       
       // Check if entity already exists
       const existing = await db.getFirstAsync<any>(
         "SELECT id FROM entities WHERE name = ? AND type = ? COLLATE NOCASE",
-        ent.name, ent.type
+        entName, ent.type
       );
 
       let entityId = existing?.id;
@@ -367,10 +397,21 @@ export async function acceptSharedMemory(sharedMemory: any, senderProfile: any):
           "INSERT INTO entities (id, type, name, metadata, is_confirmed) VALUES (?, ?, ?, ?, ?)",
           entityId,
           ent.type,
-          ent.name,
-          ent.metadata ? (typeof ent.metadata === 'string' ? ent.metadata : JSON.stringify(ent.metadata)) : null,
+          entName,
+          entMetadata ? (typeof entMetadata === 'string' ? entMetadata : JSON.stringify(entMetadata)) : null,
           isConfirmed
         );
+      } else {
+        // Si ya existe la entidad, pero ahora estamos asociando al sender,
+        // nos aseguramos de actualizar sus metadatos de vinculación locales.
+        if (ent.type === 'PERSON' && entMetadata) {
+          const metaStr = typeof entMetadata === 'string' ? entMetadata : JSON.stringify(entMetadata);
+          await db.runAsync(
+            "UPDATE entities SET metadata = ? WHERE id = ?",
+            metaStr,
+            entityId
+          );
+        }
       }
 
       // Link to memory
