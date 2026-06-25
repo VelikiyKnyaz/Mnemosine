@@ -369,7 +369,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     while (queue.length > 0) {
       const currId = queue.shift()!;
       const currGen = generations[currId];
-      const p = people.find(x => x.id === currId);
+      const p = findPerson(currId);
       if (!p) continue;
 
       if (p.father_id && generations[p.father_id] === undefined) {
@@ -412,192 +412,184 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     });
 
-    // 1. Place Yo at center
-    coords[myId] = { x: centerX, y: centerY, label: 'Yo' };
+    // Initial X positions based on relations
+    const initialX: { [id: string]: number } = {};
+    initialX[myId] = centerX;
 
-    // 2. Place Yo's partner if exists
-    const yoPartnerId = partnersMap[myId];
-    if (yoPartnerId) {
-      coords[yoPartnerId] = { x: centerX + 115, y: centerY, label: getRelLabel(findPerson(yoPartnerId), 'Pareja') };
-    }
+    const placedX = new Set<string>();
+    placedX.add(myId);
+    const layoutQueue = [myId];
 
     const yoNode = findPerson(myId);
     const fatherId = yoNode?.father_id;
     const motherId = yoNode?.mother_id;
 
-    // 3. Place Yo's parents (Gen -1)
-    if (fatherId) {
-      coords[fatherId] = { x: centerX - 120, y: centerY - 140, label: 'Padre' };
-    }
-    if (motherId) {
-      coords[motherId] = { x: centerX + 120, y: centerY - 140, label: 'Madre' };
-    }
+    while (layoutQueue.length > 0) {
+      const currId = layoutQueue.shift()!;
+      const currX = initialX[currId];
+      const p = findPerson(currId);
+      if (!p) continue;
 
-    // 4. Place Yo's grandparents (Gen -2)
-    if (fatherId) {
-      const fatherNode = findPerson(fatherId);
-      if (fatherNode?.father_id) {
-        coords[fatherNode.father_id] = { x: centerX - 180, y: centerY - 280, label: 'Abuelo' };
-      }
-      if (fatherNode?.mother_id) {
-        coords[fatherNode.mother_id] = { x: centerX - 60, y: centerY - 280, label: 'Abuela' };
-      }
-    }
-    if (motherId) {
-      const motherNode = findPerson(motherId);
-      if (motherNode?.father_id) {
-        coords[motherNode.father_id] = { x: centerX + 60, y: centerY - 280, label: 'Abuelo' };
-      }
-      if (motherNode?.mother_id) {
-        coords[motherNode.mother_id] = { x: centerX + 180, y: centerY - 280, label: 'Abuela' };
-      }
-    }
+      const gen = generations[currId];
+      // spacing gets narrower higher up to fit multiple branches nicely
+      const parentSpacing = gen === 0 ? 180 : gen === -1 ? 120 : gen === -2 ? 80 : 60;
 
-    // 5. Place Yo's great-grandparents (Gen -3)
-    if (fatherId) {
-      const fatherNode = findPerson(fatherId);
-      if (fatherNode?.father_id) {
-        const gf = findPerson(fatherNode.father_id);
-        if (gf?.father_id) {
-          coords[gf.father_id] = { x: centerX - 210, y: centerY - 420, label: 'Bisabuelo' };
-        }
-        if (gf?.mother_id) {
-          coords[gf.mother_id] = { x: centerX - 150, y: centerY - 420, label: 'Bisabuela' };
-        }
+      // Position partner next to spouse
+      const partnerId = partnersMap[currId];
+      if (partnerId && !placedX.has(partnerId)) {
+        initialX[partnerId] = currX + 180;
+        placedX.add(partnerId);
+        layoutQueue.push(partnerId);
       }
-      if (fatherNode?.mother_id) {
-        const gm = findPerson(fatherNode.mother_id);
-        if (gm?.father_id) {
-          coords[gm.father_id] = { x: centerX - 90, y: centerY - 420, label: 'Bisabuelo' };
-        }
-        if (gm?.mother_id) {
-          coords[gm.mother_id] = { x: centerX - 30, y: centerY - 420, label: 'Bisabuela' };
-        }
+
+      // Position parents
+      if (p.father_id && !placedX.has(p.father_id)) {
+        initialX[p.father_id] = currX - parentSpacing;
+        placedX.add(p.father_id);
+        layoutQueue.push(p.father_id);
       }
-    }
-    if (motherId) {
-      const motherNode = findPerson(motherId);
-      if (motherNode?.father_id) {
-        const gf = findPerson(motherNode.father_id);
-        if (gf?.father_id) {
-          coords[gf.father_id] = { x: centerX + 30, y: centerY - 420, label: 'Bisabuelo' };
-        }
-        if (gf?.mother_id) {
-          coords[gf.mother_id] = { x: centerX + 90, y: centerY - 420, label: 'Bisabuela' };
-        }
+      if (p.mother_id && !placedX.has(p.mother_id)) {
+        initialX[p.mother_id] = currX + parentSpacing;
+        placedX.add(p.mother_id);
+        layoutQueue.push(p.mother_id);
       }
-      if (motherNode?.mother_id) {
-        const gm = findPerson(motherNode.mother_id);
-        if (gm?.father_id) {
-          coords[gm.father_id] = { x: centerX + 150, y: centerY - 420, label: 'Bisabuelo' };
-        }
-        if (gm?.mother_id) {
-          coords[gm.mother_id] = { x: centerX + 210, y: centerY - 420, label: 'Bisabuela' };
-        }
+
+      // Position children
+      const children = people.filter(x => (x.father_id === currId || x.mother_id === currId) && !placedX.has(x.id));
+      if (children.length > 0) {
+        const hasPartner = partnerId && initialX[partnerId] !== undefined;
+        const centerAnchor = hasPartner ? (currX + initialX[partnerId]) / 2 : currX;
+
+        const spacing = 180;
+        const totalW = (children.length - 1) * spacing;
+        const startX = centerAnchor - totalW / 2;
+        children.forEach((child, idx) => {
+          initialX[child.id] = startX + idx * spacing;
+          placedX.add(child.id);
+          layoutQueue.push(child.id);
+        });
       }
     }
 
-    // 6. Place Yo's siblings
-    const siblingsList = people.filter(p =>
-      p.id !== myId &&
-      p.id !== yoPartnerId &&
-      ((fatherId && p.father_id === fatherId) || (motherId && p.mother_id === motherId))
-    );
-    siblingsList.forEach((sib, index) => {
-      const sibX = centerX - 120 - (index + 1) * 120;
-      coords[sib.id] = { x: sibX, y: centerY, label: 'Hermano/a' };
-    });
-
-    // 7. Place Yo's children & grandchildren
-    const childrenList = people.filter(p => (p.father_id === myId || p.mother_id === myId) && p.id !== myId && p.id !== yoPartnerId);
-    childrenList.forEach((child, index) => {
-      const spacing = 140;
-      const totalWidth = (childrenList.length - 1) * spacing;
-      const childCenterX = yoPartnerId ? centerX + 57.5 : centerX;
-      const startX = childCenterX - totalWidth / 2;
-      const childX = startX + index * spacing;
-      coords[child.id] = { x: childX, y: centerY + 140, label: 'Hijo/a' };
-
-      const grandchildrenList = people.filter(p => p.father_id === child.id || p.mother_id === child.id);
-      grandchildrenList.forEach((gc, gcIdx) => {
-        const gcSpacing = 120;
-        const gcTotalW = (grandchildrenList.length - 1) * gcSpacing;
-        const gcStartX = childX - gcTotalW / 2;
-        coords[gc.id] = { x: gcStartX + gcIdx * gcSpacing, y: centerY + 280, label: 'Nieto/a' };
-      });
-    });
-
-    // 8. Place partners of already placed nodes
+    // Place any remaining floating nodes
     people.forEach(p => {
-      if (coords[p.id]) return;
-      const partnerId = partnersMap[p.id];
-      if (partnerId && coords[partnerId]) {
-        const spousePos = coords[partnerId];
-        const gen = generations[p.id] ?? 0;
-        const posY = centerY + gen * 140;
-        coords[p.id] = { x: spousePos.x + 115, y: posY, label: getRelLabel(p, 'Pareja') };
+      if (!placedX.has(p.id)) {
+        // Place them based on generation, spread around center
+        initialX[p.id] = centerX - 300 + Math.random() * 600;
+        placedX.add(p.id);
       }
     });
 
-    // 9. Place parents of already placed nodes (upward link)
-    let newlyPlaced = true;
-    while (newlyPlaced) {
-      newlyPlaced = false;
+    // Save target/preferred positions to center around them
+    const preferredX = { ...initialX };
+
+    // Spacing Constraint Solver (25 iterations of Relaxation)
+    const minDistance = 220;
+    const coupleDistance = 160;
+    for (let iter = 0; iter < 25; iter++) {
+      const genGroups: { [gen: number]: string[] } = {};
       people.forEach(p => {
-        if (coords[p.id]) return;
-        const childNode = people.find(c => c.father_id === p.id || c.mother_id === p.id);
-        if (childNode && coords[childNode.id]) {
-          const childPos = coords[childNode.id];
-          const gen = generations[p.id] ?? -1;
-          const posY = centerY + gen * 140;
-          const parentSpacing = gen === -1 ? 60 : gen === -2 ? 30 : gen === -3 ? 15 : 40;
-          const isMother = childNode.mother_id === p.id;
-          const parentX = isMother ? childPos.x + parentSpacing : childPos.x - parentSpacing;
-          coords[p.id] = { x: parentX, y: posY, label: getRelLabel(p, isMother ? 'Madre' : 'Padre') };
-          newlyPlaced = true;
+        const gen = generations[p.id] ?? 0;
+        if (!genGroups[gen]) genGroups[gen] = [];
+        genGroups[gen].push(p.id);
+      });
+
+      Object.keys(genGroups).forEach(genStr => {
+        const gen = parseInt(genStr);
+        const ids = genGroups[gen];
+        if (ids.length <= 1) return;
+
+        ids.sort((a, b) => initialX[a] - initialX[b]);
+
+        // Left-to-right push pass
+        for (let i = 0; i < ids.length - 1; i++) {
+          const a = ids[i];
+          const b = ids[i + 1];
+          const isCouple = partnersMap[a] === b || partnersMap[b] === a;
+          const reqDist = isCouple ? coupleDistance : minDistance;
+          if (initialX[b] < initialX[a] + reqDist) {
+            initialX[b] = initialX[a] + reqDist;
+          }
         }
+
+        // Right-to-left push pass
+        for (let i = ids.length - 1; i > 0; i--) {
+          const a = ids[i];
+          const b = ids[i - 1];
+          const isCouple = partnersMap[a] === b || partnersMap[b] === a;
+          const reqDist = isCouple ? coupleDistance : minDistance;
+          if (initialX[b] > initialX[a] - reqDist) {
+            initialX[b] = initialX[a] - reqDist;
+          }
+        }
+
+        // Center nodes in this generation around the target average position
+        let sumCurrentX = 0;
+        let sumPreferredX = 0;
+        ids.forEach(id => {
+          sumCurrentX += initialX[id];
+          sumPreferredX += preferredX[id] ?? centerX;
+        });
+        const offset = (sumPreferredX - sumCurrentX) / ids.length;
+        ids.forEach(id => {
+          initialX[id] += offset;
+        });
       });
     }
 
-    // 10. Place remaining nodes (floating / other) based on their generation
-    const remainingPeople = people.filter(p => !coords[p.id]);
-    remainingPeople.forEach((p, idx) => {
+    // Assign final coordinates
+    people.forEach(p => {
       const gen = generations[p.id] ?? 0;
-      const posY = centerY + gen * 140;
-      const isLeft = idx % 2 === 0;
-      const columnX = isLeft ? 120 + Math.floor(idx / 2) * 50 : CANVAS_WIDTH - 120 - Math.floor(idx / 2) * 50;
-      coords[p.id] = { x: columnX, y: posY, label: getRelLabel(p, 'Contacto') };
-    });
-
-    // 11. Collision Resolution
-    const occupied = new Set<string>();
-    const key = (x: number, y: number) => `${Math.round(x)},${Math.round(y)}`;
-
-    people.forEach(p => {
-      if (coords[p.id]) {
-        const pos = coords[p.id];
-        if (p.id === myId || p.id === fatherId || p.id === motherId) {
-          occupied.add(key(pos.x, pos.y));
-        }
-      }
-    });
-
-    people.forEach(p => {
-      if (!coords[p.id]) return;
-      if (p.id === myId || p.id === fatherId || p.id === motherId) return;
-
-      const pos = coords[p.id];
-      let testX = pos.x;
-      const testY = pos.y;
-      while (occupied.has(key(testX, testY))) {
-        testX += 120;
-      }
-      pos.x = testX;
-      occupied.add(key(testX, testY));
+      const x = initialX[p.id];
+      const y = centerY + gen * 140;
+      coords[p.id] = { x, y, label: getRelLabel(p, 'Contacto') };
     });
 
     return coords;
   }, [people, myId]);
+
+  const findFreePosition = (targetX: number, targetY: number, preferDir: 'left' | 'right' | 'down' | 'up', focusedId: string) => {
+    let testX = targetX;
+    let testY = targetY;
+
+    const isCollision = (tx: number, ty: number) => {
+      // Check collision with all people nodes
+      return people.some(node => {
+        if (node.id === focusedId) return false;
+        const nPos = nodePositions[node.id];
+        if (!nPos) return false;
+        const dx = Math.abs(nPos.x - tx);
+        const dy = Math.abs(nPos.y - ty);
+        return dx < 95 && dy < 110;
+      });
+    };
+
+    let step = 0;
+    const maxSteps = 15;
+    while (isCollision(testX, testY) && step < maxSteps) {
+      step++;
+      if (preferDir === 'left') {
+        testX -= 70;
+      } else if (preferDir === 'right') {
+        testX += 70;
+      } else if (preferDir === 'down') {
+        testY += 70;
+      } else if (preferDir === 'up') {
+        testY -= 70;
+      }
+      
+      if (step === 6) {
+        if (preferDir === 'left' || preferDir === 'right') {
+          testY -= 80;
+          testX = targetX;
+        } else {
+          testX += 80;
+          testY = targetY;
+        }
+      }
+    }
+    return { x: testX, y: testY };
+  };
 
   // Orthogonal connector line builder
   const renderOrthogonalLine = (x1: number, y1: number, x2: number, y2: number, key: string, isDashed = false) => {
@@ -799,18 +791,22 @@ export default function FamilyTreeScreen({ navigation }: any) {
       const pos = nodePositions[focusedNodeId];
       if (p && pos) {
         if (!p.father_id) {
-          lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x - 80, pos.y - 120, `line-add-father-${p.id}`, true));
+          const freePos = findFreePosition(pos.x - 80, pos.y - 120, 'left', focusedNodeId);
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-father-${p.id}`, true));
         }
         if (!p.mother_id) {
-          lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x + 80, pos.y - 120, `line-add-mother-${p.id}`, true));
+          const freePos = findFreePosition(pos.x + 80, pos.y - 120, 'right', focusedNodeId);
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-mother-${p.id}`, true));
         }
         const partnerId = partnersMap[p.id];
         if (!partnerId) {
-          lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x + 115, pos.y, `line-add-partner-${p.id}`, true));
+          const freePos = findFreePosition(pos.x + 115, pos.y, 'right', focusedNodeId);
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-partner-${p.id}`, true));
         }
         const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
         if (nodeChildren.length === 0) {
-          lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x, pos.y + 120, `line-add-child-${p.id}`, true));
+          const freePos = findFreePosition(pos.x, pos.y + 120, 'down', focusedNodeId);
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-child-${p.id}`, true));
         } else {
           // Find rightmost child
           let rightMostPos = { x: pos.x, y: pos.y + 120 };
@@ -822,7 +818,8 @@ export default function FamilyTreeScreen({ navigation }: any) {
               rightMostPos = { x: childPos.x, y: childPos.y };
             }
           });
-          lines.push(...renderOrthogonalLine(pos.x, pos.y, rightMostPos.x + 115, rightMostPos.y, `line-add-child-${p.id}`, true));
+          const freePos = findFreePosition(rightMostPos.x + 115, rightMostPos.y, 'right', focusedNodeId);
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-child-${p.id}`, true));
         }
       }
     }
@@ -990,12 +987,12 @@ export default function FamilyTreeScreen({ navigation }: any) {
         // If we opened this modal via a '+' direct link bubble, link it up now
         if (pendingLink) {
           if (pendingLink.role === 'father') {
-            await db.runAsync("UPDATE entities SET father_id = ? WHERE id = ?", targetEntityId, pendingLink.childId);
+            await db.runAsync("UPDATE entities SET father_id = ? WHERE id = ?", targetEntityId, pendingLink.childId ?? null);
           } else if (pendingLink.role === 'mother') {
-            await db.runAsync("UPDATE entities SET mother_id = ? WHERE id = ?", targetEntityId, pendingLink.childId);
+            await db.runAsync("UPDATE entities SET mother_id = ? WHERE id = ?", targetEntityId, pendingLink.childId ?? null);
           } else if (pendingLink.role === 'partner') {
             // Reciprocal partner linking
-            meta.partner_id = pendingLink.parentId;
+            meta.partner_id = pendingLink.parentId ?? null;
             await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(meta), targetEntityId);
             
             if (pendingLink.parentId) {
@@ -1023,12 +1020,12 @@ export default function FamilyTreeScreen({ navigation }: any) {
       const oldNicknameStr = selectedPerson ? (JSON.parse(selectedPerson.metadata || '{}').nickname || '') : '';
       const oldNicknames = oldNicknameStr.split(',').map((n: string) => n.trim()).filter(Boolean);
 
-      const deletedNicknames = oldNicknames.filter(n => !newNicknames.some(newN => newN.toLowerCase() === n.toLowerCase()));
+      const deletedNicknames = oldNicknames.filter((n: string) => !newNicknames.some((newN: string) => newN.toLowerCase() === n.toLowerCase()));
       for (const alias of deletedNicknames) {
         await db.runAsync("DELETE FROM entity_aliases WHERE entity_id = ? AND alias = ? COLLATE NOCASE", targetEntityId, alias);
       }
 
-      const addedNicknames = newNicknames.filter(n => !oldNicknames.some(oldN => oldN.toLowerCase() === n.toLowerCase()));
+      const addedNicknames = newNicknames.filter((n: string) => !oldNicknames.some((oldN: string) => oldN.toLowerCase() === n.toLowerCase()));
       for (const alias of addedNicknames) {
         try {
           const aliasId = uuidv4();
@@ -1358,8 +1355,9 @@ const filteredList = useMemo(() => {
                 const partnerId = partnersMap[p.id];
 
                 if (!p.father_id) {
+                  const freePos = findFreePosition(pos.x - 80, pos.y - 120, 'left', focusedNodeId);
                   addButtons.push(
-                    <View key="add-father" style={[styles.nodeWrapper, { left: pos.x - 80 - 37.5, top: pos.y - 120 - 37.5 }]}>
+                    <View key="add-father" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
                       <TouchableOpacity 
                         activeOpacity={0.8} 
                         onPress={() => openCreateModal({ childId: p.id, role: 'father' })}
@@ -1373,8 +1371,9 @@ const filteredList = useMemo(() => {
                 }
 
                 if (!p.mother_id) {
+                  const freePos = findFreePosition(pos.x + 80, pos.y - 120, 'right', focusedNodeId);
                   addButtons.push(
-                    <View key="add-mother" style={[styles.nodeWrapper, { left: pos.x + 80 - 37.5, top: pos.y - 120 - 37.5 }]}>
+                    <View key="add-mother" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
                       <TouchableOpacity 
                         activeOpacity={0.8} 
                         onPress={() => openCreateModal({ childId: p.id, role: 'mother' })}
@@ -1388,8 +1387,9 @@ const filteredList = useMemo(() => {
                 }
 
                 if (!partnerId) {
+                  const freePos = findFreePosition(pos.x + 115, pos.y, 'right', focusedNodeId);
                   addButtons.push(
-                    <View key="add-partner" style={[styles.nodeWrapper, { left: pos.x + 115 - 37.5, top: pos.y - 37.5 }]}>
+                    <View key="add-partner" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
                       <TouchableOpacity 
                         activeOpacity={0.8} 
                         onPress={() => openCreateModal({ parentId: p.id, role: 'partner' })}
@@ -1426,8 +1426,9 @@ const filteredList = useMemo(() => {
 
                 const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
                 if (nodeChildren.length === 0) {
+                  const freePos = findFreePosition(pos.x, pos.y + 120, 'down', focusedNodeId);
                   addButtons.push(
-                    <View key="add-child" style={[styles.nodeWrapper, { left: pos.x - 37.5, top: pos.y + 120 - 37.5 }]}>
+                    <View key="add-child" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
                       <TouchableOpacity 
                         activeOpacity={0.8} 
                         onPress={handleAddChildPress}
@@ -1449,8 +1450,9 @@ const filteredList = useMemo(() => {
                       rightMostPos = { x: childPos.x, y: childPos.y };
                     }
                   });
+                  const freePos = findFreePosition(rightMostPos.x + 115, rightMostPos.y, 'right', focusedNodeId);
                   addButtons.push(
-                    <View key="add-child" style={[styles.nodeWrapper, { left: rightMostPos.x + 115 - 37.5, top: rightMostPos.y - 37.5 }]}>
+                    <View key="add-child" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
                       <TouchableOpacity 
                         activeOpacity={0.8} 
                         onPress={handleAddChildPress}
