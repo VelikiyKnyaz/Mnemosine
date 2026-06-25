@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { View, StyleSheet, ScrollView, Image, Modal, Alert, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, ScrollView, Image, Modal, Alert, TouchableOpacity, Text as RNText } from 'react-native';
 import { Text, Appbar, Button, TextInput, IconButton, Portal, Card, Divider, FAB, Chip } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
@@ -11,7 +11,7 @@ import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 import SmartDropdown from '../../components/SmartDropdown';
 import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, useAnimatedReaction, runOnJS } from 'react-native-reanimated';
 
 const RELATIONSHIP_ITEMS = [
   { id: 'Padre', name: 'Padre' },
@@ -188,6 +188,72 @@ export default function FamilyTreeScreen({ navigation }: any) {
     '1920s', '1930s', '1940s', '1950s', '1960s', '1970s', '1980s', '1990s', '2000s', '2010s', '2020s'
   ]);
   const [isLoadingDecades, setIsLoadingDecades] = useState(false);
+  const [isZoomedOut, setIsZoomedOut] = useState(false);
+
+  useAnimatedReaction(
+    () => scale.value,
+    (currentScale) => {
+      const shouldBeZoomedOut = currentScale < 0.75;
+      if (shouldBeZoomedOut !== isZoomedOut) {
+        runOnJS(setIsZoomedOut)(shouldBeZoomedOut);
+      }
+    },
+    [isZoomedOut]
+  );
+
+  // Helper functions for relationship auto-assignment relative to Yo (the user)
+  const getRelationForParent = (childId: string, role: 'father' | 'mother') => {
+    if (childId === myId) {
+      return role === 'father' ? 'Padre' : 'Madre';
+    }
+    const childPos = nodePositions[childId];
+    if (!childPos) return '';
+    const label = childPos.label;
+    if (label === 'Yo' || label === 'Hermano/a') {
+      return role === 'father' ? 'Padre' : 'Madre';
+    }
+    if (label === 'Padre' || label === 'Madre' || label === 'Tío/a' || label === 'Tio/a') {
+      return role === 'father' ? 'Abuelo' : 'Abuela';
+    }
+    if (label === 'Hijo/a') {
+      return 'Pareja';
+    }
+    if (label === 'Abuelo' || label === 'Abuela') {
+      return role === 'father' ? 'Bisabuelo' : 'Bisabuela';
+    }
+    if (label === 'Pareja') {
+      return role === 'father' ? 'Suegro' : 'Suegra';
+    }
+    return '';
+  };
+
+  const getRelationForChild = (parentId: string) => {
+    if (parentId === myId) {
+      return 'Hijo/a';
+    }
+    const parentPos = nodePositions[parentId];
+    if (!parentPos) return 'Hijo/a';
+    const label = parentPos.label;
+    if (label === 'Yo') {
+      return 'Hijo/a';
+    }
+    if (label === 'Padre' || label === 'Madre') {
+      return 'Hermano/a';
+    }
+    if (label === 'Hermano/a') {
+      return 'Sobrino/a';
+    }
+    if (label === 'Hijo/a') {
+      return 'Nieto/a';
+    }
+    if (label === 'Abuelo' || label === 'Abuela') {
+      return 'Tío/a';
+    }
+    if (label === 'Tío/a' || label === 'Tio/a') {
+      return 'Primo/a';
+    }
+    return 'Hijo/a';
+  };
 
   const handleDecadeScroll = (event: any) => {
     const { contentOffset } = event.nativeEvent;
@@ -423,18 +489,27 @@ export default function FamilyTreeScreen({ navigation }: any) {
       const p = people.find(x => x.id === focusedNodeId);
       const pos = nodePositions[focusedNodeId];
       if (p && pos) {
-        const isFloating = !['Yo', 'Padre', 'Madre', 'Hermano/a', 'Hijo/a', 'Abuelo', 'Abuela', 'Nieto/a'].includes(pos.label);
-        if (!isFloating) {
-          if (!p.father_id) {
-            lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x - 80, pos.y - 120, `line-add-father-${p.id}`, true));
-          }
-          if (!p.mother_id) {
-            lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x + 80, pos.y - 120, `line-add-mother-${p.id}`, true));
-          }
-          const hasChildren = people.some(x => x.father_id === p.id || x.mother_id === p.id);
-          if (!hasChildren) {
-            lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x, pos.y + 120, `line-add-child-${p.id}`, true));
-          }
+        if (!p.father_id) {
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x - 80, pos.y - 120, `line-add-father-${p.id}`, true));
+        }
+        if (!p.mother_id) {
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x + 80, pos.y - 120, `line-add-mother-${p.id}`, true));
+        }
+        const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
+        if (nodeChildren.length === 0) {
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x, pos.y + 120, `line-add-child-${p.id}`, true));
+        } else {
+          // Find rightmost child
+          let rightMostPos = { x: pos.x, y: pos.y + 120 };
+          let maxChildX = -Infinity;
+          nodeChildren.forEach(child => {
+            const childPos = nodePositions[child.id];
+            if (childPos && childPos.x > maxChildX) {
+              maxChildX = childPos.x;
+              rightMostPos = { x: childPos.x, y: childPos.y };
+            }
+          });
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, rightMostPos.x + 115, rightMostPos.y, `line-add-child-${p.id}`, true));
         }
       }
     }
@@ -751,48 +826,10 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // Pre-fill fields if we have a direct tree link context
     if (preLink) {
-      if (preLink.childId) {
-        // We are adding a parent to preLink.childId
-        if (preLink.childId === myId) {
-          // Adding parent to myself (Yo)
-          setEditRelationship(preLink.role === 'father' ? 'Padre' : 'Madre');
-        } else {
-          // Find the child's position label to deduce grandparent or sibling
-          const childPos = nodePositions[preLink.childId];
-          if (childPos) {
-            if (childPos.label === 'Padre' || childPos.label === 'Madre') {
-              setEditRelationship(preLink.role === 'father' ? 'Abuelo' : 'Abuela');
-            } else if (childPos.label === 'Hermano/a') {
-              setEditRelationship(preLink.role === 'father' ? 'Padre' : 'Madre');
-            } else if (childPos.label === 'Hijo/a') {
-              setEditRelationship('Pareja');
-            } else {
-              setEditRelationship(preLink.role === 'father' ? 'Padre' : 'Madre');
-            }
-          } else {
-            setEditRelationship(preLink.role === 'father' ? 'Padre' : 'Madre');
-          }
-        }
+      if (preLink.childId && (preLink.role === 'father' || preLink.role === 'mother')) {
+        setEditRelationship(getRelationForParent(preLink.childId, preLink.role));
       } else if (preLink.role === 'child' && preLink.parentId) {
-        // We are adding a child to preLink.parentId
-        if (preLink.parentId === myId) {
-          setEditRelationship('Hijo/a');
-        } else {
-          const parentPos = nodePositions[preLink.parentId];
-          if (parentPos) {
-            if (parentPos.label === 'Padre' || parentPos.label === 'Madre') {
-              setEditRelationship('Hermano/a');
-            } else if (parentPos.label === 'Hermano/a') {
-              setEditRelationship('Sobrino/a');
-            } else if (parentPos.label === 'Hijo/a') {
-              setEditRelationship('Nieto/a');
-            } else {
-              setEditRelationship('Hijo/a');
-            }
-          } else {
-            setEditRelationship('Hijo/a');
-          }
-        }
+        setEditRelationship(getRelationForChild(preLink.parentId));
 
         // Set father/mother reference
         const parent = people.find(p => p.id === preLink.parentId);
@@ -846,6 +883,34 @@ const filteredList = useMemo(() => {
     };
   });
 
+  const animatedBadgeStyle = useAnimatedStyle(() => {
+    const yoX = 500;
+    const yoY = 400;
+
+    const yoScreenX = yoX + translateX.value;
+    const yoScreenY = yoY + translateY.value;
+
+    const w = containerWidth;
+    const h = containerHeight;
+    const margin = 24;
+
+    const isOffScreen = yoScreenX < 0 || yoScreenX > w || yoScreenY < 0 || yoScreenY > h;
+
+    const badgeX = Math.max(margin, Math.min(w - margin - 40, yoScreenX));
+    const badgeY = Math.max(margin, Math.min(h - margin - 40, yoScreenY));
+
+    const opacity = withTiming(isOffScreen ? 1 : 0, { duration: 200 });
+    const scaleVal = withTiming(isOffScreen ? 1 : 0, { duration: 200 });
+
+    return {
+      position: 'absolute',
+      left: badgeX,
+      top: badgeY,
+      opacity: opacity,
+      transform: [{ scale: scaleVal }],
+    };
+  });
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View style={styles.container}>
@@ -894,8 +959,12 @@ const filteredList = useMemo(() => {
                       />
                       {person.id === myId && <View style={styles.meBadge}><Text style={styles.meBadgeText}>Yo</Text></View>}
                     </TouchableOpacity>
-                    <Text style={styles.nodeName} numberOfLines={1}>{person.name}</Text>
-                    <Text style={styles.nodeSubtitle}>{meta.nickname || pos.label}</Text>
+                    <ZoomCompensatedText 
+                      scale={scale} 
+                      name={person.name} 
+                      subtitle={meta.nickname || pos.label} 
+                      isZoomedOut={isZoomedOut} 
+                    />
                   </View>
                 );
               })}
@@ -907,8 +976,6 @@ const filteredList = useMemo(() => {
                 if (!p || !pos) return null;
 
                 const addButtons = [];
-                const isFloating = !['Yo', 'Padre', 'Madre', 'Hermano/a', 'Hijo/a', 'Abuelo', 'Abuela', 'Nieto/a'].includes(pos.label);
-                if (isFloating) return null;
 
                 if (!p.father_id) {
                   addButtons.push(
@@ -920,7 +987,7 @@ const filteredList = useMemo(() => {
                       >
                         <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
                       </TouchableOpacity>
-                      <Text style={styles.nodeName}>Asignar Padre</Text>
+                      <ZoomCompensatedLabel scale={scale} label="Asignar Padre" />
                     </View>
                   );
                 }
@@ -935,13 +1002,13 @@ const filteredList = useMemo(() => {
                       >
                         <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
                       </TouchableOpacity>
-                      <Text style={styles.nodeName}>Asignar Madre</Text>
+                      <ZoomCompensatedLabel scale={scale} label="Asignar Madre" />
                     </View>
                   );
                 }
 
-                const hasChildren = people.some(x => x.father_id === p.id || x.mother_id === p.id);
-                if (!hasChildren) {
+                const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
+                if (nodeChildren.length === 0) {
                   addButtons.push(
                     <View key="add-child" style={[styles.nodeWrapper, { left: pos.x - 37.5, top: pos.y + 120 - 37.5 }]}>
                       <TouchableOpacity 
@@ -951,26 +1018,32 @@ const filteredList = useMemo(() => {
                       >
                         <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
                       </TouchableOpacity>
-                      <Text style={styles.nodeName}>Asignar Hijo/a</Text>
+                      <ZoomCompensatedLabel scale={scale} label="Asignar Hijo/a" />
                     </View>
                   );
                 } else {
-                  const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
-                  const lastChild = nodeChildren[nodeChildren.length - 1];
-                  const lastChildPos = nodePositions[lastChild.id];
-                  if (lastChildPos) {
-                    addButtons.push(
-                      <View key="add-child-small" style={[styles.nodeWrapper, { left: lastChildPos.x + 90 - 20, top: lastChildPos.y - 20 }]}>
-                        <TouchableOpacity 
-                          activeOpacity={0.8} 
-                          onPress={() => openCreateModal({ parentId: p.id, role: 'child' })}
-                          style={styles.smallPlusBubble}
-                        >
-                          <IconButton icon="plus" size={14} iconColor="#ffffff" />
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  }
+                  // Find rightmost child
+                  let rightMostPos = { x: pos.x, y: pos.y + 120 };
+                  let maxChildX = -Infinity;
+                  nodeChildren.forEach(child => {
+                    const childPos = nodePositions[child.id];
+                    if (childPos && childPos.x > maxChildX) {
+                      maxChildX = childPos.x;
+                      rightMostPos = { x: childPos.x, y: childPos.y };
+                    }
+                  });
+                  addButtons.push(
+                    <View key="add-child" style={[styles.nodeWrapper, { left: rightMostPos.x + 115 - 37.5, top: rightMostPos.y - 37.5 }]}>
+                      <TouchableOpacity 
+                        activeOpacity={0.8} 
+                        onPress={() => openCreateModal({ parentId: p.id, role: 'child' })}
+                        style={styles.plusBubble}
+                      >
+                        <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
+                      </TouchableOpacity>
+                      <ZoomCompensatedLabel scale={scale} label="Asignar Hijo/a" />
+                    </View>
+                  );
                 }
 
                 return addButtons;
@@ -1000,6 +1073,30 @@ const filteredList = useMemo(() => {
               style={styles.zoomBtn}
             />
           </View>
+
+          {/* Retorno Rápido (Centering shortcut) */}
+          {myId && (() => {
+            const yoNode = people.find(p => p.id === myId);
+            const yoMeta = yoNode?.metadata ? JSON.parse(yoNode.metadata) : {};
+            const yoAvatarUrl = yoMeta.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + (yoNode?.name || 'Yo');
+            return (
+              <Animated.View style={[styles.floatingYoBadge, animatedBadgeStyle]}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => centerOnNode(500, 400)}
+                  style={styles.floatingYoBadgeButton}
+                >
+                  <Image
+                    source={{ uri: yoAvatarUrl }}
+                    style={styles.floatingYoBadgeAvatar}
+                  />
+                  <View style={styles.floatingYoBadgeIndicator}>
+                    <IconButton icon="home" size={10} iconColor="#ffffff" style={{ margin: 0, padding: 0 }} />
+                  </View>
+                </TouchableOpacity>
+              </Animated.View>
+            );
+          })()}
         </View>
 
     {/* Floating Bottom Panel for Selected / Focused Node Controls */}
@@ -1390,13 +1487,55 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#212529',
     textAlign: 'center',
-    marginTop: 6,
-    width: 100,
   },
   nodeSubtitle: {
     fontSize: 9,
     color: '#6c757d',
     textAlign: 'center',
+  },
+  textContainer: {
+    alignItems: 'center',
+    marginTop: 6,
+    width: 100,
+  },
+  floatingYoBadge: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    elevation: 10,
+    shadowColor: '#6200ee',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: '#6200ee',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 999,
+  },
+  floatingYoBadgeButton: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  floatingYoBadgeAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
+  floatingYoBadgeIndicator: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    backgroundColor: '#6200ee',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   // Floating bottom control panel
   controlPanel: {
@@ -1618,3 +1757,33 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 });
+
+const ZoomCompensatedText = ({ scale, name, subtitle, isZoomedOut }: { scale: any, name: string, subtitle: string, isZoomedOut: boolean }) => {
+  const animatedTextStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: 1 / scale.value }],
+    };
+  });
+
+  const displayName = isZoomedOut ? name.split(' ')[0] : name;
+
+  return (
+    <Animated.View style={[styles.textContainer, animatedTextStyle]}>
+      <RNText style={styles.nodeName} numberOfLines={1}>{displayName}</RNText>
+      <RNText style={styles.nodeSubtitle}>{subtitle}</RNText>
+    </Animated.View>
+  );
+};
+
+const ZoomCompensatedLabel = ({ scale, label }: { scale: any, label: string }) => {
+  const animatedTextStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: 1 / scale.value }],
+    };
+  });
+  return (
+    <Animated.View style={[styles.textContainer, animatedTextStyle]}>
+      <RNText style={styles.nodeName}>{label}</RNText>
+    </Animated.View>
+  );
+};
