@@ -26,8 +26,8 @@ const RELATIONSHIP_ITEMS = [
   { id: 'Otro', name: 'Otro' },
 ];
 
-const CANVAS_WIDTH = 1000;
-const CANVAS_HEIGHT = 800;
+const CANVAS_WIDTH = 1400;
+const CANVAS_HEIGHT = 1200;
 const centerX = CANVAS_WIDTH / 2;
 const centerY = CANVAS_HEIGHT / 2;
 
@@ -63,7 +63,8 @@ export default function FamilyTreeScreen({ navigation }: any) {
   const [pendingLink, setPendingLink] = useState<{
     childId?: string;
     parentId?: string;
-    role: 'father' | 'mother' | 'child';
+    partnerId?: string;
+    role: 'father' | 'mother' | 'child' | 'partner' | 'joint_child';
   } | null>(null);
 
   const ensureMeNode = async (db: any, currentUserId: string) => {
@@ -324,14 +325,107 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     const findPerson = (id: string) => people.find(p => p.id === id);
 
-    // 1. "Yo"
+    const getRelLabel = (p: any, fallback: string) => {
+      try {
+        const meta = p.metadata ? JSON.parse(p.metadata) : {};
+        return meta.relationship || fallback;
+      } catch {
+        return fallback;
+      }
+    };
+
+    // Find couples via metadata or shared children
+    const partnersMap: { [id: string]: string } = {};
+    const getPartnerId = (person: any) => {
+      try {
+        const meta = person.metadata ? JSON.parse(person.metadata) : {};
+        return meta.partner_id || null;
+      } catch {
+        return null;
+      }
+    };
+    people.forEach(p => {
+      const metaPartner = getPartnerId(p);
+      if (metaPartner) {
+        partnersMap[p.id] = metaPartner;
+        partnersMap[metaPartner] = p.id;
+      }
+      if (p.father_id && p.mother_id) {
+        partnersMap[p.father_id] = p.mother_id;
+        partnersMap[p.mother_id] = p.father_id;
+      }
+      const meta = p.metadata ? JSON.parse(p.metadata) : {};
+      if (meta.relationship === 'Pareja') {
+        partnersMap[p.id] = myId || '';
+        if (myId) partnersMap[myId] = p.id;
+      }
+    });
+
+    // BFS generations assignment
+    const generations: { [id: string]: number } = {};
+    generations[myId] = 0;
+    const queue = [myId];
+
+    while (queue.length > 0) {
+      const currId = queue.shift()!;
+      const currGen = generations[currId];
+      const p = people.find(x => x.id === currId);
+      if (!p) continue;
+
+      if (p.father_id && generations[p.father_id] === undefined) {
+        generations[p.father_id] = currGen - 1;
+        queue.push(p.father_id);
+      }
+      if (p.mother_id && generations[p.mother_id] === undefined) {
+        generations[p.mother_id] = currGen - 1;
+        queue.push(p.mother_id);
+      }
+      const children = people.filter(x => x.father_id === currId || x.mother_id === currId);
+      children.forEach(child => {
+        if (generations[child.id] === undefined) {
+          generations[child.id] = currGen + 1;
+          queue.push(child.id);
+        }
+      });
+      const partnerId = partnersMap[currId];
+      if (partnerId && generations[partnerId] === undefined) {
+        generations[partnerId] = currGen;
+        queue.push(partnerId);
+      }
+    }
+
+    // Floating/disconnected generation fallback mapping
+    const getGenerationFromLabel = (label: string): number => {
+      const l = label.toLowerCase();
+      if (l.includes('bisabuel')) return -3;
+      if (l.includes('abuel')) return -2;
+      if (l.includes('padre') || l.includes('madre') || l.includes('tío') || l.includes('tio') || l.includes('suegro') || l.includes('suegra')) return -1;
+      if (l.includes('hijo') || l.includes('sobrino') || l.includes('yerno') || l.includes('nuera')) return 1;
+      if (l.includes('nieto')) return 2;
+      if (l.includes('bisnieto')) return 3;
+      return 0;
+    };
+
+    people.forEach(p => {
+      if (generations[p.id] === undefined) {
+        generations[p.id] = getGenerationFromLabel(getRelLabel(p, ''));
+      }
+    });
+
+    // 1. Place Yo at center
     coords[myId] = { x: centerX, y: centerY, label: 'Yo' };
+
+    // 2. Place Yo's partner if exists
+    const yoPartnerId = partnersMap[myId];
+    if (yoPartnerId) {
+      coords[yoPartnerId] = { x: centerX + 115, y: centerY, label: getRelLabel(findPerson(yoPartnerId), 'Pareja') };
+    }
 
     const yoNode = findPerson(myId);
     const fatherId = yoNode?.father_id;
     const motherId = yoNode?.mother_id;
 
-    // 2. Yo's parents
+    // 3. Place Yo's parents (Gen -1)
     if (fatherId) {
       coords[fatherId] = { x: centerX - 120, y: centerY - 140, label: 'Padre' };
     }
@@ -339,7 +433,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       coords[motherId] = { x: centerX + 120, y: centerY - 140, label: 'Madre' };
     }
 
-    // 3. Yo's grandparents
+    // 4. Place Yo's grandparents (Gen -2)
     if (fatherId) {
       const fatherNode = findPerson(fatherId);
       if (fatherNode?.father_id) {
@@ -359,45 +453,147 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     }
 
-    // 4. Yo's siblings
+    // 5. Place Yo's great-grandparents (Gen -3)
+    if (fatherId) {
+      const fatherNode = findPerson(fatherId);
+      if (fatherNode?.father_id) {
+        const gf = findPerson(fatherNode.father_id);
+        if (gf?.father_id) {
+          coords[gf.father_id] = { x: centerX - 210, y: centerY - 420, label: 'Bisabuelo' };
+        }
+        if (gf?.mother_id) {
+          coords[gf.mother_id] = { x: centerX - 150, y: centerY - 420, label: 'Bisabuela' };
+        }
+      }
+      if (fatherNode?.mother_id) {
+        const gm = findPerson(fatherNode.mother_id);
+        if (gm?.father_id) {
+          coords[gm.father_id] = { x: centerX - 90, y: centerY - 420, label: 'Bisabuelo' };
+        }
+        if (gm?.mother_id) {
+          coords[gm.mother_id] = { x: centerX - 30, y: centerY - 420, label: 'Bisabuela' };
+        }
+      }
+    }
+    if (motherId) {
+      const motherNode = findPerson(motherId);
+      if (motherNode?.father_id) {
+        const gf = findPerson(motherNode.father_id);
+        if (gf?.father_id) {
+          coords[gf.father_id] = { x: centerX + 30, y: centerY - 420, label: 'Bisabuelo' };
+        }
+        if (gf?.mother_id) {
+          coords[gf.mother_id] = { x: centerX + 90, y: centerY - 420, label: 'Bisabuela' };
+        }
+      }
+      if (motherNode?.mother_id) {
+        const gm = findPerson(motherNode.mother_id);
+        if (gm?.father_id) {
+          coords[gm.father_id] = { x: centerX + 150, y: centerY - 420, label: 'Bisabuelo' };
+        }
+        if (gm?.mother_id) {
+          coords[gm.mother_id] = { x: centerX + 210, y: centerY - 420, label: 'Bisabuela' };
+        }
+      }
+    }
+
+    // 6. Place Yo's siblings
     const siblingsList = people.filter(p =>
       p.id !== myId &&
+      p.id !== yoPartnerId &&
       ((fatherId && p.father_id === fatherId) || (motherId && p.mother_id === motherId))
     );
     siblingsList.forEach((sib, index) => {
-      const isLeft = index % 2 === 0;
-      const step = Math.floor(index / 2) + 1;
-      const sibX = isLeft ? (centerX - 100 - step * 110) : (centerX + 100 + step * 110);
+      const sibX = centerX - 120 - (index + 1) * 120;
       coords[sib.id] = { x: sibX, y: centerY, label: 'Hermano/a' };
     });
 
-    // 5. Yo's children & grandchildren
-    const childrenList = people.filter(p => p.father_id === myId || p.mother_id === myId);
+    // 7. Place Yo's children & grandchildren
+    const childrenList = people.filter(p => (p.father_id === myId || p.mother_id === myId) && p.id !== myId && p.id !== yoPartnerId);
     childrenList.forEach((child, index) => {
-      const spacing = 120;
+      const spacing = 140;
       const totalWidth = (childrenList.length - 1) * spacing;
-      const startX = centerX - totalWidth / 2;
+      const childCenterX = yoPartnerId ? centerX + 57.5 : centerX;
+      const startX = childCenterX - totalWidth / 2;
       const childX = startX + index * spacing;
       coords[child.id] = { x: childX, y: centerY + 140, label: 'Hijo/a' };
 
       const grandchildrenList = people.filter(p => p.father_id === child.id || p.mother_id === child.id);
       grandchildrenList.forEach((gc, gcIdx) => {
-        const gcSpacing = 100;
+        const gcSpacing = 120;
         const gcTotalW = (grandchildrenList.length - 1) * gcSpacing;
         const gcStartX = childX - gcTotalW / 2;
         coords[gc.id] = { x: gcStartX + gcIdx * gcSpacing, y: centerY + 280, label: 'Nieto/a' };
       });
     });
 
-    // 6. Floating / other nodes
-    const placedIds = new Set(Object.keys(coords));
-    const floatingList = people.filter(p => !placedIds.has(p.id));
-    floatingList.forEach((f, index) => {
-      const isLeft = index % 2 === 0;
-      const columnX = isLeft ? 80 : CANVAS_WIDTH - 80;
-      const yOffset = (Math.floor(index / 2) * 90) % 360;
-      const posY = centerY - 120 + yOffset;
-      coords[f.id] = { x: columnX, y: posY, label: JSON.parse(f.metadata || '{}').relationship || 'Contacto' };
+    // 8. Place partners of already placed nodes
+    people.forEach(p => {
+      if (coords[p.id]) return;
+      const partnerId = partnersMap[p.id];
+      if (partnerId && coords[partnerId]) {
+        const spousePos = coords[partnerId];
+        const gen = generations[p.id] ?? 0;
+        const posY = centerY + gen * 140;
+        coords[p.id] = { x: spousePos.x + 115, y: posY, label: getRelLabel(p, 'Pareja') };
+      }
+    });
+
+    // 9. Place parents of already placed nodes (upward link)
+    let newlyPlaced = true;
+    while (newlyPlaced) {
+      newlyPlaced = false;
+      people.forEach(p => {
+        if (coords[p.id]) return;
+        const childNode = people.find(c => c.father_id === p.id || c.mother_id === p.id);
+        if (childNode && coords[childNode.id]) {
+          const childPos = coords[childNode.id];
+          const gen = generations[p.id] ?? -1;
+          const posY = centerY + gen * 140;
+          const parentSpacing = gen === -1 ? 60 : gen === -2 ? 30 : gen === -3 ? 15 : 40;
+          const isMother = childNode.mother_id === p.id;
+          const parentX = isMother ? childPos.x + parentSpacing : childPos.x - parentSpacing;
+          coords[p.id] = { x: parentX, y: posY, label: getRelLabel(p, isMother ? 'Madre' : 'Padre') };
+          newlyPlaced = true;
+        }
+      });
+    }
+
+    // 10. Place remaining nodes (floating / other) based on their generation
+    const remainingPeople = people.filter(p => !coords[p.id]);
+    remainingPeople.forEach((p, idx) => {
+      const gen = generations[p.id] ?? 0;
+      const posY = centerY + gen * 140;
+      const isLeft = idx % 2 === 0;
+      const columnX = isLeft ? 120 + Math.floor(idx / 2) * 50 : CANVAS_WIDTH - 120 - Math.floor(idx / 2) * 50;
+      coords[p.id] = { x: columnX, y: posY, label: getRelLabel(p, 'Contacto') };
+    });
+
+    // 11. Collision Resolution
+    const occupied = new Set<string>();
+    const key = (x: number, y: number) => `${Math.round(x)},${Math.round(y)}`;
+
+    people.forEach(p => {
+      if (coords[p.id]) {
+        const pos = coords[p.id];
+        if (p.id === myId || p.id === fatherId || p.id === motherId) {
+          occupied.add(key(pos.x, pos.y));
+        }
+      }
+    });
+
+    people.forEach(p => {
+      if (!coords[p.id]) return;
+      if (p.id === myId || p.id === fatherId || p.id === motherId) return;
+
+      const pos = coords[p.id];
+      let testX = pos.x;
+      const testY = pos.y;
+      while (occupied.has(key(testX, testY))) {
+        testX += 120;
+      }
+      pos.x = testX;
+      occupied.add(key(testX, testY));
     });
 
     return coords;
@@ -465,10 +661,123 @@ export default function FamilyTreeScreen({ navigation }: any) {
     const lines: React.ReactNode[] = [];
     let keyCount = 0;
 
+    // Build partnersMap inside renderAllLines to know the couples
+    const partnersMap: { [id: string]: string } = {};
+    const getPartnerId = (person: any) => {
+      try {
+        const meta = person.metadata ? JSON.parse(person.metadata) : {};
+        return meta.partner_id || null;
+      } catch {
+        return null;
+      }
+    };
+    people.forEach(p => {
+      const metaPartner = getPartnerId(p);
+      if (metaPartner) {
+        partnersMap[p.id] = metaPartner;
+        partnersMap[metaPartner] = p.id;
+      }
+      if (p.father_id && p.mother_id) {
+        partnersMap[p.father_id] = p.mother_id;
+        partnersMap[p.mother_id] = p.father_id;
+      }
+      const meta = p.metadata ? JSON.parse(p.metadata) : {};
+      if (meta.relationship === 'Pareja') {
+        partnersMap[p.id] = myId || '';
+        if (myId) partnersMap[myId] = p.id;
+      }
+    });
+
+    // Draw couple lines (only draw once per couple by ordering IDs)
+    const drawnCouples = new Set<string>();
+    people.forEach(p => {
+      const partnerId = partnersMap[p.id];
+      if (partnerId) {
+        const key = [p.id, partnerId].sort().join('-');
+        if (!drawnCouples.has(key)) {
+          drawnCouples.add(key);
+          const pPos = nodePositions[p.id];
+          const partPos = nodePositions[partnerId];
+          if (pPos && partPos && pPos.y === partPos.y) {
+            lines.push(
+              <View
+                key={`couple-${keyCount++}`}
+                style={[
+                  styles.connectorLine,
+                  styles.dashedConnector,
+                  {
+                    left: Math.min(pPos.x, partPos.x) + 35,
+                    top: pPos.y,
+                    width: Math.abs(pPos.x - partPos.x) - 70,
+                    height: 2,
+                  }
+                ]}
+              />
+            );
+          }
+        }
+      }
+    });
+
     // 1. Draw actual family lines
     people.forEach((p) => {
       const pPos = nodePositions[p.id];
       if (!pPos) return;
+
+      // Check if this is a joint child
+      if (p.father_id && p.mother_id) {
+        const fPos = nodePositions[p.father_id];
+        const mPos = nodePositions[p.mother_id];
+        if (fPos && mPos && fPos.y === mPos.y) {
+          const parentMidX = (fPos.x + mPos.x) / 2;
+          const parentY = fPos.y;
+          const midY = (parentY + pPos.y) / 2;
+          
+          lines.push(
+            <View
+              key={`line-joint-v1-${p.id}-${keyCount++}`}
+              style={[
+                styles.connectorLine,
+                {
+                  left: parentMidX,
+                  top: parentY,
+                  width: 2,
+                  height: midY - parentY,
+                }
+              ]}
+            />
+          );
+          lines.push(
+            <View
+              key={`line-joint-h-${p.id}-${keyCount++}`}
+              style={[
+                styles.connectorLine,
+                {
+                  left: Math.min(parentMidX, pPos.x),
+                  top: midY,
+                  width: Math.abs(parentMidX - pPos.x) + 2,
+                  height: 2,
+                }
+              ]}
+            />
+          );
+          lines.push(
+            <View
+              key={`line-joint-v2-${p.id}-${keyCount++}`}
+              style={[
+                styles.connectorLine,
+                {
+                  left: pPos.x,
+                  top: midY,
+                  width: 2,
+                  height: pPos.y - midY,
+                }
+              ]}
+            />
+          );
+          return;
+        }
+      }
 
       if (p.father_id) {
         const fPos = nodePositions[p.father_id];
@@ -494,6 +803,10 @@ export default function FamilyTreeScreen({ navigation }: any) {
         }
         if (!p.mother_id) {
           lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x + 80, pos.y - 120, `line-add-mother-${p.id}`, true));
+        }
+        const partnerId = partnersMap[p.id];
+        if (!partnerId) {
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x + 115, pos.y, `line-add-partner-${p.id}`, true));
         }
         const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
         if (nodeChildren.length === 0) {
@@ -620,7 +933,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
         birthDecadeVal = '';
       }
 
-      const meta = {
+      const meta: any = {
         nickname: editNickname.trim(),
         relationship: editRelationship,
         avatar_url: finalAvatarUrl,
@@ -629,6 +942,13 @@ export default function FamilyTreeScreen({ navigation }: any) {
         is_linked: linkStatus,
         connection_status: linkStatus ? 'ACCEPTED' : connStatus,
         birth_decade: birthDecadeVal,
+      };
+
+      const isFemale = (pNode: any) => {
+        if (!pNode) return false;
+        const pMeta = pNode.metadata ? JSON.parse(pNode.metadata) : {};
+        const rel = (pMeta.relationship || '').toLowerCase();
+        return rel.includes('madre') || rel.includes('tía') || rel.includes('tia') || rel.includes('abuela') || rel.includes('prima') || rel.includes('hermana') || rel.includes('mujer');
       };
 
       if (selectedPerson) {
@@ -642,13 +962,28 @@ export default function FamilyTreeScreen({ navigation }: any) {
           targetEntityId
         );
       } else {
+        let insertFatherId = editFatherId;
+        let insertMotherId = editMotherId;
+
+        if (pendingLink && pendingLink.role === 'joint_child') {
+          const parentA = people.find(p => p.id === pendingLink.parentId);
+          const parentB = pendingLink.partnerId ? people.find(p => p.id === pendingLink.partnerId) : null;
+          if (isFemale(parentA)) {
+            insertMotherId = parentA?.id || null;
+            insertFatherId = parentB?.id || null;
+          } else {
+            insertFatherId = parentA?.id || null;
+            insertMotherId = parentB?.id || null;
+          }
+        }
+
         await db.runAsync(
           "INSERT INTO entities (id, type, name, metadata, father_id, mother_id, birth_date, is_confirmed) VALUES (?, 'PERSON', ?, ?, ?, ?, ?, 1)",
           targetEntityId,
           finalName,
           JSON.stringify(meta),
-          editFatherId,
-          editMotherId,
+          insertFatherId,
+          insertMotherId,
           finalBirthDate
         );
 
@@ -658,13 +993,23 @@ export default function FamilyTreeScreen({ navigation }: any) {
             await db.runAsync("UPDATE entities SET father_id = ? WHERE id = ?", targetEntityId, pendingLink.childId);
           } else if (pendingLink.role === 'mother') {
             await db.runAsync("UPDATE entities SET mother_id = ? WHERE id = ?", targetEntityId, pendingLink.childId);
+          } else if (pendingLink.role === 'partner') {
+            // Reciprocal partner linking
+            meta.partner_id = pendingLink.parentId;
+            await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(meta), targetEntityId);
+            
+            if (pendingLink.parentId) {
+              const spouseNode = people.find(x => x.id === pendingLink.parentId);
+              if (spouseNode) {
+                const spouseMeta = spouseNode.metadata ? JSON.parse(spouseNode.metadata) : {};
+                spouseMeta.partner_id = targetEntityId;
+                await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(spouseMeta), pendingLink.parentId);
+              }
+            }
           } else if (pendingLink.role === 'child' && pendingLink.parentId) {
             // Check if parent is female or male to assign correctly
             const parent = people.find(p => p.id === pendingLink.parentId);
-            const parentMeta = parent?.metadata ? JSON.parse(parent.metadata) : {};
-            const rel = (parentMeta.relationship || '').toLowerCase();
-            const isFemale = rel.includes('madre') || rel.includes('tía') || rel.includes('tia') || rel.includes('abuela') || rel.includes('prima') || rel.includes('hermana');
-            if (isFemale) {
+            if (isFemale(parent)) {
               await db.runAsync("UPDATE entities SET mother_id = ? WHERE id = ?", pendingLink.parentId, targetEntityId);
             } else {
               await db.runAsync("UPDATE entities SET father_id = ? WHERE id = ?", pendingLink.parentId, targetEntityId);
@@ -828,6 +1173,10 @@ export default function FamilyTreeScreen({ navigation }: any) {
     if (preLink) {
       if (preLink.childId && (preLink.role === 'father' || preLink.role === 'mother')) {
         setEditRelationship(getRelationForParent(preLink.childId, preLink.role));
+      } else if (preLink.role === 'partner') {
+        setEditRelationship('Pareja');
+      } else if (preLink.role === 'joint_child' && preLink.parentId) {
+        setEditRelationship(getRelationForChild(preLink.parentId));
       } else if (preLink.role === 'child' && preLink.parentId) {
         setEditRelationship(getRelationForChild(preLink.parentId));
 
@@ -884,8 +1233,8 @@ const filteredList = useMemo(() => {
   });
 
   const animatedBadgeStyle = useAnimatedStyle(() => {
-    const yoX = 500;
-    const yoY = 400;
+    const yoX = 700;
+    const yoY = 600;
 
     const yoScreenX = yoX + translateX.value;
     const yoScreenY = yoY + translateY.value;
@@ -897,7 +1246,9 @@ const filteredList = useMemo(() => {
     const isOffScreen = yoScreenX < 0 || yoScreenX > w || yoScreenY < 0 || yoScreenY > h;
 
     const badgeX = Math.max(margin, Math.min(w - margin - 40, yoScreenX));
-    const badgeY = Math.max(margin, Math.min(h - margin - 40, yoScreenY));
+    const hasPanel = focusedNodeId !== null;
+    const bottomMargin = hasPanel ? 160 : 100;
+    const badgeY = Math.max(margin, Math.min(h - bottomMargin - 40, yoScreenY));
 
     const opacity = withTiming(isOffScreen ? 1 : 0, { duration: 200 });
     const scaleVal = withTiming(isOffScreen ? 1 : 0, { duration: 200 });
@@ -977,6 +1328,35 @@ const filteredList = useMemo(() => {
 
                 const addButtons = [];
 
+                // Re-build partnersMap for checking in branch rendering
+                const partnersMap: { [id: string]: string } = {};
+                const getPartnerId = (person: any) => {
+                  try {
+                    const meta = person.metadata ? JSON.parse(person.metadata) : {};
+                    return meta.partner_id || null;
+                  } catch {
+                    return null;
+                  }
+                };
+                people.forEach(x => {
+                  const metaPartner = getPartnerId(x);
+                  if (metaPartner) {
+                    partnersMap[x.id] = metaPartner;
+                    partnersMap[metaPartner] = x.id;
+                  }
+                  if (x.father_id && x.mother_id) {
+                    partnersMap[x.father_id] = x.mother_id;
+                    partnersMap[x.mother_id] = x.father_id;
+                  }
+                  const meta = x.metadata ? JSON.parse(x.metadata) : {};
+                  if (meta.relationship === 'Pareja') {
+                    partnersMap[x.id] = myId || '';
+                    if (myId) partnersMap[myId] = x.id;
+                  }
+                });
+
+                const partnerId = partnersMap[p.id];
+
                 if (!p.father_id) {
                   addButtons.push(
                     <View key="add-father" style={[styles.nodeWrapper, { left: pos.x - 80 - 37.5, top: pos.y - 120 - 37.5 }]}>
@@ -1007,13 +1387,50 @@ const filteredList = useMemo(() => {
                   );
                 }
 
+                if (!partnerId) {
+                  addButtons.push(
+                    <View key="add-partner" style={[styles.nodeWrapper, { left: pos.x + 115 - 37.5, top: pos.y - 37.5 }]}>
+                      <TouchableOpacity 
+                        activeOpacity={0.8} 
+                        onPress={() => openCreateModal({ parentId: p.id, role: 'partner' })}
+                        style={styles.plusBubble}
+                      >
+                        <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
+                      </TouchableOpacity>
+                      <ZoomCompensatedLabel scale={scale} label="Asignar Pareja" />
+                    </View>
+                  );
+                }
+
+                const handleAddChildPress = () => {
+                  if (partnerId) {
+                    Alert.alert(
+                      'Añadir Hijo/a',
+                      '¿Quieres añadir un hijo en común con su pareja o un hijo individual?',
+                      [
+                        { text: 'Cancelar', style: 'cancel' },
+                        { 
+                          text: 'Hijo Individual', 
+                          onPress: () => openCreateModal({ parentId: p.id, role: 'child' }) 
+                        },
+                        { 
+                          text: 'Hijo en Común', 
+                          onPress: () => openCreateModal({ parentId: p.id, partnerId: partnerId, role: 'joint_child' }) 
+                        }
+                      ]
+                    );
+                  } else {
+                    openCreateModal({ parentId: p.id, role: 'child' });
+                  }
+                };
+
                 const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
                 if (nodeChildren.length === 0) {
                   addButtons.push(
                     <View key="add-child" style={[styles.nodeWrapper, { left: pos.x - 37.5, top: pos.y + 120 - 37.5 }]}>
                       <TouchableOpacity 
                         activeOpacity={0.8} 
-                        onPress={() => openCreateModal({ parentId: p.id, role: 'child' })}
+                        onPress={handleAddChildPress}
                         style={styles.plusBubble}
                       >
                         <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
@@ -1036,7 +1453,7 @@ const filteredList = useMemo(() => {
                     <View key="add-child" style={[styles.nodeWrapper, { left: rightMostPos.x + 115 - 37.5, top: rightMostPos.y - 37.5 }]}>
                       <TouchableOpacity 
                         activeOpacity={0.8} 
-                        onPress={() => openCreateModal({ parentId: p.id, role: 'child' })}
+                        onPress={handleAddChildPress}
                         style={styles.plusBubble}
                       >
                         <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
@@ -1083,7 +1500,7 @@ const filteredList = useMemo(() => {
               <Animated.View style={[styles.floatingYoBadge, animatedBadgeStyle]}>
                 <TouchableOpacity
                   activeOpacity={0.8}
-                  onPress={() => centerOnNode(500, 400)}
+                  onPress={() => centerOnNode(700, 600)}
                   style={styles.floatingYoBadgeButton}
                 >
                   <Image
