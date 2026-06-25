@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { View, StyleSheet, ScrollView, Image, Modal, Alert, TouchableOpacity } from 'react-native';
 import { Text, Appbar, Button, TextInput, IconButton, Portal, Card, Divider, FAB, Chip } from 'react-native-paper';
 import { getDb } from '../../core/database';
@@ -10,6 +10,8 @@ import * as ImagePicker from 'expo-image-picker';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 import SmartDropdown from '../../components/SmartDropdown';
+import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 
 const RELATIONSHIP_ITEMS = [
   { id: 'Padre', name: 'Padre' },
@@ -24,8 +26,8 @@ const RELATIONSHIP_ITEMS = [
   { id: 'Otro', name: 'Otro' },
 ];
 
-const CANVAS_WIDTH = 900;
-const CANVAS_HEIGHT = 650;
+const CANVAS_WIDTH = 1000;
+const CANVAS_HEIGHT = 800;
 const centerX = CANVAS_WIDTH / 2;
 const centerY = CANVAS_HEIGHT / 2;
 
@@ -170,105 +172,275 @@ export default function FamilyTreeScreen({ navigation }: any) {
     return people.find(p => p.id === focusedNodeId) || null;
   }, [people, focusedNodeId]);
 
-  const calculateYForAge = (node: any, baseLevelY: number) => {
-    if (!focusedNode) return baseLevelY;
-    const focusedYear = getBirthYear(focusedNode);
-    const nodeYear = getBirthYear(node);
-    
-    if (focusedYear === null || nodeYear === null) {
-      return baseLevelY;
+  // Gesture values
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const savedTranslateX = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
+
+  // Container layout measurements
+  const [containerWidth, setContainerWidth] = useState(360);
+  const [containerHeight, setContainerHeight] = useState(500);
+
+  const [decadesList, setDecadesList] = useState<string[]>([
+    '1920s', '1930s', '1940s', '1950s', '1960s', '1970s', '1980s', '1990s', '2000s', '2010s', '2020s'
+  ]);
+  const [isLoadingDecades, setIsLoadingDecades] = useState(false);
+
+  const handleDecadeScroll = (event: any) => {
+    const { contentOffset } = event.nativeEvent;
+    if (contentOffset.x <= 15 && !isLoadingDecades) {
+      setIsLoadingDecades(true);
+      setTimeout(() => {
+        setDecadesList((prev) => {
+          const oldestDecStr = prev[0];
+          const oldestDecVal = parseInt(oldestDecStr);
+          if (isNaN(oldestDecVal) || oldestDecVal <= 1700) {
+            setIsLoadingDecades(false);
+            return prev;
+          }
+          const olderDecades: string[] = [];
+          for (let i = 5; i >= 1; i--) {
+            olderDecades.push(`${oldestDecVal - i * 10}s`);
+          }
+          setIsLoadingDecades(false);
+          return [...olderDecades, ...prev];
+        });
+      }, 500);
     }
-    
-    const yearDiff = nodeYear - focusedYear; // older is negative, younger is positive
-    
-    // Scale factor: 3.5 pixels per year, bounded to +/- 115 pixels to keep visually balanced
-    let offset = yearDiff * 3.5;
-    if (offset > 115) offset = 115;
-    if (offset < -115) offset = -115;
-    
-    return baseLevelY + offset;
   };
 
-  // Connected nodes definitions
-  const father = useMemo(() => {
-    if (!focusedNode || !focusedNode.father_id) return null;
-    return people.find(p => p.id === focusedNode.father_id) || null;
-  }, [people, focusedNode]);
+  const handleContainerLayout = (event: any) => {
+    const { width, height } = event.nativeEvent.layout;
+    setContainerWidth(width);
+    setContainerHeight(height);
+  };
 
-  const mother = useMemo(() => {
-    if (!focusedNode || !focusedNode.mother_id) return null;
-    return people.find(p => p.id === focusedNode.mother_id) || null;
-  }, [people, focusedNode]);
+  // Animate and center camera on a node
+  const centerOnNode = (nodeX: number, nodeY: number) => {
+    translateX.value = withTiming(containerWidth / 2 - nodeX, { duration: 450 });
+    translateY.value = withTiming(containerHeight / 2 - nodeY, { duration: 450 });
+    scale.value = withTiming(1.0, { duration: 450 });
+    
+    savedTranslateX.value = containerWidth / 2 - nodeX;
+    savedTranslateY.value = containerHeight / 2 - nodeY;
+    savedScale.value = 1.0;
+  };
 
-  const siblings = useMemo(() => {
-    if (!focusedNode) return [];
-    return people.filter(p => 
-      p.id !== focusedNode.id && 
-      ((focusedNode.father_id && p.father_id === focusedNode.father_id) || 
-       (focusedNode.mother_id && p.mother_id === focusedNode.mother_id))
+  const handleZoomIn = () => {
+    const nextScale = Math.min(scale.value + 0.25, 3.0);
+    scale.value = withTiming(nextScale, { duration: 200 });
+    savedScale.value = nextScale;
+  };
+
+  const handleZoomOut = () => {
+    const nextScale = Math.max(scale.value - 0.25, 0.4);
+    scale.value = withTiming(nextScale, { duration: 200 });
+    savedScale.value = nextScale;
+  };
+
+  // Center on Yo initially when layout is ready
+  useEffect(() => {
+    if (myId && containerWidth && containerHeight) {
+      translateX.value = containerWidth / 2 - centerX;
+      translateY.value = containerHeight / 2 - centerY;
+      savedTranslateX.value = containerWidth / 2 - centerX;
+      savedTranslateY.value = containerHeight / 2 - centerY;
+    }
+  }, [myId, containerWidth, containerHeight]);
+
+  // Derived stable positions for all nodes
+  const nodePositions = useMemo(() => {
+    const coords: { [id: string]: { x: number, y: number, label: string } } = {};
+    if (!myId || people.length === 0) return coords;
+
+    const findPerson = (id: string) => people.find(p => p.id === id);
+
+    // 1. "Yo"
+    coords[myId] = { x: centerX, y: centerY, label: 'Yo' };
+
+    const yoNode = findPerson(myId);
+    const fatherId = yoNode?.father_id;
+    const motherId = yoNode?.mother_id;
+
+    // 2. Yo's parents
+    if (fatherId) {
+      coords[fatherId] = { x: centerX - 120, y: centerY - 140, label: 'Padre' };
+    }
+    if (motherId) {
+      coords[motherId] = { x: centerX + 120, y: centerY - 140, label: 'Madre' };
+    }
+
+    // 3. Yo's grandparents
+    if (fatherId) {
+      const fatherNode = findPerson(fatherId);
+      if (fatherNode?.father_id) {
+        coords[fatherNode.father_id] = { x: centerX - 180, y: centerY - 280, label: 'Abuelo' };
+      }
+      if (fatherNode?.mother_id) {
+        coords[fatherNode.mother_id] = { x: centerX - 60, y: centerY - 280, label: 'Abuela' };
+      }
+    }
+    if (motherId) {
+      const motherNode = findPerson(motherId);
+      if (motherNode?.father_id) {
+        coords[motherNode.father_id] = { x: centerX + 60, y: centerY - 280, label: 'Abuelo' };
+      }
+      if (motherNode?.mother_id) {
+        coords[motherNode.mother_id] = { x: centerX + 180, y: centerY - 280, label: 'Abuela' };
+      }
+    }
+
+    // 4. Yo's siblings
+    const siblingsList = people.filter(p =>
+      p.id !== myId &&
+      ((fatherId && p.father_id === fatherId) || (motherId && p.mother_id === motherId))
     );
-  }, [people, focusedNode]);
-
-  const children = useMemo(() => {
-    if (!focusedNode) return [];
-    return people.filter(p => p.father_id === focusedNode.id || p.mother_id === focusedNode.id);
-  }, [people, focusedNode]);
-
-  // Floating nodes (peers/friends/others not directly connected locally)
-  const floating = useMemo(() => {
-    if (!focusedNode) return [];
-    const directIds = new Set([
-      focusedNode.id,
-      focusedNode.father_id,
-      focusedNode.mother_id,
-      ...siblings.map(s => s.id),
-      ...children.map(c => c.id)
-    ].filter(Boolean));
-    return people.filter(p => !directIds.has(p.id));
-  }, [people, focusedNode, siblings, children]);
-
-  // Laying out children
-  const renderedChildren = useMemo(() => {
-    return children.map((child, index) => {
-      const spacing = 115;
-      const totalWidth = (children.length - 1) * spacing;
-      const startX = centerX - totalWidth / 2;
-      return {
-        node: child,
-        X: startX + index * spacing,
-        Y: calculateYForAge(child, centerY + 140)
-      };
-    });
-  }, [children, focusedNode]);
-
-  // Laying out siblings
-  const renderedSiblings = useMemo(() => {
-    return siblings.map((sib, index) => {
+    siblingsList.forEach((sib, index) => {
       const isLeft = index % 2 === 0;
       const step = Math.floor(index / 2) + 1;
-      return {
-        node: sib,
-        X: isLeft ? (centerX - 100 - step * 105) : (centerX + 100 + step * 105),
-        Y: calculateYForAge(sib, centerY)
-      };
+      const sibX = isLeft ? (centerX - 100 - step * 110) : (centerX + 100 + step * 110);
+      coords[sib.id] = { x: sibX, y: centerY, label: 'Hermano/a' };
     });
-  }, [siblings, focusedNode]);
 
-  // Laying out floating nodes
-  const renderedFloating = useMemo(() => {
-    return floating.map((f, index) => {
-      const isLeft = index % 2 === 0;
-      const columnX = isLeft ? 65 : CANVAS_WIDTH - 65;
-      // distribute them vertically based on relative index to prevent overlapping on same ages
-      const yOffset = (Math.floor(index / 2) * 90) % 240;
-      const baseY = centerY - 120 + yOffset;
-      return {
-        node: f,
-        X: columnX,
-        Y: calculateYForAge(f, baseY)
-      };
+    // 5. Yo's children & grandchildren
+    const childrenList = people.filter(p => p.father_id === myId || p.mother_id === myId);
+    childrenList.forEach((child, index) => {
+      const spacing = 120;
+      const totalWidth = (childrenList.length - 1) * spacing;
+      const startX = centerX - totalWidth / 2;
+      const childX = startX + index * spacing;
+      coords[child.id] = { x: childX, y: centerY + 140, label: 'Hijo/a' };
+
+      const grandchildrenList = people.filter(p => p.father_id === child.id || p.mother_id === child.id);
+      grandchildrenList.forEach((gc, gcIdx) => {
+        const gcSpacing = 100;
+        const gcTotalW = (grandchildrenList.length - 1) * gcSpacing;
+        const gcStartX = childX - gcTotalW / 2;
+        coords[gc.id] = { x: gcStartX + gcIdx * gcSpacing, y: centerY + 280, label: 'Nieto/a' };
+      });
     });
-  }, [floating, focusedNode]);
+
+    // 6. Floating / other nodes
+    const placedIds = new Set(Object.keys(coords));
+    const floatingList = people.filter(p => !placedIds.has(p.id));
+    floatingList.forEach((f, index) => {
+      const isLeft = index % 2 === 0;
+      const columnX = isLeft ? 80 : CANVAS_WIDTH - 80;
+      const yOffset = (Math.floor(index / 2) * 90) % 360;
+      const posY = centerY - 120 + yOffset;
+      coords[f.id] = { x: columnX, y: posY, label: JSON.parse(f.metadata || '{}').relationship || 'Contacto' };
+    });
+
+    return coords;
+  }, [people, myId]);
+
+  // Orthogonal connector line builder
+  const renderOrthogonalLine = (x1: number, y1: number, x2: number, y2: number, key: string, isDashed = false) => {
+    const midY = (y1 + y2) / 2;
+    const lines = [];
+    
+    // Vertical from (x1, y1) to (x1, midY)
+    lines.push(
+      <View
+        key={`${key}-v1`}
+        style={[
+          styles.connectorLine,
+          isDashed && styles.dashedConnector,
+          {
+            left: x1,
+            top: Math.min(y1, midY),
+            width: 2,
+            height: Math.abs(y1 - midY),
+          }
+        ]}
+      />
+    );
+    
+    // Horizontal from (x1, midY) to (x2, midY)
+    lines.push(
+      <View
+        key={`${key}-h`}
+        style={[
+          styles.connectorLine,
+          isDashed && styles.dashedConnector,
+          {
+            left: Math.min(x1, x2),
+            top: midY,
+            width: Math.abs(x1 - x2) + 2,
+            height: 2,
+          }
+        ]}
+      />
+    );
+    
+    // Vertical from (x2, midY) to (x2, y2)
+    lines.push(
+      <View
+        key={`${key}-v2`}
+        style={[
+          styles.connectorLine,
+          isDashed && styles.dashedConnector,
+          {
+            left: x2,
+            top: Math.min(midY, y2),
+            width: 2,
+            height: Math.abs(midY - y2),
+          }
+        ]}
+      />
+    );
+    return lines;
+  };
+
+  const renderAllLines = () => {
+    const lines: React.ReactNode[] = [];
+    let keyCount = 0;
+
+    // 1. Draw actual family lines
+    people.forEach((p) => {
+      const pPos = nodePositions[p.id];
+      if (!pPos) return;
+
+      if (p.father_id) {
+        const fPos = nodePositions[p.father_id];
+        if (fPos) {
+          lines.push(...renderOrthogonalLine(pPos.x, pPos.y, fPos.x, fPos.y, `line-father-${p.id}-${keyCount++}`));
+        }
+      }
+      if (p.mother_id) {
+        const mPos = nodePositions[p.mother_id];
+        if (mPos) {
+          lines.push(...renderOrthogonalLine(pPos.x, pPos.y, mPos.x, mPos.y, `line-mother-${p.id}-${keyCount++}`));
+        }
+      }
+    });
+
+    // 2. Draw lines to active "+" bubbles of the focused node
+    if (focusedNodeId) {
+      const p = people.find(x => x.id === focusedNodeId);
+      const pos = nodePositions[focusedNodeId];
+      if (p && pos) {
+        const isFloating = !['Yo', 'Padre', 'Madre', 'Hermano/a', 'Hijo/a', 'Abuelo', 'Abuela', 'Nieto/a'].includes(pos.label);
+        if (!isFloating) {
+          if (!p.father_id) {
+            lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x - 80, pos.y - 120, `line-add-father-${p.id}`, true));
+          }
+          if (!p.mother_id) {
+            lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x + 80, pos.y - 120, `line-add-mother-${p.id}`, true));
+          }
+          const hasChildren = people.some(x => x.father_id === p.id || x.mother_id === p.id);
+          if (!hasChildren) {
+            lines.push(...renderOrthogonalLine(pos.x, pos.y, pos.x, pos.y + 120, `line-add-child-${p.id}`, true));
+          }
+        }
+      }
+    }
+
+    return lines;
+  };
 
   const handleNodePress = (nodeId: string) => {
     if (focusedNodeId === nodeId) {
@@ -276,6 +448,10 @@ export default function FamilyTreeScreen({ navigation }: any) {
       navigation.navigate('EntityMemories', { entityId: nodeId });
     } else {
       setFocusedNodeId(nodeId);
+      const pos = nodePositions[nodeId];
+      if (pos) {
+        centerOnNode(pos.x, pos.y);
+      }
     }
   };
 
@@ -575,8 +751,50 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // Pre-fill fields if we have a direct tree link context
     if (preLink) {
-      if (preLink.role === 'child' && preLink.parentId) {
-        // Link to parent
+      if (preLink.childId) {
+        // We are adding a parent to preLink.childId
+        if (preLink.childId === myId) {
+          // Adding parent to myself (Yo)
+          setEditRelationship(preLink.role === 'father' ? 'Padre' : 'Madre');
+        } else {
+          // Find the child's position label to deduce grandparent or sibling
+          const childPos = nodePositions[preLink.childId];
+          if (childPos) {
+            if (childPos.label === 'Padre' || childPos.label === 'Madre') {
+              setEditRelationship(preLink.role === 'father' ? 'Abuelo' : 'Abuela');
+            } else if (childPos.label === 'Hermano/a') {
+              setEditRelationship(preLink.role === 'father' ? 'Padre' : 'Madre');
+            } else if (childPos.label === 'Hijo/a') {
+              setEditRelationship('Pareja');
+            } else {
+              setEditRelationship(preLink.role === 'father' ? 'Padre' : 'Madre');
+            }
+          } else {
+            setEditRelationship(preLink.role === 'father' ? 'Padre' : 'Madre');
+          }
+        }
+      } else if (preLink.role === 'child' && preLink.parentId) {
+        // We are adding a child to preLink.parentId
+        if (preLink.parentId === myId) {
+          setEditRelationship('Hijo/a');
+        } else {
+          const parentPos = nodePositions[preLink.parentId];
+          if (parentPos) {
+            if (parentPos.label === 'Padre' || parentPos.label === 'Madre') {
+              setEditRelationship('Hermano/a');
+            } else if (parentPos.label === 'Hermano/a') {
+              setEditRelationship('Sobrino/a');
+            } else if (parentPos.label === 'Hijo/a') {
+              setEditRelationship('Nieto/a');
+            } else {
+              setEditRelationship('Hijo/a');
+            }
+          } else {
+            setEditRelationship('Hijo/a');
+          }
+        }
+
+        // Set father/mother reference
         const parent = people.find(p => p.id === preLink.parentId);
         const parentMeta = parent?.metadata ? JSON.parse(parent.metadata) : {};
         const rel = (parentMeta.relationship || '').toLowerCase();
@@ -588,131 +806,8 @@ export default function FamilyTreeScreen({ navigation }: any) {
         }
       }
     }
-
     setModalVisible(true);
   };
-
-  // Rendering orthogonal connectors between parents and children
-  const renderLines = () => {
-    if (!focusedNode) return null;
-    const lines: React.ReactNode[] = [];
-    let keyCount = 0;
-
-    const fatherY = father ? calculateYForAge(father, centerY - 140) : centerY - 140;
-    const motherY = mother ? calculateYForAge(mother, centerY - 140) : centerY - 140;
-
-    const parentsMidY = centerY - 70;
-
-    // 1. Lines to parents
-    if (father || mother) {
-      lines.push(
-        <View
-          key={`child-up-${keyCount++}`}
-          style={[styles.connectorLine, { left: centerX, top: parentsMidY, width: 2, height: centerY - parentsMidY }]}
-        />
-      );
-      
-      const fx = centerX - 120;
-      const mx = centerX + 120;
-
-      if (father && mother) {
-        lines.push(
-          <View
-            key={`parents-bar-${keyCount++}`}
-            style={[styles.connectorLine, { left: fx, top: parentsMidY, width: mx - fx, height: 2 }]}
-          />
-        );
-        lines.push(
-          <View
-            key={`father-down-${keyCount++}`}
-            style={[styles.connectorLine, { left: fx, top: fatherY, width: 2, height: parentsMidY - fatherY }]}
-          />
-        );
-        lines.push(
-          <View
-            key={`mother-down-${keyCount++}`}
-            style={[styles.connectorLine, { left: mx, top: motherY, width: 2, height: parentsMidY - motherY }]}
-          />
-        );
-      } else if (father) {
-        lines.push(
-          <View
-            key={`father-bar-${keyCount++}`}
-            style={[styles.connectorLine, { left: fx, top: parentsMidY, width: centerX - fx, height: 2 }]}
-          />
-        );
-        lines.push(
-          <View
-            key={`father-down-${keyCount++}`}
-            style={[styles.connectorLine, { left: fx, top: fatherY, width: 2, height: parentsMidY - fatherY }]}
-          />
-        );
-      } else if (mother) {
-        lines.push(
-          <View
-            key={`mother-bar-${keyCount++}`}
-            style={[styles.connectorLine, { left: centerX, top: parentsMidY, width: mx - centerX, height: 2 }]}
-          />
-        );
-        lines.push(
-          <View
-            key={`mother-down-${keyCount++}`}
-            style={[styles.connectorLine, { left: mx, top: motherY, width: 2, height: parentsMidY - motherY }]}
-          />
-        );
-      }
-    }
-
-    // 2. Lines to children
-    if (renderedChildren.length > 0) {
-      const childrenMidY = centerY + 70;
-      
-      lines.push(
-        <View
-          key={`parent-down-${keyCount++}`}
-          style={[styles.connectorLine, { left: centerX, top: centerY, width: 2, height: childrenMidY - centerY }]}
-        />
-      );
-
-      const childXs = renderedChildren.map(c => c.X);
-      const minX = Math.min(...childXs, centerX);
-      const maxX = Math.max(...childXs, centerX);
-
-      lines.push(
-        <View
-          key={`children-bar-${keyCount++}`}
-          style={[styles.connectorLine, { left: minX, top: childrenMidY, width: maxX - minX + 2, height: 2 }]}
-        />
-      );
-
-      renderedChildren.forEach((child, idx) => {
-        lines.push(
-          <View
-            key={`child-line-${idx}-${keyCount++}`}
-            style={[styles.connectorLine, { left: child.X, top: childrenMidY, width: 2, height: child.Y - childrenMidY }]}
-        />
-      );
-    });
-  }
-
-  // 3. Lines to siblings
-  if (renderedSiblings.length > 0) {
-    renderedSiblings.forEach((sib, idx) => {
-      const leftX = Math.min(centerX, sib.X);
-      const width = Math.abs(centerX - sib.X);
-      lines.push(
-        <View
-          key={`sib-line-${idx}-${keyCount++}`}
-          style={[styles.connectorLine, { left: leftX, top: centerY, width: width, height: 2 }]}
-        />
-      );
-    });
-  }
-
-  return lines;
-};
-
-// Drawer / Search list filtration
 const filteredList = useMemo(() => {
   if (!searchQuery.trim()) return people;
   const q = searchQuery.toLowerCase().trim();
@@ -721,194 +816,191 @@ const filteredList = useMemo(() => {
   );
 }, [people, searchQuery]);
 
-return (
-  <View style={styles.container}>
-    <Appbar.Header style={styles.appbar}>
-      <IconButton icon="menu" iconColor="#6200ee" onPress={() => setSidebarOpen(true)} />
-      <Appbar.Content title="Red Social y Árbol" titleStyle={styles.headerTitle} />
-      {focusedNodeId !== myId && (
-        <Button mode="text" compact textColor="#6200ee" onPress={() => myId && setFocusedNodeId(myId)}>
-          Ver Mi Árbol (Yo)
-        </Button>
-      )}
-    </Appbar.Header>
+  const panGesture = Gesture.Pan()
+    .onUpdate((event) => {
+      translateX.value = savedTranslateX.value + event.translationX;
+      translateY.value = savedTranslateY.value + event.translationY;
+    })
+    .onEnd(() => {
+      savedTranslateX.value = translateX.value;
+      savedTranslateY.value = translateY.value;
+    });
 
-    {/* Modern Mind Map Canvas (Double Scrollable) */}
-    <ScrollView style={styles.canvasScroll} contentContainerStyle={styles.canvasVerticalContent}>
-      <ScrollView horizontal style={styles.canvasScroll} contentContainerStyle={styles.canvasHorizontalContent}>
-        <View style={styles.mapCanvas}>
-          
-          {/* Dotted Grid Background */}
-          <View style={styles.gridOverlay} />
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((event) => {
+      scale.value = Math.max(0.4, Math.min(3, savedScale.value * event.scale));
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+    });
 
-          {/* Connecting lines */}
-          {renderLines()}
+  const combinedGesture = Gesture.Simultaneous(panGesture, pinchGesture);
 
-          {/* FOCUSED NODE */}
-          {focusedNode && (
-            <View style={[styles.nodeWrapper, { left: centerX - 37.5, top: centerY - 37.5 }]}>
-              <TouchableOpacity 
-                activeOpacity={0.8} 
-                onPress={() => handleNodePress(focusedNode.id)}
-                style={[styles.nodeBubble, styles.focusedBubble]}
-              >
-                <Image 
-                  source={{ uri: JSON.parse(focusedNode.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + focusedNode.name }} 
-                  style={styles.nodeAvatar} 
-                />
-                {focusedNode.id === myId && <View style={styles.meBadge}><Text style={styles.meBadgeText}>Yo</Text></View>}
-              </TouchableOpacity>
-              <Text style={styles.nodeName} numberOfLines={1}>{focusedNode.name}</Text>
-              <Text style={styles.nodeSubtitle}>{JSON.parse(focusedNode.metadata || '{}').nickname || 'Principal'}</Text>
-            </View>
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [
+        { translateX: translateX.value },
+        { translateY: translateY.value },
+        { scale: scale.value }
+      ],
+    };
+  });
+
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={styles.container}>
+        <Appbar.Header style={styles.appbar}>
+          <IconButton icon="menu" iconColor="#6200ee" onPress={() => setSidebarOpen(true)} />
+          <Appbar.Content title="Red Social y Árbol" titleStyle={styles.headerTitle} />
+          {focusedNodeId !== myId && (
+            <Button mode="text" compact textColor="#6200ee" onPress={() => myId && setFocusedNodeId(myId)}>
+              Ver Mi Árbol (Yo)
+            </Button>
           )}
+        </Appbar.Header>
 
-          {/* FATHER NODE / PLACEHOLDER */}
-          {focusedNode && (
-            father ? (
-              <View style={[styles.nodeWrapper, { left: centerX - 120 - 37.5, top: calculateYForAge(father, centerY - 140) - 37.5 }]}>
-                <TouchableOpacity 
-                  activeOpacity={0.8} 
-                  onPress={() => handleNodePress(father.id)}
-                  style={styles.nodeBubble}
-                >
-                  <Image 
-                    source={{ uri: JSON.parse(father.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + father.name }} 
-                    style={styles.nodeAvatar} 
-                  />
-                </TouchableOpacity>
-                <Text style={styles.nodeName} numberOfLines={1}>{father.name}</Text>
-                <Text style={styles.nodeSubtitle}>Padre</Text>
-              </View>
-            ) : (
-              <View style={[styles.nodeWrapper, { left: centerX - 120 - 37.5, top: centerY - 140 - 37.5 }]}>
-                <TouchableOpacity 
-                  activeOpacity={0.8} 
-                  onPress={() => openCreateModal({ childId: focusedNode.id, role: 'father' })}
-                  style={styles.plusBubble}
-                >
-                  <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
-                </TouchableOpacity>
-                <Text style={styles.nodeName}>Asignar Padre</Text>
-              </View>
-            )
-          )}
+        {/* Modern Mind Map Canvas (2D Free Pan and Zoom) */}
+        <View style={styles.canvasContainer} onLayout={handleContainerLayout}>
+          <GestureDetector gesture={combinedGesture}>
+            <Animated.View style={[styles.mapCanvas, animatedStyle]}>
+              {/* Dotted Grid Background */}
+              <View style={styles.gridOverlay} />
 
-          {/* MOTHER NODE / PLACEHOLDER */}
-          {focusedNode && (
-            mother ? (
-              <View style={[styles.nodeWrapper, { left: centerX + 120 - 37.5, top: calculateYForAge(mother, centerY - 140) - 37.5 }]}>
-                <TouchableOpacity 
-                  activeOpacity={0.8} 
-                  onPress={() => handleNodePress(mother.id)}
-                  style={styles.nodeBubble}
-                >
-                  <Image 
-                    source={{ uri: JSON.parse(mother.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + mother.name }} 
-                    style={styles.nodeAvatar} 
-                  />
-                </TouchableOpacity>
-                <Text style={styles.nodeName} numberOfLines={1}>{mother.name}</Text>
-                <Text style={styles.nodeSubtitle}>Madre</Text>
-              </View>
-            ) : (
-              <View style={[styles.nodeWrapper, { left: centerX + 120 - 37.5, top: centerY - 140 - 37.5 }]}>
-                <TouchableOpacity 
-                  activeOpacity={0.8} 
-                  onPress={() => openCreateModal({ childId: focusedNode.id, role: 'mother' })}
-                  style={styles.plusBubble}
-                >
-                  <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
-                </TouchableOpacity>
-                <Text style={styles.nodeName}>Asignar Madre</Text>
-              </View>
-            )
-          )}
+              {/* Connecting lines */}
+              {renderAllLines()}
 
-          {/* SIBLINGS NODES */}
-          {renderedSiblings.map((sib, idx) => (
-            <View key={`sib-${sib.node.id}`} style={[styles.nodeWrapper, { left: sib.X - 37.5, top: sib.Y - 37.5 }]}>
-              <TouchableOpacity 
-                activeOpacity={0.8} 
-                onPress={() => handleNodePress(sib.node.id)}
-                style={styles.nodeBubble}
-              >
-                <Image 
-                  source={{ uri: JSON.parse(sib.node.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + sib.node.name }} 
-                  style={styles.nodeAvatar} 
-                />
-              </TouchableOpacity>
-              <Text style={styles.nodeName} numberOfLines={1}>{sib.node.name}</Text>
-              <Text style={styles.nodeSubtitle}>Hermano/a</Text>
-            </View>
-          ))}
+              {/* RENDER ALL PEOPLE IN FIXED COORDINATES */}
+              {people.map((person) => {
+                const pos = nodePositions[person.id];
+                if (!pos) return null;
+                const isFocused = focusedNodeId === person.id;
+                const meta = person.metadata ? JSON.parse(person.metadata) : {};
 
-          {/* CHILDREN NODES & PLACEHOLDER */}
-          {focusedNode && (
-            renderedChildren.length > 0 ? (
-              <>
-                {renderedChildren.map((child) => (
-                  <View key={`child-${child.node.id}`} style={[styles.nodeWrapper, { left: child.X - 37.5, top: child.Y - 37.5 }]}>
+                return (
+                  <View key={`node-${person.id}`} style={[styles.nodeWrapper, { left: pos.x - 37.5, top: pos.y - 37.5 }]}>
                     <TouchableOpacity 
                       activeOpacity={0.8} 
-                      onPress={() => handleNodePress(child.node.id)}
-                      style={styles.nodeBubble}
+                      onPress={() => handleNodePress(person.id)}
+                      style={[
+                        styles.nodeBubble,
+                        isFocused && styles.focusedBubble,
+                        pos.label === 'Yo' && styles.yoBubble,
+                        !['Yo', 'Padre', 'Madre', 'Hermano/a', 'Hijo/a', 'Abuelo', 'Abuela', 'Nieto/a'].includes(pos.label) && styles.floatingBubble
+                      ]}
                     >
                       <Image 
-                        source={{ uri: JSON.parse(child.node.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + child.node.name }} 
+                        source={{ uri: meta.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + person.name }} 
                         style={styles.nodeAvatar} 
                       />
+                      {person.id === myId && <View style={styles.meBadge}><Text style={styles.meBadgeText}>Yo</Text></View>}
                     </TouchableOpacity>
-                    <Text style style={styles.nodeName} numberOfLines={1}>{child.node.name}</Text>
-                    <Text style={styles.nodeSubtitle}>Hijo/a</Text>
+                    <Text style={styles.nodeName} numberOfLines={1}>{person.name}</Text>
+                    <Text style={styles.nodeSubtitle}>{meta.nickname || pos.label}</Text>
                   </View>
-                ))}
-                {/* Small add child connector bubble */}
-                <View style={[styles.nodeWrapper, { left: renderedChildren[renderedChildren.length - 1].X + 90 - 20, top: centerY + 140 - 20 }]}>
-                  <TouchableOpacity 
-                    activeOpacity={0.8} 
-                    onPress={() => openCreateModal({ parentId: focusedNode.id, role: 'child' })}
-                    style={styles.smallPlusBubble}
-                  >
-                    <IconButton icon="plus" size={14} iconColor="#ffffff" />
-                  </TouchableOpacity>
-                </View>
-              </>
-            ) : (
-              <View style={[styles.nodeWrapper, { left: centerX - 37.5, top: centerY + 140 - 37.5 }]}>
-                <TouchableOpacity 
-                  activeOpacity={0.8} 
-                  onPress={() => openCreateModal({ parentId: focusedNode.id, role: 'child' })}
-                  style={styles.plusBubble}
-                >
-                  <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
-                </TouchableOpacity>
-                <Text style={styles.nodeName}>Asignar Hijo/a</Text>
-              </View>
-            )
-          )}
+                );
+              })}
 
-          {/* FLOATING NODES (Peers / Friends) */}
-          {renderedFloating.map((f) => (
-            <View key={`float-${f.node.id}`} style={[styles.nodeWrapper, { left: f.X - 37.5, top: f.Y - 37.5 }]}>
-              <TouchableOpacity 
-                activeOpacity={0.8} 
-                onPress={() => handleNodePress(f.node.id)}
-                style={[styles.nodeBubble, styles.floatingBubble]}
-              >
-                <Image 
-                  source={{ uri: JSON.parse(f.node.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + f.node.name }} 
-                  style={styles.nodeAvatar} 
-                />
-              </TouchableOpacity>
-              <Text style={styles.nodeName} numberOfLines={1}>{f.node.name}</Text>
-              <Text style={styles.nodeSubtitle}>{JSON.parse(f.node.metadata || '{}').relationship || 'Contacto'}</Text>
-            </View>
-          ))}
+              {/* DYNAMIC ADD BRANCH (+) BUBBLES */}
+              {focusedNodeId && (() => {
+                const p = people.find(x => x.id === focusedNodeId);
+                const pos = nodePositions[focusedNodeId];
+                if (!p || !pos) return null;
 
+                const addButtons = [];
+                const isFloating = !['Yo', 'Padre', 'Madre', 'Hermano/a', 'Hijo/a', 'Abuelo', 'Abuela', 'Nieto/a'].includes(pos.label);
+                if (isFloating) return null;
+
+                if (!p.father_id) {
+                  addButtons.push(
+                    <View key="add-father" style={[styles.nodeWrapper, { left: pos.x - 80 - 37.5, top: pos.y - 120 - 37.5 }]}>
+                      <TouchableOpacity 
+                        activeOpacity={0.8} 
+                        onPress={() => openCreateModal({ childId: p.id, role: 'father' })}
+                        style={styles.plusBubble}
+                      >
+                        <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
+                      </TouchableOpacity>
+                      <Text style={styles.nodeName}>Asignar Padre</Text>
+                    </View>
+                  );
+                }
+
+                if (!p.mother_id) {
+                  addButtons.push(
+                    <View key="add-mother" style={[styles.nodeWrapper, { left: pos.x + 80 - 37.5, top: pos.y - 120 - 37.5 }]}>
+                      <TouchableOpacity 
+                        activeOpacity={0.8} 
+                        onPress={() => openCreateModal({ childId: p.id, role: 'mother' })}
+                        style={styles.plusBubble}
+                      >
+                        <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
+                      </TouchableOpacity>
+                      <Text style={styles.nodeName}>Asignar Madre</Text>
+                    </View>
+                  );
+                }
+
+                const hasChildren = people.some(x => x.father_id === p.id || x.mother_id === p.id);
+                if (!hasChildren) {
+                  addButtons.push(
+                    <View key="add-child" style={[styles.nodeWrapper, { left: pos.x - 37.5, top: pos.y + 120 - 37.5 }]}>
+                      <TouchableOpacity 
+                        activeOpacity={0.8} 
+                        onPress={() => openCreateModal({ parentId: p.id, role: 'child' })}
+                        style={styles.plusBubble}
+                      >
+                        <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
+                      </TouchableOpacity>
+                      <Text style={styles.nodeName}>Asignar Hijo/a</Text>
+                    </View>
+                  );
+                } else {
+                  const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
+                  const lastChild = nodeChildren[nodeChildren.length - 1];
+                  const lastChildPos = nodePositions[lastChild.id];
+                  if (lastChildPos) {
+                    addButtons.push(
+                      <View key="add-child-small" style={[styles.nodeWrapper, { left: lastChildPos.x + 90 - 20, top: lastChildPos.y - 20 }]}>
+                        <TouchableOpacity 
+                          activeOpacity={0.8} 
+                          onPress={() => openCreateModal({ parentId: p.id, role: 'child' })}
+                          style={styles.smallPlusBubble}
+                        >
+                          <IconButton icon="plus" size={14} iconColor="#ffffff" />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  }
+                }
+
+                return addButtons;
+              })()}
+
+            </Animated.View>
+          </GestureDetector>
+
+          {/* Floating Zoom Controls */}
+          <View style={styles.zoomControls}>
+            <IconButton
+              icon="plus"
+              mode="contained"
+              containerColor="#ffffff"
+              iconColor="#6200ee"
+              size={22}
+              onPress={handleZoomIn}
+              style={styles.zoomBtn}
+            />
+            <IconButton
+              icon="minus"
+              mode="contained"
+              containerColor="#ffffff"
+              iconColor="#6200ee"
+              size={22}
+              onPress={handleZoomOut}
+              style={styles.zoomBtn}
+            />
+          </View>
         </View>
-      </ScrollView>
-    </ScrollView>
 
     {/* Floating Bottom Panel for Selected / Focused Node Controls */}
     {focusedNode && (
@@ -1058,8 +1150,19 @@ return (
             />
 
             <Text style={styles.inputLabel}>O elegir década aproximada:</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-              {['1940s', '1950s', '1960s', '1970s', '1980s', '1990s', '2000s', '2010s', '2020s'].map((dec) => {
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.chipScroll}
+              onScroll={handleDecadeScroll}
+              scrollEventThrottle={16}
+            >
+              {isLoadingDecades && (
+                <View style={{ justifyContent: 'center', paddingHorizontal: 8 }}>
+                  <Text style={{ fontSize: 11, color: '#6c757d', fontStyle: 'italic' }}>Cargando...</Text>
+                </View>
+              )}
+              {decadesList.map((dec) => {
                 const isSelected = editDecade === dec;
                 return (
                   <Chip
@@ -1077,7 +1180,6 @@ return (
                 );
               })}
             </ScrollView>
-
             <View style={styles.dropdownWrap}>
               <SmartDropdown
                 label="Parentesco o Relación"
@@ -1092,40 +1194,7 @@ return (
               />
             </View>
 
-            <Divider style={styles.divider} />
-            <Text style={styles.sectionHeader}>Conexión Familiar Directa</Text>
 
-            {/* FATHER SELECTION */}
-            <View style={styles.dropdownWrap}>
-              <SmartDropdown
-                label="Asignar Padre"
-                value={editFatherId ? (people.find(p => p.id === editFatherId)?.name || '') : ''}
-                items={people
-                  .filter(p => p.id !== (selectedPerson?.id || '') && p.id !== myId)
-                  .map(p => ({ id: p.id, name: p.name }))}
-                onSelect={(item) => {
-                  setEditFatherId(item ? item.id : null);
-                }}
-                placeholder="Ninguno"
-                enablePlaces={false}
-              />
-            </View>
-
-            {/* MOTHER SELECTION */}
-            <View style={styles.dropdownWrap}>
-              <SmartDropdown
-                label="Asignar Madre"
-                value={editMotherId ? (people.find(p => p.id === editMotherId)?.name || '') : ''}
-                items={people
-                  .filter(p => p.id !== (selectedPerson?.id || '') && p.id !== myId)
-                  .map(p => ({ id: p.id, name: p.name }))}
-                onSelect={(item) => {
-                  setEditMotherId(item ? item.id : null);
-                }}
-                placeholder="Ninguno"
-                enablePlaces={false}
-              />
-            </View>
 
             <Divider style={styles.divider} />
             <Text style={styles.sectionHeader}>🔗 Vinculación con Mnemósine</Text>
@@ -1172,6 +1241,7 @@ return (
       </Modal>
     </Portal>
   </View>
+  </GestureHandlerRootView>
 );
 }
 
@@ -1191,14 +1261,10 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: '#212529',
   },
-  canvasScroll: {
+  canvasContainer: {
     flex: 1,
-  },
-  canvasVerticalContent: {
-    height: CANVAS_HEIGHT,
-  },
-  canvasHorizontalContent: {
-    width: CANVAS_WIDTH,
+    overflow: 'hidden',
+    position: 'relative',
   },
   mapCanvas: {
     width: CANVAS_WIDTH,
@@ -1223,6 +1289,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#7b1fa2',
     opacity: 0.35,
   },
+  dashedConnector: {
+    borderStyle: 'dashed',
+    borderColor: '#7b1fa2',
+    borderWidth: 1,
+    backgroundColor: 'transparent',
+  },
   nodeWrapper: {
     position: 'absolute',
     width: 75,
@@ -1243,6 +1315,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+  },
+  yoBubble: {
+    borderColor: '#6200ee',
+    borderWidth: 3,
   },
   focusedBubble: {
     borderColor: '#6200ee',
@@ -1276,6 +1352,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 2,
+  },
+  zoomControls: {
+    position: 'absolute',
+    right: 16,
+    bottom: 180,
+    flexDirection: 'column',
+  },
+  zoomBtn: {
+    marginVertical: 4,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3.84,
   },
   nodeAvatar: {
     width: '100%',
