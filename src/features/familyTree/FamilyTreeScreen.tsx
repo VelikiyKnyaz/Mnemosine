@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, FlatList, Image, Modal, Alert, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { Text, Appbar, Card, Button, TextInput, IconButton, FAB, Divider, Portal } from 'react-native-paper';
+import React, { useState, useEffect, useMemo } from 'react';
+import { View, StyleSheet, ScrollView, Image, Modal, Alert, TouchableOpacity } from 'react-native';
+import { Text, Appbar, Button, TextInput, IconButton, Portal, Card, Divider, FAB, Chip } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
 import { supabase } from '../../core/supabase';
@@ -24,16 +24,23 @@ const RELATIONSHIP_ITEMS = [
   { id: 'Otro', name: 'Otro' },
 ];
 
+const CANVAS_WIDTH = 900;
+const CANVAS_HEIGHT = 650;
+const centerX = CANVAS_WIDTH / 2;
+const centerY = CANVAS_HEIGHT / 2;
+
 export default function FamilyTreeScreen({ navigation }: any) {
   const [people, setPeople] = useState<any[]>([]);
   const isFocused = useIsFocused();
   const session = useAuthStore((state) => state.session);
   const myId = session?.user?.id;
 
-  // Search state
+  // Tree focus state
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+
+  // Search state & Sidebar Drawer
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResult, setSearchResult] = useState<any | null>(null);
-  const [searchLoading, setSearchLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Edit/Create Modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -43,21 +50,78 @@ export default function FamilyTreeScreen({ navigation }: any) {
   const [editRelationship, setEditRelationship] = useState('');
   const [editAvatarUrl, setEditAvatarUrl] = useState('');
   const [editUsername, setEditUsername] = useState('');
+  const [editBirthDate, setEditBirthDate] = useState('');
+  const [editDecade, setEditDecade] = useState('');
+  const [editFatherId, setEditFatherId] = useState<string | null>(null);
+  const [editMotherId, setEditMotherId] = useState<string | null>(null);
   const [isLinked, setIsLinked] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Connection mapping state for direct linking from tree '+' buttons
+  const [pendingLink, setPendingLink] = useState<{
+    childId?: string;
+    parentId?: string;
+    role: 'father' | 'mother' | 'child';
+  } | null>(null);
+
+  const ensureMeNode = async (db: any, currentUserId: string) => {
+    try {
+      const existingMe = await db.getFirstAsync(
+        "SELECT id FROM entities WHERE id = ? AND type = 'PERSON'",
+        currentUserId
+      );
+
+      if (!existingMe) {
+        const profile = await db.getFirstAsync("SELECT * FROM user_profile WHERE id = ?", currentUserId) || 
+                        await db.getFirstAsync("SELECT * FROM user_profile LIMIT 1");
+        
+        const myName = profile?.full_name || 'Yo';
+        const myAvatarUrl = profile?.avatar_url || '';
+        const myBirthDate = profile?.birth_date || '1995-01-01';
+
+        const meta = {
+          nickname: 'Yo',
+          relationship: 'Yo',
+          avatar_url: myAvatarUrl,
+          username: profile?.username || '',
+          user_id: currentUserId,
+          is_linked: true,
+          connection_status: 'ACCEPTED'
+        };
+
+        await db.runAsync(
+          "INSERT INTO entities (id, type, name, metadata, is_confirmed, birth_date) VALUES (?, 'PERSON', ?, ?, 1, ?)",
+          currentUserId,
+          myName,
+          JSON.stringify(meta),
+          myBirthDate
+        );
+        console.log(`[Tree] Created default (Yo) node for user ID ${currentUserId}`);
+      }
+    } catch (err) {
+      console.warn('[Tree] Error ensuring Yo node:', err);
+    }
+  };
 
   const loadPeople = async () => {
     try {
       const db = await getDb();
+      if (myId) {
+        await ensureMeNode(db, myId);
+      }
       const rows = await db.getAllAsync<any>(`
-        SELECT e.id, e.name, e.metadata, COUNT(me.memory_id) as mentions
+        SELECT e.id, e.name, e.metadata, e.father_id, e.mother_id, e.birth_date, COUNT(me.memory_id) as mentions
         FROM entities e
         LEFT JOIN memory_entities me ON e.id = me.entity_id
         WHERE e.type = 'PERSON'
         GROUP BY e.id
-        ORDER BY mentions DESC
       `);
       setPeople(rows);
+      
+      // Auto-focus on "Yo" initially
+      if (!focusedNodeId && myId) {
+        setFocusedNodeId(myId);
+      }
     } catch (err) {
       console.error(err);
     }
@@ -87,65 +151,132 @@ export default function FamilyTreeScreen({ navigation }: any) {
     }
   }, [isFocused, myId]);
 
-  const handleSearch = async () => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return;
-    setSearchLoading(true);
-    setSearchResult(null);
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, username, full_name, avatar_url')
-        .eq('username', q)
-        .maybeSingle();
-
-      if (error) {
-        console.warn('Error fetching profile:', error);
-        Alert.alert('Error', 'Hubo un error al realizar la búsqueda.');
-      } else if (data) {
-        // Verificar bloques mutuos
-        const { data: blockData } = await supabase
-          .from('blocks')
-          .select('id')
-          .or(`and(blocker_id.eq.${myId},blocked_id.eq.${data.id}),and(blocker_id.eq.${data.id},blocked_id.eq.${myId})`)
-          .maybeSingle();
-
-        if (!blockData) {
-          setSearchResult(data);
-        } else {
-          Alert.alert('No encontrado', 'No se encontró ningún usuario con ese nombre exacto.');
-        }
-      } else {
-        Alert.alert('No encontrado', 'No se encontró ningún usuario con ese nombre exacto.');
-      }
-    } catch (e) {
-      console.warn(e);
-    } finally {
-      setSearchLoading(false);
+  // Derived relative birth year calculations for vertical positions
+  const getBirthYear = (node: any) => {
+    if (!node) return null;
+    if (node.birth_date) {
+      const yr = parseInt(node.birth_date.substring(0, 4));
+      if (!isNaN(yr)) return yr;
     }
+    const meta = node.metadata ? JSON.parse(node.metadata) : {};
+    if (meta.birth_date) {
+      const yr = parseInt(meta.birth_date.substring(0, 4));
+      if (!isNaN(yr)) return yr;
+    }
+    return null;
   };
 
-  const openEditModal = (person: any) => {
-    setSelectedPerson(person);
-    const meta = person.metadata ? JSON.parse(person.metadata) : {};
-    setEditName(person.name);
-    setEditNickname(meta.nickname || '');
-    setEditRelationship(meta.relationship || '');
-    setEditAvatarUrl(meta.avatar_url || '');
-    setEditUsername(meta.username || '');
-    setIsLinked(!!meta.is_linked);
-    setModalVisible(true);
+  const focusedNode = useMemo(() => {
+    return people.find(p => p.id === focusedNodeId) || null;
+  }, [people, focusedNodeId]);
+
+  const calculateYForAge = (node: any, baseLevelY: number) => {
+    if (!focusedNode) return baseLevelY;
+    const focusedYear = getBirthYear(focusedNode);
+    const nodeYear = getBirthYear(node);
+    
+    if (focusedYear === null || nodeYear === null) {
+      return baseLevelY;
+    }
+    
+    const yearDiff = nodeYear - focusedYear; // older is negative, younger is positive
+    
+    // Scale factor: 3.5 pixels per year, bounded to +/- 115 pixels to keep visually balanced
+    let offset = yearDiff * 3.5;
+    if (offset > 115) offset = 115;
+    if (offset < -115) offset = -115;
+    
+    return baseLevelY + offset;
   };
 
-  const openCreateModal = () => {
-    setSelectedPerson(null);
-    setEditName('');
-    setEditNickname('');
-    setEditRelationship('');
-    setEditAvatarUrl('');
-    setEditUsername('');
-    setIsLinked(false);
-    setModalVisible(true);
+  // Connected nodes definitions
+  const father = useMemo(() => {
+    if (!focusedNode || !focusedNode.father_id) return null;
+    return people.find(p => p.id === focusedNode.father_id) || null;
+  }, [people, focusedNode]);
+
+  const mother = useMemo(() => {
+    if (!focusedNode || !focusedNode.mother_id) return null;
+    return people.find(p => p.id === focusedNode.mother_id) || null;
+  }, [people, focusedNode]);
+
+  const siblings = useMemo(() => {
+    if (!focusedNode) return [];
+    return people.filter(p => 
+      p.id !== focusedNode.id && 
+      ((focusedNode.father_id && p.father_id === focusedNode.father_id) || 
+       (focusedNode.mother_id && p.mother_id === focusedNode.mother_id))
+    );
+  }, [people, focusedNode]);
+
+  const children = useMemo(() => {
+    if (!focusedNode) return [];
+    return people.filter(p => p.father_id === focusedNode.id || p.mother_id === focusedNode.id);
+  }, [people, focusedNode]);
+
+  // Floating nodes (peers/friends/others not directly connected locally)
+  const floating = useMemo(() => {
+    if (!focusedNode) return [];
+    const directIds = new Set([
+      focusedNode.id,
+      focusedNode.father_id,
+      focusedNode.mother_id,
+      ...siblings.map(s => s.id),
+      ...children.map(c => c.id)
+    ].filter(Boolean));
+    return people.filter(p => !directIds.has(p.id));
+  }, [people, focusedNode, siblings, children]);
+
+  // Laying out children
+  const renderedChildren = useMemo(() => {
+    return children.map((child, index) => {
+      const spacing = 115;
+      const totalWidth = (children.length - 1) * spacing;
+      const startX = centerX - totalWidth / 2;
+      return {
+        node: child,
+        X: startX + index * spacing,
+        Y: calculateYForAge(child, centerY + 140)
+      };
+    });
+  }, [children, focusedNode]);
+
+  // Laying out siblings
+  const renderedSiblings = useMemo(() => {
+    return siblings.map((sib, index) => {
+      const isLeft = index % 2 === 0;
+      const step = Math.floor(index / 2) + 1;
+      return {
+        node: sib,
+        X: isLeft ? (centerX - 100 - step * 105) : (centerX + 100 + step * 105),
+        Y: calculateYForAge(sib, centerY)
+      };
+    });
+  }, [siblings, focusedNode]);
+
+  // Laying out floating nodes
+  const renderedFloating = useMemo(() => {
+    return floating.map((f, index) => {
+      const isLeft = index % 2 === 0;
+      const columnX = isLeft ? 65 : CANVAS_WIDTH - 65;
+      // distribute them vertically based on relative index to prevent overlapping on same ages
+      const yOffset = (Math.floor(index / 2) * 90) % 240;
+      const baseY = centerY - 120 + yOffset;
+      return {
+        node: f,
+        X: columnX,
+        Y: calculateYForAge(f, baseY)
+      };
+    });
+  }, [floating, focusedNode]);
+
+  const handleNodePress = (nodeId: string) => {
+    if (focusedNodeId === nodeId) {
+      // Second tap -> view memories
+      navigation.navigate('EntityMemories', { entityId: nodeId });
+    } else {
+      setFocusedNodeId(nodeId);
+    }
   };
 
   const pickImage = async () => {
@@ -184,10 +315,9 @@ export default function FamilyTreeScreen({ navigation }: any) {
       let finalAvatarUrl = editAvatarUrl;
       let finalUsername = editUsername.trim().toLowerCase();
       let linkStatus = isLinked;
-
-      // Si se ingresó un nombre de usuario de la App, validar y conectar
       let connStatus = selectedPerson ? JSON.parse(selectedPerson.metadata || '{}').connection_status : null;
 
+      // Handle User Linking/connections
       if (finalUsername && !isLinked) {
         const { data: targetProfile, error: profileErr } = await supabase
           .from('profiles')
@@ -196,7 +326,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
           .maybeSingle();
 
         if (profileErr || !targetProfile) {
-          Alert.alert('Error de Vinculación', 'No se encontró un usuario con ese nombre en la app. Verifica que esté bien escrito.');
+          Alert.alert('Error de Vinculación', 'No se encontró un usuario con ese nombre en la app.');
           setSaving(false);
           return;
         }
@@ -204,10 +334,9 @@ export default function FamilyTreeScreen({ navigation }: any) {
         targetUserId = targetProfile.id;
         finalName = targetProfile.full_name || finalName;
         finalAvatarUrl = targetProfile.avatar_url || finalAvatarUrl;
-        linkStatus = false; // Se inicia en false porque requiere la aceptación remota
+        linkStatus = false;
         connStatus = 'PENDING_SENT';
 
-        // Enviar solicitud de conexión en Supabase
         if (myId && myId !== targetUserId) {
           const { data: conn } = await supabase
             .from('connections')
@@ -221,9 +350,23 @@ export default function FamilyTreeScreen({ navigation }: any) {
               receiver_id: targetUserId,
               status: 'PENDING',
             });
-            Alert.alert('Solicitud Enviada', `Se ha enviado una solicitud de conexión a @${finalUsername}. Se actualizará su nombre y foto cuando acepte.`);
+            Alert.alert('Solicitud Enviada', `Solicitud de conexión enviada a @${finalUsername}.`);
           }
         }
+      }
+
+      const targetEntityId = selectedPerson ? selectedPerson.id : uuidv4();
+
+      let finalBirthDate = editBirthDate.trim();
+      let birthDecadeVal = editDecade;
+
+      if (!finalBirthDate && editDecade) {
+        const decadeNum = parseInt(editDecade.substring(0, 4));
+        if (!isNaN(decadeNum)) {
+          finalBirthDate = String(decadeNum + 5);
+        }
+      } else if (finalBirthDate) {
+        birthDecadeVal = '';
       }
 
       const meta = {
@@ -234,32 +377,78 @@ export default function FamilyTreeScreen({ navigation }: any) {
         user_id: targetUserId || (selectedPerson ? JSON.parse(selectedPerson.metadata || '{}').user_id : null),
         is_linked: linkStatus,
         connection_status: linkStatus ? 'ACCEPTED' : connStatus,
+        birth_decade: birthDecadeVal,
       };
 
       if (selectedPerson) {
-        // Actualizar
         await db.runAsync(
-          "UPDATE entities SET name = ?, metadata = ? WHERE id = ?",
+          "UPDATE entities SET name = ?, metadata = ?, father_id = ?, mother_id = ?, birth_date = ? WHERE id = ?",
           finalName,
           JSON.stringify(meta),
-          selectedPerson.id
+          editFatherId,
+          editMotherId,
+          finalBirthDate,
+          targetEntityId
         );
       } else {
-        // Crear nuevo
-        const newId = uuidv4();
         await db.runAsync(
-          "INSERT INTO entities (id, type, name, metadata, is_confirmed) VALUES (?, 'PERSON', ?, ?, 1)",
-          newId,
+          "INSERT INTO entities (id, type, name, metadata, father_id, mother_id, birth_date, is_confirmed) VALUES (?, 'PERSON', ?, ?, ?, ?, ?, 1)",
+          targetEntityId,
           finalName,
-          JSON.stringify(meta)
+          JSON.stringify(meta),
+          editFatherId,
+          editMotherId,
+          finalBirthDate
         );
+
+        // If we opened this modal via a '+' direct link bubble, link it up now
+        if (pendingLink) {
+          if (pendingLink.role === 'father') {
+            await db.runAsync("UPDATE entities SET father_id = ? WHERE id = ?", targetEntityId, pendingLink.childId);
+          } else if (pendingLink.role === 'mother') {
+            await db.runAsync("UPDATE entities SET mother_id = ? WHERE id = ?", targetEntityId, pendingLink.childId);
+          } else if (pendingLink.role === 'child' && pendingLink.parentId) {
+            // Check if parent is female or male to assign correctly
+            const parent = people.find(p => p.id === pendingLink.parentId);
+            const parentMeta = parent?.metadata ? JSON.parse(parent.metadata) : {};
+            const rel = (parentMeta.relationship || '').toLowerCase();
+            const isFemale = rel.includes('madre') || rel.includes('tía') || rel.includes('tia') || rel.includes('abuela') || rel.includes('prima') || rel.includes('hermana');
+            if (isFemale) {
+              await db.runAsync("UPDATE entities SET mother_id = ? WHERE id = ?", pendingLink.parentId, targetEntityId);
+            } else {
+              await db.runAsync("UPDATE entities SET father_id = ? WHERE id = ?", pendingLink.parentId, targetEntityId);
+            }
+          }
+        }
+      }
+
+      // Sync nicknames with entity_aliases
+      const newNicknames = editNickname.split(',').map(n => n.trim()).filter(Boolean);
+      const oldNicknameStr = selectedPerson ? (JSON.parse(selectedPerson.metadata || '{}').nickname || '') : '';
+      const oldNicknames = oldNicknameStr.split(',').map((n: string) => n.trim()).filter(Boolean);
+
+      const deletedNicknames = oldNicknames.filter(n => !newNicknames.some(newN => newN.toLowerCase() === n.toLowerCase()));
+      for (const alias of deletedNicknames) {
+        await db.runAsync("DELETE FROM entity_aliases WHERE entity_id = ? AND alias = ? COLLATE NOCASE", targetEntityId, alias);
+      }
+
+      const addedNicknames = newNicknames.filter(n => !oldNicknames.some(oldN => oldN.toLowerCase() === n.toLowerCase()));
+      for (const alias of addedNicknames) {
+        try {
+          const aliasId = uuidv4();
+          await db.runAsync("INSERT INTO entity_aliases (id, alias, entity_id) VALUES (?, ?, ?)", aliasId, alias, targetEntityId);
+        } catch (_) {}
       }
 
       setModalVisible(false);
+      setPendingLink(null);
       await loadPeople();
+      if (!selectedPerson) {
+        setFocusedNodeId(targetEntityId); // Auto-focus on new creation
+      }
     } catch (e) {
       console.error(e);
-      Alert.alert('Error', 'No se pudo guardar la información.');
+      Alert.alert('Error', 'No se pudo guardar.');
     } finally {
       setSaving(false);
     }
@@ -272,7 +461,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     Alert.alert(
       'Eliminar Persona',
-      '¿Estás seguro de que quieres eliminar a esta persona del árbol? Se conservarán sus recuerdos pero ya no aparecerá en la red.',
+      '¿Estás seguro de que quieres eliminar a esta persona del árbol?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -280,7 +469,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
           style: 'destructive',
           onPress: async () => {
             try {
-              // Si estaba vinculada, borrar la conexión en Supabase
               if (targetUserId && myId) {
                 await supabase
                   .from('connections')
@@ -289,9 +477,17 @@ export default function FamilyTreeScreen({ navigation }: any) {
               }
 
               const db = await getDb();
+              await db.runAsync("DELETE FROM entity_aliases WHERE entity_id = ?", id);
               await db.runAsync("DELETE FROM memory_entities WHERE entity_id = ?", id);
+              // Clean father/mother references pointing to this person
+              await db.runAsync("UPDATE entities SET father_id = NULL WHERE father_id = ?", id);
+              await db.runAsync("UPDATE entities SET mother_id = NULL WHERE mother_id = ?", id);
               await db.runAsync("DELETE FROM entities WHERE id = ?", id);
+              
               setModalVisible(false);
+              if (focusedNodeId === id) {
+                setFocusedNodeId(myId || null);
+              }
               await loadPeople();
             } catch (err) {
               console.error(err);
@@ -309,7 +505,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     Alert.alert(
       'Desvincular de la App',
-      '¿Estás seguro de que quieres desvincular a esta persona? Seguirá existiendo en tu árbol de forma local, pero perderán la conexión en la red social y su foto/nombre ya no se actualizarán automáticamente.',
+      '¿Estás seguro de que quieres desvincular a esta persona?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -328,13 +524,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
               meta.is_linked = false;
               meta.user_id = null;
               meta.username = '';
-              
-              await db.runAsync(
-                "UPDATE entities SET metadata = ? WHERE id = ?",
-                JSON.stringify(meta),
-                id
-              );
-
+              await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(meta), id);
               setModalVisible(false);
               await loadPeople();
             } catch (err) {
@@ -346,251 +536,649 @@ export default function FamilyTreeScreen({ navigation }: any) {
     );
   };
 
-  const renderPerson = ({ item }: { item: any }) => {
-    const meta = item.metadata ? JSON.parse(item.metadata) : {};
-    const nickname = meta.nickname;
-    const relation = meta.relationship;
-    const avatar = meta.avatar_url;
-    const displayName = nickname ? `${item.name} (${nickname})` : item.name;
-
-    return (
-      <Card style={styles.card} onPress={() => navigation.navigate('EntityMemories', { entityId: item.id })} mode="flat">
-        <View style={styles.cardInner}>
-          <Image
-            source={{
-              uri: avatar || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + item.name,
-            }}
-            style={styles.avatar}
-          />
-          <View style={styles.cardText}>
-            <Text style={styles.cardTitle}>{displayName}</Text>
-            <Text style={styles.cardSubtitle}>
-              {relation ? `${relation} • ` : ''}{item.mentions} recuerdos
-            </Text>
-            {meta.connection_status === 'ACCEPTED' || meta.is_linked ? (
-              <Text style={styles.linkedBadge}>👥 Conectado</Text>
-            ) : meta.connection_status === 'PENDING_SENT' ? (
-              <Text style={[styles.linkedBadge, { color: '#f57c00' }]}>📨 Solicitud enviada</Text>
-            ) : meta.connection_status === 'PENDING_RECEIVED' ? (
-              <Text style={[styles.linkedBadge, { color: '#0288d1' }]}>📥 Solicitud recibida</Text>
-            ) : null}
-          </View>
-          <IconButton
-            icon="pencil-outline"
-            size={20}
-            iconColor="#6200ee"
-            onPress={() => openEditModal(item)}
-            style={styles.editBtn}
-          />
-        </View>
-      </Card>
-    );
+  const openEditModal = (person: any) => {
+    setSelectedPerson(person);
+    const meta = person.metadata ? JSON.parse(person.metadata) : {};
+    setEditName(person.name);
+    setEditNickname(meta.nickname || '');
+    setEditRelationship(meta.relationship || '');
+    setEditAvatarUrl(meta.avatar_url || '');
+    setEditUsername(meta.username || '');
+    setEditFatherId(person.father_id || null);
+    setEditMotherId(person.mother_id || null);
+    setIsLinked(!!meta.is_linked);
+    
+    if (meta.birth_decade) {
+      setEditDecade(meta.birth_decade);
+      setEditBirthDate('');
+    } else {
+      setEditBirthDate(person.birth_date || '');
+      setEditDecade('');
+    }
+    
+    setModalVisible(true);
   };
 
-  return (
-    <View style={styles.container}>
-      <Appbar.Header style={styles.appbar}>
-        <Appbar.Content title="Red Social y Árbol" titleStyle={styles.headerTitle} />
-      </Appbar.Header>
+  const openCreateModal = (preLink: typeof pendingLink = null) => {
+    setPendingLink(preLink);
+    setSelectedPerson(null);
+    setEditName('');
+    setEditNickname('');
+    setEditRelationship('');
+    setEditAvatarUrl('');
+    setEditUsername('');
+    setEditBirthDate('');
+    setEditDecade('');
+    setEditFatherId(null);
+    setEditMotherId(null);
+    setIsLinked(false);
 
-      {/* Buscador Superior */}
-      <View style={styles.searchSection}>
-        <View style={styles.searchRow}>
-          <TextInput
-            placeholder="Buscar por @usuario exacto en Mnemósine"
-            value={searchQuery}
-            onChangeText={(text) => {
-              setSearchQuery(text);
-              if (!text.trim()) setSearchResult(null);
-            }}
-            style={styles.searchInput}
-            mode="outlined"
-            activeOutlineColor="#6200ee"
-            dense
-            onSubmitEditing={handleSearch}
-          />
-          <Button
-            mode="contained"
-            onPress={handleSearch}
-            loading={searchLoading}
-            disabled={searchLoading}
-            style={styles.searchBtn}
-            buttonColor="#6200ee"
-          >
-            Buscar
-          </Button>
-        </View>
-
-        {searchResult && (
-          <Card style={styles.searchResultCard} mode="outlined">
-            <TouchableOpacity
-              style={styles.resultItem}
-              onPress={() => {
-                setSearchResult(null);
-                setSearchQuery('');
-                navigation.navigate('MemberProfile', { targetUser: searchResult });
-              }}
-            >
-              <Image source={{ uri: searchResult.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=placeholder' }} style={styles.resultAvatar} />
-              <View style={styles.resultText}>
-                <Text style={styles.resultName}>{searchResult.full_name}</Text>
-                <Text style={styles.resultUsername}>@{searchResult.username}</Text>
-              </View>
-              <IconButton icon="chevron-right" size={24} iconColor="#6200ee" />
-            </TouchableOpacity>
-          </Card>
-        )}
-      </View>
-
-      <FlatList
-        data={people}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        renderItem={renderPerson}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <IconButton icon="account-group-outline" size={64} iconColor="#aaa" />
-            <Text variant="titleMedium" style={styles.emptyTitle}>Árbol Relacional Vacío</Text>
-            <Text style={styles.emptySubtitle}>
-              La IA agregará personas al procesar tus historias de audio, o puedes añadirlas tú manualmente usando el botón de abajo.
-            </Text>
-          </View>
+    // Pre-fill fields if we have a direct tree link context
+    if (preLink) {
+      if (preLink.role === 'child' && preLink.parentId) {
+        // Link to parent
+        const parent = people.find(p => p.id === preLink.parentId);
+        const parentMeta = parent?.metadata ? JSON.parse(parent.metadata) : {};
+        const rel = (parentMeta.relationship || '').toLowerCase();
+        const isFemale = rel.includes('madre') || rel.includes('tía') || rel.includes('tia') || rel.includes('abuela') || rel.includes('prima') || rel.includes('hermana') || rel.includes('mujer');
+        if (isFemale) {
+          setEditMotherId(preLink.parentId);
+        } else {
+          setEditFatherId(preLink.parentId);
         }
-      />
+      }
+    }
 
-      <FAB
-        icon="plus"
-        style={styles.fab}
-        color="#ffffff"
-        onPress={openCreateModal}
-      />
+    setModalVisible(true);
+  };
 
-      {/* Edit/Create Portal Modal */}
-      <Portal>
-        <Modal
-          visible={modalVisible}
-          onDismiss={() => setModalVisible(false)}
-          animationType="slide"
-          transparent={true}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Appbar.Header style={styles.modalHeader}>
-                <Appbar.BackAction onPress={() => setModalVisible(false)} />
-                <Appbar.Content title={selectedPerson ? "Editar Persona" : "Agregar Persona"} titleStyle={styles.modalTitle} />
-                {selectedPerson && (
-                  <Appbar.Action icon="trash-can-outline" color="#d32f2f" onPress={() => handleDelete(selectedPerson.id)} />
-                )}
-              </Appbar.Header>
+  // Rendering orthogonal connectors between parents and children
+  const renderLines = () => {
+    if (!focusedNode) return null;
+    const lines: React.ReactNode[] = [];
+    let keyCount = 0;
 
-              <ScrollView contentContainerStyle={styles.modalScroll}>
-                <View style={styles.avatarUploadContainer}>
-                  <TouchableOpacity onPress={pickImage} disabled={isLinked} style={styles.avatarPicker}>
-                    <Image
-                      source={{
-                        uri: editAvatarUrl || 'https://api.dicebear.com/7.x/adventurer/png?seed=avatar',
-                      }}
-                      style={[styles.largeAvatar, isLinked && { opacity: 0.7 }]}
-                    />
-                    {!isLinked && (
-                      <View style={styles.cameraIconBadge}>
-                        <IconButton icon="camera" size={16} iconColor="#ffffff" />
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                  {isLinked && (
-                    <Text style={styles.linkedText}>Sincronizado con el usuario remoto</Text>
-                  )}
-                </View>
+    const fatherY = father ? calculateYForAge(father, centerY - 140) : centerY - 140;
+    const motherY = mother ? calculateYForAge(mother, centerY - 140) : centerY - 140;
 
-                <TextInput
-                  label="Nombre Completo"
-                  value={editName}
-                  onChangeText={setEditName}
-                  style={styles.input}
-                  mode="outlined"
-                  activeOutlineColor="#6200ee"
-                  disabled={isLinked || saving}
-                />
+    const parentsMidY = centerY - 70;
 
-                <TextInput
-                  label="Apodo"
-                  value={editNickname}
-                  onChangeText={setEditNickname}
-                  style={styles.input}
-                  mode="outlined"
-                  activeOutlineColor="#6200ee"
-                  disabled={saving}
-                />
+    // 1. Lines to parents
+    if (father || mother) {
+      lines.push(
+        <View
+          key={`child-up-${keyCount++}`}
+          style={[styles.connectorLine, { left: centerX, top: parentsMidY, width: 2, height: centerY - parentsMidY }]}
+        />
+      );
+      
+      const fx = centerX - 120;
+      const mx = centerX + 120;
 
-                <View style={styles.dropdownWrap}>
-                  <SmartDropdown
-                    label="Parentesco o Relación"
-                    value={editRelationship}
-                    items={RELATIONSHIP_ITEMS}
-                    onSelect={(item) => {
-                      if (item) setEditRelationship(item.name);
-                    }}
-                    onCreateNew={(name) => setEditRelationship(name)}
-                    placeholder="Selecciona relación"
-                    enablePlaces={false}
-                  />
-                </View>
+      if (father && mother) {
+        lines.push(
+          <View
+            key={`parents-bar-${keyCount++}`}
+            style={[styles.connectorLine, { left: fx, top: parentsMidY, width: mx - fx, height: 2 }]}
+          />
+        );
+        lines.push(
+          <View
+            key={`father-down-${keyCount++}`}
+            style={[styles.connectorLine, { left: fx, top: fatherY, width: 2, height: parentsMidY - fatherY }]}
+          />
+        );
+        lines.push(
+          <View
+            key={`mother-down-${keyCount++}`}
+            style={[styles.connectorLine, { left: mx, top: motherY, width: 2, height: parentsMidY - motherY }]}
+          />
+        );
+      } else if (father) {
+        lines.push(
+          <View
+            key={`father-bar-${keyCount++}`}
+            style={[styles.connectorLine, { left: fx, top: parentsMidY, width: centerX - fx, height: 2 }]}
+          />
+        );
+        lines.push(
+          <View
+            key={`father-down-${keyCount++}`}
+            style={[styles.connectorLine, { left: fx, top: fatherY, width: 2, height: parentsMidY - fatherY }]}
+          />
+        );
+      } else if (mother) {
+        lines.push(
+          <View
+            key={`mother-bar-${keyCount++}`}
+            style={[styles.connectorLine, { left: centerX, top: parentsMidY, width: mx - centerX, height: 2 }]}
+          />
+        );
+        lines.push(
+          <View
+            key={`mother-down-${keyCount++}`}
+            style={[styles.connectorLine, { left: mx, top: motherY, width: 2, height: parentsMidY - motherY }]}
+          />
+        );
+      }
+    }
 
-                <Divider style={styles.divider} />
+    // 2. Lines to children
+    if (renderedChildren.length > 0) {
+      const childrenMidY = centerY + 70;
+      
+      lines.push(
+        <View
+          key={`parent-down-${keyCount++}`}
+          style={[styles.connectorLine, { left: centerX, top: centerY, width: 2, height: childrenMidY - centerY }]}
+        />
+      );
 
-                <Text style={styles.sectionHeader}>🔗 Vinculación con Mnemósine</Text>
-                <Text style={styles.hintText}>
-                  Si esta persona también usa la app, coloca su nombre de usuario. Importaremos su foto y nombre real, y le enviaremos una solicitud de conexión.
-                </Text>
+      const childXs = renderedChildren.map(c => c.X);
+      const minX = Math.min(...childXs, centerX);
+      const maxX = Math.max(...childXs, centerX);
 
-                <TextInput
-                  label="Nombre de Usuario de la App (@)"
-                  value={editUsername}
-                  onChangeText={setEditUsername}
-                  style={styles.input}
-                  mode="outlined"
-                  activeOutlineColor="#6200ee"
-                  autoCapitalize="none"
-                  disabled={isLinked || saving}
-                  placeholder="Ej: sofiagomez"
-                />
+      lines.push(
+        <View
+          key={`children-bar-${keyCount++}`}
+          style={[styles.connectorLine, { left: minX, top: childrenMidY, width: maxX - minX + 2, height: 2 }]}
+        />
+      );
 
-                {isLinked && selectedPerson && (
-                  <Button
-                    mode="outlined"
-                    onPress={() => handleUnlink(selectedPerson.id)}
-                    style={{ borderColor: '#d32f2f', marginBottom: 12, borderRadius: 8 }}
-                    textColor="#d32f2f"
-                    disabled={saving}
-                  >
-                    Desvincular de la App
-                  </Button>
-                )}
+      renderedChildren.forEach((child, idx) => {
+        lines.push(
+          <View
+            key={`child-line-${idx}-${keyCount++}`}
+            style={[styles.connectorLine, { left: child.X, top: childrenMidY, width: 2, height: child.Y - childrenMidY }]}
+        />
+      );
+    });
+  }
 
-                <Button
-                  mode="contained"
-                  onPress={handleSave}
-                  style={styles.saveBtn}
-                  buttonColor="#6200ee"
-                  loading={saving}
-                  disabled={saving}
-                >
-                  Guardar Cambios
-                </Button>
-              </ScrollView>
-            </View>
-          </View>
-        </Modal>
-      </Portal>
-    </View>
+  // 3. Lines to siblings
+  if (renderedSiblings.length > 0) {
+    renderedSiblings.forEach((sib, idx) => {
+      const leftX = Math.min(centerX, sib.X);
+      const width = Math.abs(centerX - sib.X);
+      lines.push(
+        <View
+          key={`sib-line-${idx}-${keyCount++}`}
+          style={[styles.connectorLine, { left: leftX, top: centerY, width: width, height: 2 }]}
+        />
+      );
+    });
+  }
+
+  return lines;
+};
+
+// Drawer / Search list filtration
+const filteredList = useMemo(() => {
+  if (!searchQuery.trim()) return people;
+  const q = searchQuery.toLowerCase().trim();
+  return people.filter(p => p.name.toLowerCase().includes(q) || 
+    (p.metadata && JSON.parse(p.metadata).nickname?.toLowerCase().includes(q))
   );
+}, [people, searchQuery]);
+
+return (
+  <View style={styles.container}>
+    <Appbar.Header style={styles.appbar}>
+      <IconButton icon="menu" iconColor="#6200ee" onPress={() => setSidebarOpen(true)} />
+      <Appbar.Content title="Red Social y Árbol" titleStyle={styles.headerTitle} />
+      {focusedNodeId !== myId && (
+        <Button mode="text" compact textColor="#6200ee" onPress={() => myId && setFocusedNodeId(myId)}>
+          Ver Mi Árbol (Yo)
+        </Button>
+      )}
+    </Appbar.Header>
+
+    {/* Modern Mind Map Canvas (Double Scrollable) */}
+    <ScrollView style={styles.canvasScroll} contentContainerStyle={styles.canvasVerticalContent}>
+      <ScrollView horizontal style={styles.canvasScroll} contentContainerStyle={styles.canvasHorizontalContent}>
+        <View style={styles.mapCanvas}>
+          
+          {/* Dotted Grid Background */}
+          <View style={styles.gridOverlay} />
+
+          {/* Connecting lines */}
+          {renderLines()}
+
+          {/* FOCUSED NODE */}
+          {focusedNode && (
+            <View style={[styles.nodeWrapper, { left: centerX - 37.5, top: centerY - 37.5 }]}>
+              <TouchableOpacity 
+                activeOpacity={0.8} 
+                onPress={() => handleNodePress(focusedNode.id)}
+                style={[styles.nodeBubble, styles.focusedBubble]}
+              >
+                <Image 
+                  source={{ uri: JSON.parse(focusedNode.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + focusedNode.name }} 
+                  style={styles.nodeAvatar} 
+                />
+                {focusedNode.id === myId && <View style={styles.meBadge}><Text style={styles.meBadgeText}>Yo</Text></View>}
+              </TouchableOpacity>
+              <Text style={styles.nodeName} numberOfLines={1}>{focusedNode.name}</Text>
+              <Text style={styles.nodeSubtitle}>{JSON.parse(focusedNode.metadata || '{}').nickname || 'Principal'}</Text>
+            </View>
+          )}
+
+          {/* FATHER NODE / PLACEHOLDER */}
+          {focusedNode && (
+            father ? (
+              <View style={[styles.nodeWrapper, { left: centerX - 120 - 37.5, top: calculateYForAge(father, centerY - 140) - 37.5 }]}>
+                <TouchableOpacity 
+                  activeOpacity={0.8} 
+                  onPress={() => handleNodePress(father.id)}
+                  style={styles.nodeBubble}
+                >
+                  <Image 
+                    source={{ uri: JSON.parse(father.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + father.name }} 
+                    style={styles.nodeAvatar} 
+                  />
+                </TouchableOpacity>
+                <Text style={styles.nodeName} numberOfLines={1}>{father.name}</Text>
+                <Text style={styles.nodeSubtitle}>Padre</Text>
+              </View>
+            ) : (
+              <View style={[styles.nodeWrapper, { left: centerX - 120 - 37.5, top: centerY - 140 - 37.5 }]}>
+                <TouchableOpacity 
+                  activeOpacity={0.8} 
+                  onPress={() => openCreateModal({ childId: focusedNode.id, role: 'father' })}
+                  style={styles.plusBubble}
+                >
+                  <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
+                </TouchableOpacity>
+                <Text style={styles.nodeName}>Asignar Padre</Text>
+              </View>
+            )
+          )}
+
+          {/* MOTHER NODE / PLACEHOLDER */}
+          {focusedNode && (
+            mother ? (
+              <View style={[styles.nodeWrapper, { left: centerX + 120 - 37.5, top: calculateYForAge(mother, centerY - 140) - 37.5 }]}>
+                <TouchableOpacity 
+                  activeOpacity={0.8} 
+                  onPress={() => handleNodePress(mother.id)}
+                  style={styles.nodeBubble}
+                >
+                  <Image 
+                    source={{ uri: JSON.parse(mother.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + mother.name }} 
+                    style={styles.nodeAvatar} 
+                  />
+                </TouchableOpacity>
+                <Text style={styles.nodeName} numberOfLines={1}>{mother.name}</Text>
+                <Text style={styles.nodeSubtitle}>Madre</Text>
+              </View>
+            ) : (
+              <View style={[styles.nodeWrapper, { left: centerX + 120 - 37.5, top: centerY - 140 - 37.5 }]}>
+                <TouchableOpacity 
+                  activeOpacity={0.8} 
+                  onPress={() => openCreateModal({ childId: focusedNode.id, role: 'mother' })}
+                  style={styles.plusBubble}
+                >
+                  <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
+                </TouchableOpacity>
+                <Text style={styles.nodeName}>Asignar Madre</Text>
+              </View>
+            )
+          )}
+
+          {/* SIBLINGS NODES */}
+          {renderedSiblings.map((sib, idx) => (
+            <View key={`sib-${sib.node.id}`} style={[styles.nodeWrapper, { left: sib.X - 37.5, top: sib.Y - 37.5 }]}>
+              <TouchableOpacity 
+                activeOpacity={0.8} 
+                onPress={() => handleNodePress(sib.node.id)}
+                style={styles.nodeBubble}
+              >
+                <Image 
+                  source={{ uri: JSON.parse(sib.node.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + sib.node.name }} 
+                  style={styles.nodeAvatar} 
+                />
+              </TouchableOpacity>
+              <Text style={styles.nodeName} numberOfLines={1}>{sib.node.name}</Text>
+              <Text style={styles.nodeSubtitle}>Hermano/a</Text>
+            </View>
+          ))}
+
+          {/* CHILDREN NODES & PLACEHOLDER */}
+          {focusedNode && (
+            renderedChildren.length > 0 ? (
+              <>
+                {renderedChildren.map((child) => (
+                  <View key={`child-${child.node.id}`} style={[styles.nodeWrapper, { left: child.X - 37.5, top: child.Y - 37.5 }]}>
+                    <TouchableOpacity 
+                      activeOpacity={0.8} 
+                      onPress={() => handleNodePress(child.node.id)}
+                      style={styles.nodeBubble}
+                    >
+                      <Image 
+                        source={{ uri: JSON.parse(child.node.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + child.node.name }} 
+                        style={styles.nodeAvatar} 
+                      />
+                    </TouchableOpacity>
+                    <Text style style={styles.nodeName} numberOfLines={1}>{child.node.name}</Text>
+                    <Text style={styles.nodeSubtitle}>Hijo/a</Text>
+                  </View>
+                ))}
+                {/* Small add child connector bubble */}
+                <View style={[styles.nodeWrapper, { left: renderedChildren[renderedChildren.length - 1].X + 90 - 20, top: centerY + 140 - 20 }]}>
+                  <TouchableOpacity 
+                    activeOpacity={0.8} 
+                    onPress={() => openCreateModal({ parentId: focusedNode.id, role: 'child' })}
+                    style={styles.smallPlusBubble}
+                  >
+                    <IconButton icon="plus" size={14} iconColor="#ffffff" />
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <View style={[styles.nodeWrapper, { left: centerX - 37.5, top: centerY + 140 - 37.5 }]}>
+                <TouchableOpacity 
+                  activeOpacity={0.8} 
+                  onPress={() => openCreateModal({ parentId: focusedNode.id, role: 'child' })}
+                  style={styles.plusBubble}
+                >
+                  <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
+                </TouchableOpacity>
+                <Text style={styles.nodeName}>Asignar Hijo/a</Text>
+              </View>
+            )
+          )}
+
+          {/* FLOATING NODES (Peers / Friends) */}
+          {renderedFloating.map((f) => (
+            <View key={`float-${f.node.id}`} style={[styles.nodeWrapper, { left: f.X - 37.5, top: f.Y - 37.5 }]}>
+              <TouchableOpacity 
+                activeOpacity={0.8} 
+                onPress={() => handleNodePress(f.node.id)}
+                style={[styles.nodeBubble, styles.floatingBubble]}
+              >
+                <Image 
+                  source={{ uri: JSON.parse(f.node.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + f.node.name }} 
+                  style={styles.nodeAvatar} 
+                />
+              </TouchableOpacity>
+              <Text style={styles.nodeName} numberOfLines={1}>{f.node.name}</Text>
+              <Text style={styles.nodeSubtitle}>{JSON.parse(f.node.metadata || '{}').relationship || 'Contacto'}</Text>
+            </View>
+          ))}
+
+        </View>
+      </ScrollView>
+    </ScrollView>
+
+    {/* Floating Bottom Panel for Selected / Focused Node Controls */}
+    {focusedNode && (
+      <Card style={styles.controlPanel} mode="elevated">
+        <View style={styles.panelRow}>
+          <Image 
+            source={{ uri: JSON.parse(focusedNode.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + focusedNode.name }} 
+            style={styles.panelAvatar} 
+          />
+          <View style={styles.panelTextWrap}>
+            <Text style={styles.panelTitle}>{focusedNode.name}</Text>
+            <Text style={styles.panelSubtitle}>{focusedNode.mentions} recuerdos • {focusedNode.birth_date ? `Nac: ${focusedNode.birth_date.substring(0, 4)}` : 'Sin año'}</Text>
+          </View>
+          <View style={styles.panelActions}>
+            <Button 
+              mode="contained" 
+              buttonColor="#6200ee" 
+              compact
+              style={styles.actionBtn}
+              onPress={() => navigation.navigate('EntityMemories', { entityId: focusedNode.id })}
+            >
+              Recuerdos
+            </Button>
+            <IconButton icon="pencil-outline" size={20} iconColor="#6200ee" onPress={() => openEditModal(focusedNode)} />
+          </View>
+        </View>
+      </Card>
+    )}
+
+    {/* Floating Action Button for freeform creations */}
+    <FAB
+      icon="account-plus-outline"
+      style={styles.fab}
+      color="#ffffff"
+      onPress={() => openCreateModal(null)}
+      label="Nuevo"
+    />
+
+    {/* Sidebar Contacts List Overlay / Drawer */}
+    <Portal>
+      <Modal visible={sidebarOpen} onDismiss={() => setSidebarOpen(false)} contentContainerStyle={styles.sidebarContent}>
+        <Appbar.Header style={styles.sidebarHeader} elevation={0}>
+          <Appbar.Content title="Todos los Miembros" titleStyle={styles.sidebarTitle} />
+          <IconButton icon="close" onPress={() => setSidebarOpen(false)} />
+        </Appbar.Header>
+        
+        <TextInput
+          placeholder="Buscar por nombre o apodo..."
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          mode="outlined"
+          activeOutlineColor="#6200ee"
+          dense
+          style={styles.sidebarSearch}
+          left={<TextInput.Icon icon="magnify" />}
+        />
+        
+        <ScrollView contentContainerStyle={styles.sidebarList}>
+          {filteredList.map((p) => {
+            const meta = p.metadata ? JSON.parse(p.metadata) : {};
+            return (
+              <TouchableOpacity 
+                key={`list-item-${p.id}`} 
+                style={[styles.sidebarItem, focusedNodeId === p.id && styles.sidebarItemFocused]}
+                onPress={() => {
+                  setFocusedNodeId(p.id);
+                  setSidebarOpen(false);
+                }}
+              >
+                <Image source={{ uri: meta.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + p.name }} style={styles.sidebarAvatar} />
+                <View style={styles.sidebarItemText}>
+                  <Text style={styles.sidebarItemName}>{p.name} {meta.nickname ? `(${meta.nickname})` : ''}</Text>
+                  <Text style={styles.sidebarItemRel}>{meta.relationship || 'Contacto'}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </Modal>
+    </Portal>
+
+    {/* Creation & Editing Portal Modal */}
+    <Portal>
+      <Modal visible={modalVisible} onDismiss={() => setModalVisible(false)} contentContainerStyle={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <Appbar.Header style={styles.modalHeader}>
+            <Appbar.Content title={selectedPerson ? "Editar Perfil" : "Añadir al Árbol / Red"} titleStyle={styles.modalTitle} />
+            <IconButton icon="close" disabled={saving} onPress={() => setModalVisible(false)} />
+            {selectedPerson && selectedPerson.id !== myId && (
+              <IconButton icon="delete-outline" iconColor="#d32f2f" disabled={saving} onPress={() => handleDelete(selectedPerson.id)} />
+            )}
+          </Appbar.Header>
+
+          <ScrollView contentContainerStyle={styles.modalScroll}>
+            <View style={styles.avatarUploadContainer}>
+              <TouchableOpacity onPress={pickImage} disabled={isLinked || saving} style={styles.avatarPicker}>
+                <Image
+                  source={{ uri: editAvatarUrl || 'https://api.dicebear.com/7.x/adventurer/png?seed=avatar' }}
+                  style={[styles.largeAvatar, isLinked && { opacity: 0.7 }]}
+                />
+                {!isLinked && (
+                  <View style={styles.cameraIconBadge}>
+                    <IconButton icon="camera" size={16} iconColor="#ffffff" />
+                  </View>
+                )}
+              </TouchableOpacity>
+              {isLinked && (
+                <Text style={styles.linkedText}>Sincronizado con el usuario remoto</Text>
+              )}
+            </View>
+
+            <TextInput
+              label="Nombre Completo"
+              value={editName}
+              onChangeText={setEditName}
+              style={styles.input}
+              mode="outlined"
+              activeOutlineColor="#6200ee"
+              disabled={isLinked || saving}
+            />
+
+            <TextInput
+              label="Apodos (Separar por comas)"
+              value={editNickname}
+              onChangeText={setEditNickname}
+              style={styles.input}
+              mode="outlined"
+              activeOutlineColor="#6200ee"
+              disabled={saving}
+              placeholder="Ej: Beto, Rober, Robertito"
+            />
+
+            <TextInput
+              label="Año de Nacimiento (AAAA)"
+              value={editBirthDate}
+              onChangeText={(text) => {
+                setEditBirthDate(text);
+                if (text) setEditDecade('');
+              }}
+              style={styles.input}
+              mode="outlined"
+              activeOutlineColor="#6200ee"
+              disabled={saving}
+              placeholder="Ej: 1995"
+              keyboardType="numeric"
+              maxLength={4}
+            />
+
+            <Text style={styles.inputLabel}>O elegir década aproximada:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+              {['1940s', '1950s', '1960s', '1970s', '1980s', '1990s', '2000s', '2010s', '2020s'].map((dec) => {
+                const isSelected = editDecade === dec;
+                return (
+                  <Chip
+                    key={dec}
+                    selected={isSelected}
+                    onPress={() => {
+                      setEditDecade(isSelected ? '' : dec);
+                      setEditBirthDate('');
+                    }}
+                    style={[styles.decadeChip, isSelected && styles.decadeChipSelected]}
+                    textStyle={[styles.decadeChipText, isSelected && styles.decadeChipTextSelected]}
+                  >
+                    {dec}
+                  </Chip>
+                );
+              })}
+            </ScrollView>
+
+            <View style={styles.dropdownWrap}>
+              <SmartDropdown
+                label="Parentesco o Relación"
+                value={editRelationship}
+                items={RELATIONSHIP_ITEMS}
+                onSelect={(item) => {
+                  if (item) setEditRelationship(item.name);
+                }}
+                onCreateNew={(name) => setEditRelationship(name)}
+                placeholder="Selecciona relación"
+                enablePlaces={false}
+              />
+            </View>
+
+            <Divider style={styles.divider} />
+            <Text style={styles.sectionHeader}>Conexión Familiar Directa</Text>
+
+            {/* FATHER SELECTION */}
+            <View style={styles.dropdownWrap}>
+              <SmartDropdown
+                label="Asignar Padre"
+                value={editFatherId ? (people.find(p => p.id === editFatherId)?.name || '') : ''}
+                items={people
+                  .filter(p => p.id !== (selectedPerson?.id || '') && p.id !== myId)
+                  .map(p => ({ id: p.id, name: p.name }))}
+                onSelect={(item) => {
+                  setEditFatherId(item ? item.id : null);
+                }}
+                placeholder="Ninguno"
+                enablePlaces={false}
+              />
+            </View>
+
+            {/* MOTHER SELECTION */}
+            <View style={styles.dropdownWrap}>
+              <SmartDropdown
+                label="Asignar Madre"
+                value={editMotherId ? (people.find(p => p.id === editMotherId)?.name || '') : ''}
+                items={people
+                  .filter(p => p.id !== (selectedPerson?.id || '') && p.id !== myId)
+                  .map(p => ({ id: p.id, name: p.name }))}
+                onSelect={(item) => {
+                  setEditMotherId(item ? item.id : null);
+                }}
+                placeholder="Ninguno"
+                enablePlaces={false}
+              />
+            </View>
+
+            <Divider style={styles.divider} />
+            <Text style={styles.sectionHeader}>🔗 Vinculación con Mnemósine</Text>
+            <Text style={styles.hintText}>
+              Si esta persona usa la app, coloca su nombre de usuario para vincular su cuenta.
+            </Text>
+
+            <TextInput
+              label="Nombre de Usuario de la App (@)"
+              value={editUsername}
+              onChangeText={setEditUsername}
+              style={styles.input}
+              mode="outlined"
+              activeOutlineColor="#6200ee"
+              autoCapitalize="none"
+              disabled={isLinked || saving}
+              placeholder="Ej: sofiagomez"
+            />
+
+            {isLinked && selectedPerson && (
+              <Button
+                mode="outlined"
+                onPress={() => handleUnlink(selectedPerson.id)}
+                style={{ borderColor: '#d32f2f', marginBottom: 12, borderRadius: 8 }}
+                color="#d32f2f"
+                disabled={saving}
+              >
+                Desvincular de la App
+              </Button>
+            )}
+
+            <Button
+              mode="contained"
+              onPress={handleSave}
+              style={styles.saveBtn}
+              color="#6200ee"
+              loading={saving}
+              disabled={saving}
+            >
+              Guardar Cambios
+            </Button>
+          </ScrollView>
+        </View>
+      </Modal>
+    </Portal>
+  </View>
+);
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#f6f7fb',
   },
   appbar: {
     backgroundColor: '#ffffff',
@@ -600,125 +1188,235 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontWeight: 'bold',
+    fontSize: 18,
+    color: '#212529',
   },
-  searchSection: {
-    padding: 16,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e9ecef',
+  canvasScroll: {
+    flex: 1,
   },
-  searchRow: {
-    flexDirection: 'row',
+  canvasVerticalContent: {
+    height: CANVAS_HEIGHT,
+  },
+  canvasHorizontalContent: {
+    width: CANVAS_WIDTH,
+  },
+  mapCanvas: {
+    width: CANVAS_WIDTH,
+    height: CANVAS_HEIGHT,
+    position: 'relative',
+    backgroundColor: '#fcfdff',
+  },
+  gridOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    opacity: 0.05,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#212529',
+    borderStyle: 'dashed',
+  },
+  connectorLine: {
+    position: 'absolute',
+    backgroundColor: '#7b1fa2',
+    opacity: 0.35,
+  },
+  nodeWrapper: {
+    position: 'absolute',
+    width: 75,
     alignItems: 'center',
   },
-  searchInput: {
-    flex: 1,
-    marginRight: 10,
+  nodeBubble: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    borderWidth: 3,
+    borderColor: '#ffffff',
     backgroundColor: '#ffffff',
-  },
-  searchBtn: {
-    borderRadius: 8,
-    height: 48,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3.84,
+    alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  searchResultCard: {
-    marginTop: 12,
+  focusedBubble: {
     borderColor: '#6200ee',
-    backgroundColor: '#f6f0ff',
+    borderWidth: 4,
+    elevation: 8,
+    shadowColor: '#6200ee',
+    shadowOpacity: 0.4,
+    shadowRadius: 5.46,
+  },
+  floatingBubble: {
+    borderColor: '#ff4081',
+    borderWidth: 2.5,
+  },
+  plusBubble: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    borderWidth: 2,
+    borderColor: '#7b1fa2',
+    borderStyle: 'dashed',
+    backgroundColor: '#f3e5f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 1,
+  },
+  smallPlusBubble: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#7b1fa2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  nodeAvatar: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 35,
+  },
+  meBadge: {
+    position: 'absolute',
+    bottom: 0,
+    backgroundColor: '#6200ee',
+    paddingHorizontal: 8,
+    paddingVertical: 1,
     borderRadius: 10,
   },
-  resultItem: {
+  meBadgeText: {
+    fontSize: 9,
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
+  nodeName: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#212529',
+    textAlign: 'center',
+    marginTop: 6,
+    width: 100,
+  },
+  nodeSubtitle: {
+    fontSize: 9,
+    color: '#6c757d',
+    textAlign: 'center',
+  },
+  // Floating bottom control panel
+  controlPanel: {
+    position: 'absolute',
+    bottom: 16,
+    left: 16,
+    right: 16,
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4.65,
+  },
+  panelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
   },
-  resultAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#ffffff',
+  panelAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     marginRight: 12,
   },
-  resultText: {
+  panelTextWrap: {
     flex: 1,
   },
-  resultName: {
+  panelTitle: {
+    fontSize: 15,
     fontWeight: 'bold',
     color: '#212529',
   },
-  resultUsername: {
-    color: '#868e96',
+  panelSubtitle: {
     fontSize: 12,
+    color: '#6c757d',
   },
-  list: {
-    padding: 16,
-    paddingBottom: 80,
-  },
-  card: {
-    marginBottom: 12,
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e9ecef',
-  },
-  cardInner: {
+  panelActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
   },
-  avatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    marginRight: 14,
-    backgroundColor: '#f1f3f9',
-  },
-  cardText: {
-    flex: 1,
-  },
-  cardTitle: {
-    fontWeight: 'bold',
-    fontSize: 15,
-    color: '#212529',
-  },
-  cardSubtitle: {
-    color: '#868e96',
-    fontSize: 13,
-    marginTop: 2,
-  },
-  linkedBadge: {
-    fontSize: 11,
-    color: '#2e7d32',
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  editBtn: {
-    margin: 0,
-  },
-  empty: {
-    padding: 32,
-    alignItems: 'center',
-  },
-  emptyTitle: {
-    fontWeight: 'bold',
-    color: '#495057',
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  emptySubtitle: {
-    textAlign: 'center',
-    color: '#868e96',
-    lineHeight: 20,
+  actionBtn: {
+    borderRadius: 10,
   },
   fab: {
     position: 'absolute',
     margin: 16,
     right: 0,
-    bottom: 0,
+    bottom: 90, // Positioned above the bottom card panel
     backgroundColor: '#6200ee',
     borderRadius: 28,
   },
-  // Modal styles
+  // Sidebar contacts list styles
+  sidebarContent: {
+    backgroundColor: '#ffffff',
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: '80%',
+    maxWidth: 320,
+    height: '100%',
+    elevation: 16,
+  },
+  sidebarHeader: {
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f3f5',
+  },
+  sidebarTitle: {
+    fontWeight: 'bold',
+  },
+  sidebarSearch: {
+    margin: 12,
+    backgroundColor: '#ffffff',
+  },
+  sidebarList: {
+    paddingBottom: 24,
+  },
+  sidebarItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f8f9fa',
+  },
+  sidebarItemFocused: {
+    backgroundColor: '#f3e5f5',
+  },
+  sidebarAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 12,
+  },
+  sidebarItemText: {
+    flex: 1,
+  },
+  sidebarItemName: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#212529',
+  },
+  sidebarItemRel: {
+    fontSize: 11,
+    color: '#6c757d',
+  },
+  // Modal layout
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -728,7 +1426,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    height: '90%',
+    height: '92%',
   },
   modalHeader: {
     backgroundColor: '#ffffff',
@@ -787,7 +1485,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: 'bold',
     color: '#212529',
-    marginBottom: 4,
+    marginBottom: 12,
   },
   hintText: {
     fontSize: 12,
@@ -800,5 +1498,33 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 10,
     marginBottom: 40,
+  },
+  inputLabel: {
+    fontSize: 12,
+    color: '#6c757d',
+    marginBottom: 8,
+  },
+  chipScroll: {
+    flexDirection: 'row',
+    marginBottom: 16,
+  },
+  decadeChip: {
+    marginRight: 8,
+    backgroundColor: '#f1f3f9',
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  decadeChipSelected: {
+    backgroundColor: '#e8def8',
+  },
+  decadeChipText: {
+    fontSize: 12,
+    color: '#49454f',
+  },
+  decadeChipTextSelected: {
+    color: '#1d192b',
+    fontWeight: 'bold',
   },
 });

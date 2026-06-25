@@ -506,53 +506,76 @@ export const processPendingMemories = async () => {
               const cleanExtracted = entity.name.replace(/^@/, '').toLowerCase().trim();
 
               if (cleanExtracted) {
+                const extWords = cleanExtracted.split(/\s+/);
                 let bestMatch: any = null;
+                let highestScore = 0;
 
                 for (const p of allPeople) {
                   const pName = p.name ? p.name.toLowerCase().trim() : '';
-                  let pUsername = '';
                   let pFullName = '';
+                  let pNicknames: string[] = [];
 
                   if (p.metadata) {
                     try {
                       const meta = JSON.parse(p.metadata);
-                      pUsername = meta.username ? meta.username.toLowerCase().trim() : '';
                       pFullName = meta.full_name ? meta.full_name.toLowerCase().trim() : '';
+                      const nicknameStr = meta.nickname ? meta.nickname.toLowerCase().trim() : '';
+                      pNicknames = nicknameStr.split(',').map((n: string) => n.trim()).filter(Boolean);
                     } catch (_) {}
                   }
 
-                  // Check 2.1: Match with username
-                  if (pUsername && (cleanExtracted === pUsername || pUsername === cleanExtracted)) {
-                    bestMatch = p;
-                    break;
-                  }
-
-                  // Check 2.2: Match with full name (exact)
-                  if (pFullName && (cleanExtracted === pFullName || pFullName === cleanExtracted)) {
-                    bestMatch = p;
-                    break;
-                  }
-
-                  // Check 2.3: Word match in name (e.g. "Alberto" matches "Tío Alberto" or "Alberto Gómez")
-                  const extWords = cleanExtracted.split(/\s+/);
                   const pWords = pName.split(/\s+/);
                   const fullWords = pFullName.split(/\s+/);
 
-                  if (extWords.length === 1) {
-                    if (pWords.includes(cleanExtracted) || (pFullName && fullWords.includes(cleanExtracted))) {
-                      bestMatch = p;
+                  let score = 0;
+                  for (const word of extWords) {
+                    let matchedWord = false;
+                    // Check primary name match
+                    if (pWords.includes(word)) {
+                      score += 1.5;
+                      matchedWord = true;
                     }
-                  } else {
-                    const allInName = extWords.every(w => pWords.includes(w));
-                    const allInFullName = pFullName && extWords.every(w => fullWords.includes(w));
-                    if (allInName || allInFullName) {
+                    // Check nickname match
+                    if (pNicknames.includes(word)) {
+                      score += 1.5;
+                      matchedWord = true;
+                    }
+                    // Check full name match (if not already counted)
+                    if (!matchedWord && fullWords.includes(word)) {
+                      score += 1.2;
+                    }
+                  }
+
+                  if (score > 0) {
+                    if (score > highestScore) {
+                      highestScore = score;
                       bestMatch = p;
+                    } else if (score === highestScore) {
+                      // Tie-breaker: prefer candidate with actual name match over nickname-only match
+                      const currentHasNameMatch = extWords.some(w => pWords.includes(w) || fullWords.includes(w));
+                      const bestHasNameMatch = bestMatch ? extWords.some(w => {
+                        const bmName = bestMatch.name ? bestMatch.name.toLowerCase().trim() : '';
+                        const bmWords = bmName.split(/\s+/);
+                        let bmFullName = '';
+                        if (bestMatch.metadata) {
+                          try {
+                            const meta = JSON.parse(bestMatch.metadata);
+                            bmFullName = meta.full_name ? meta.full_name.toLowerCase().trim() : '';
+                          } catch (_) {}
+                        }
+                        const bmFullWords = bmFullName.split(/\s+/);
+                        return bmWords.includes(w) || bmFullWords.includes(w);
+                      }) : false;
+
+                      if (currentHasNameMatch && !bestHasNameMatch) {
+                        bestMatch = p;
+                      }
                     }
                   }
                 }
 
                 if (bestMatch) {
-                  console.log(`[Smart Matching] Matched extracted name "${entity.name}" to existing person "${bestMatch.name}" (ID: ${bestMatch.id})`);
+                  console.log(`[Smart Matching] Matched extracted name "${entity.name}" to existing person "${bestMatch.name}" (ID: ${bestMatch.id}) with score ${highestScore}`);
                   existingEntity = { id: bestMatch.id, latitude: null };
                 }
               }

@@ -85,6 +85,9 @@ export const initDatabase = async () => {
       name TEXT NOT NULL,
       metadata TEXT,
       parent_id TEXT,
+      father_id TEXT,
+      mother_id TEXT,
+      birth_date TEXT,
       latitude REAL,
       longitude REAL,
       is_confirmed INTEGER DEFAULT 1,
@@ -152,7 +155,10 @@ export const initDatabase = async () => {
       status TEXT NOT NULL,
       created_at INTEGER DEFAULT (cast(strftime('%s','now') as int)),
       PRIMARY KEY (memory_id, friend_user_id)
-    );`
+    );`,
+    'ALTER TABLE entities ADD COLUMN father_id TEXT;',
+    'ALTER TABLE entities ADD COLUMN mother_id TEXT;',
+    'ALTER TABLE entities ADD COLUMN birth_date TEXT;'
   ];
 
   for (const query of migrations) {
