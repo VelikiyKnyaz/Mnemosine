@@ -4,6 +4,7 @@ import { Text, Card, TextInput, Button, IconButton } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { Audio } from 'expo-av';
 import MemoryEditModal from '../../components/MemoryEditModal';
+import { useAuthStore } from '../../core/store';
 
 interface EntityMemoriesViewProps {
   entityId: string;
@@ -13,6 +14,10 @@ interface EntityMemoriesViewProps {
 
 const MemoryCardItem = ({ item, onEdit, onPlay, playingId, onLongPress, expanded, onToggleExpand, styles }: any) => {
   const [entities, setEntities] = useState<any[]>([]);
+  const session = useAuthStore((state) => state.session);
+  const myId = session?.user?.id;
+
+  const isShared = item.author_id && item.author_id !== myId;
 
   useEffect(() => {
     if (expanded) {
@@ -41,9 +46,20 @@ const MemoryCardItem = ({ item, onEdit, onPlay, playingId, onLongPress, expanded
                 ))}
               </View>
             )}
-            <Button mode="outlined" onPress={() => onEdit(item)} compact icon="pencil" style={{ alignSelf: 'flex-start' }}>
-              Editar Recuerdo
-            </Button>
+            {isShared ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Button mode="outlined" onPress={() => onEdit(item)} compact icon="eye-outline" style={{ alignSelf: 'flex-start' }}>
+                  Ver Detalles / Quitar
+                </Button>
+                <Text style={{ fontSize: 11, color: '#868e96', fontStyle: 'italic' }}>
+                  (Sólo lectura)
+                </Text>
+              </View>
+            ) : (
+              <Button mode="outlined" onPress={() => onEdit(item)} compact icon="pencil" style={{ alignSelf: 'flex-start' }}>
+                Editar Recuerdo
+              </Button>
+            )}
           </View>
         )}
       </Card.Content>
@@ -96,6 +112,8 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
           m.raw_text, 
           m.audio_uri, 
           m.fuzzy_date, 
+          m.author_id,
+          m.author_username,
           d.id as entity_id, 
           d.name as entity_name
         FROM descendants d

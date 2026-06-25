@@ -185,9 +185,14 @@ const MemoryCardItem = ({ item, onEdit, expanded, onToggleExpand, styles }: any)
             </View>
           )}
           {isShared ? (
-            <Text style={{ fontSize: 12, color: '#868e96', fontStyle: 'italic', marginTop: 4 }}>
-              Recuerdo compartido (sólo lectura)
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Button mode="outlined" onPress={() => onEdit(item)} compact icon="eye-outline" style={{ alignSelf: 'flex-start' }}>
+                Ver Detalles / Quitar
+              </Button>
+              <Text style={{ fontSize: 11, color: '#868e96', fontStyle: 'italic' }}>
+                (Sólo lectura)
+              </Text>
+            </View>
           ) : (
             <Button mode="outlined" onPress={() => onEdit(item)} compact icon="pencil" style={{ alignSelf: 'flex-start' }}>
               Editar Recuerdo

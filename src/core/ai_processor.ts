@@ -483,14 +483,81 @@ export const processPendingMemories = async () => {
             entity.name
           ) as {entity_id: string} | null;
 
-          const existingEntity = aliasMatch
-            ? await db.getFirstAsync(
-                "SELECT id, latitude FROM entities WHERE id = ?", aliasMatch.entity_id
-              ) as {id: string, latitude: number | null} | null
-            : await db.getFirstAsync(
-                "SELECT id, latitude FROM entities WHERE name = ? AND type = ? COLLATE NOCASE",
-                entity.name, entity.type
-              ) as {id: string, latitude: number | null} | null;
+          let existingEntity = null;
+          
+          if (aliasMatch) {
+            existingEntity = await db.getFirstAsync(
+              "SELECT id, latitude FROM entities WHERE id = ?", aliasMatch.entity_id
+            ) as {id: string, latitude: number | null} | null;
+          } else {
+            // 1. Try exact name match first
+            existingEntity = await db.getFirstAsync(
+              "SELECT id, latitude FROM entities WHERE name = ? AND type = ? COLLATE NOCASE",
+              entity.name, entity.type
+            ) as {id: string, latitude: number | null} | null;
+
+            // 2. If it is a PERSON and not found by exact name, perform smart/fuzzy matching
+            if (!existingEntity && entity.type === 'PERSON') {
+              const allPeople = await db.getAllAsync(
+                "SELECT id, name, metadata FROM entities WHERE type = 'PERSON'"
+              ) as { id: string, name: string, metadata: string | null }[];
+
+              // Clean up the extracted name (remove @ if present)
+              const cleanExtracted = entity.name.replace(/^@/, '').toLowerCase().trim();
+
+              if (cleanExtracted) {
+                let bestMatch: any = null;
+
+                for (const p of allPeople) {
+                  const pName = p.name ? p.name.toLowerCase().trim() : '';
+                  let pUsername = '';
+                  let pFullName = '';
+
+                  if (p.metadata) {
+                    try {
+                      const meta = JSON.parse(p.metadata);
+                      pUsername = meta.username ? meta.username.toLowerCase().trim() : '';
+                      pFullName = meta.full_name ? meta.full_name.toLowerCase().trim() : '';
+                    } catch (_) {}
+                  }
+
+                  // Check 2.1: Match with username
+                  if (pUsername && (cleanExtracted === pUsername || pUsername === cleanExtracted)) {
+                    bestMatch = p;
+                    break;
+                  }
+
+                  // Check 2.2: Match with full name (exact)
+                  if (pFullName && (cleanExtracted === pFullName || pFullName === cleanExtracted)) {
+                    bestMatch = p;
+                    break;
+                  }
+
+                  // Check 2.3: Word match in name (e.g. "Alberto" matches "Tío Alberto" or "Alberto Gómez")
+                  const extWords = cleanExtracted.split(/\s+/);
+                  const pWords = pName.split(/\s+/);
+                  const fullWords = pFullName.split(/\s+/);
+
+                  if (extWords.length === 1) {
+                    if (pWords.includes(cleanExtracted) || (pFullName && fullWords.includes(cleanExtracted))) {
+                      bestMatch = p;
+                    }
+                  } else {
+                    const allInName = extWords.every(w => pWords.includes(w));
+                    const allInFullName = pFullName && extWords.every(w => fullWords.includes(w));
+                    if (allInName || allInFullName) {
+                      bestMatch = p;
+                    }
+                  }
+                }
+
+                if (bestMatch) {
+                  console.log(`[Smart Matching] Matched extracted name "${entity.name}" to existing person "${bestMatch.name}" (ID: ${bestMatch.id})`);
+                  existingEntity = { id: bestMatch.id, latitude: null };
+                }
+              }
+            }
+          }
 
           const entityId = existingEntity?.id || uuidv4();
 

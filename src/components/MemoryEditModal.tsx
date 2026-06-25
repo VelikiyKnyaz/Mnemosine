@@ -7,6 +7,7 @@ import TimeCascadeSelector from './TimeCascadeSelector';
 import CustomTimePeriodsScreen from '../features/profile/CustomTimePeriodsScreen';
 import EmotionCascadeSelector from './EmotionCascadeSelector';
 import { shareMemoryWithFriend, checkAndCreateShareTasks } from '../core/socialSync';
+import { useAuthStore } from '../core/store';
 
 interface MemoryEditModalProps {
   memory: any; // Requires at least { id/memory_id, raw_text }
@@ -16,6 +17,10 @@ interface MemoryEditModalProps {
 }
 
 export default function MemoryEditModal({ memory, visible, onClose, onSaved }: MemoryEditModalProps) {
+  const session = useAuthStore((state) => state.session);
+  const myId = session?.user?.id;
+  const isShared = !!(memory && memory.author_id && memory.author_id !== myId);
+
   const [editTitle, setEditTitle] = useState('');
   const [editText, setEditText] = useState('');
   const [entities, setEntities] = useState<any[]>([]);
@@ -357,7 +362,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
         : `${memoryDates.start_date} a ${memoryDates.end_date}`;
       items = [{ id: 'virtual_time', name: dateName, type: 'TIME', isVirtual: true }];
     }
-    const canAdd = !isSingle || items.length === 0;
+    const canAdd = !isShared && (!isSingle || items.length === 0);
 
     const filteredSuggestions = allEntities
       .filter(e => e.type === type && e.name.toLowerCase().includes(newTagQuery.toLowerCase()))
@@ -371,8 +376,8 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
           {items.map(e => (
             <Chip 
               key={e.id} 
-              onClose={() => removeEntity(e.id)} 
-              onPress={() => handleChipPress(e, type)}
+              onClose={isShared ? undefined : () => removeEntity(e.id)} 
+              onPress={isShared ? undefined : () => handleChipPress(e, type)}
               style={styles.chip}
             >
               {e.name}
@@ -461,6 +466,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
               onChangeText={setEditTitle}
               style={{marginBottom: 10}}
               dense
+              disabled={isShared}
             />
             <TextInput
               mode="outlined"
@@ -469,6 +475,7 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
               value={editText}
               onChangeText={setEditText}
               style={{minHeight: 100, marginBottom: 20}}
+              disabled={isShared}
             />
             
             {renderSection('Personas', 'PERSON', '👤', false)}
@@ -478,13 +485,17 @@ export default function MemoryEditModal({ memory, visible, onClose, onSaved }: M
             {renderSection('Lugar', 'LOCATION', '📍', true)}
             {renderSection('Momento/Fecha', 'TIME', '⏳', true)}
             
-            {renderSharingSection()}
+            {isShared ? null : renderSharingSection()}
 
           </ScrollView>
 
           <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 15}}>
             <Button mode="text" onPress={handleDelete} textColor="#B00020" icon="delete">Eliminar</Button>
-            <Button mode="contained" onPress={handleSaveText}>Guardar</Button>
+            {isShared ? (
+              <Button mode="contained" onPress={onClose}>Cerrar</Button>
+            ) : (
+              <Button mode="contained" onPress={handleSaveText}>Guardar</Button>
+            )}
           </View>
         </View>
         
