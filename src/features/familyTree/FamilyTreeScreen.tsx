@@ -713,6 +713,44 @@ export default function FamilyTreeScreen({ navigation }: any) {
       });
     }
 
+    // --- Fail-safe Overlap Resolution Pass (Solid as Iron) ---
+    const genGroups: { [gen: number]: string[] } = {};
+    visiblePeople.forEach(p => {
+      const gen = generations[p.id] ?? 0;
+      if (!genGroups[gen]) genGroups[gen] = [];
+      genGroups[gen].push(p.id);
+    });
+
+    for (let iter = 0; iter < 50; iter++) {
+      let changed = false;
+      Object.keys(genGroups).forEach(genStr => {
+        const gen = parseInt(genStr);
+        const ids = genGroups[gen];
+        if (ids.length <= 1) return;
+
+        ids.sort((a, b) => (finalX[a] ?? centerX) - (finalX[b] ?? centerX));
+
+        for (let i = 0; i < ids.length - 1; i++) {
+          const a = ids[i];
+          const b = ids[i + 1];
+          const ax = finalX[a] ?? centerX;
+          const bx = finalX[b] ?? centerX;
+
+          const aPartners = partnersMap[a] || [];
+          const isCouple = aPartners.includes(b) || (partnersMap[b] || []).includes(a);
+          const minDist = isCouple ? 140 : 130;
+
+          if (bx - ax < minDist) {
+            const overlap = minDist - (bx - ax);
+            finalX[a] = ax - overlap / 2;
+            finalX[b] = bx + overlap / 2;
+            changed = true;
+          }
+        }
+      });
+      if (!changed) break;
+    }
+
     // Assign final coordinates
     people.forEach(p => {
       const gen = generations[p.id] ?? 0;
