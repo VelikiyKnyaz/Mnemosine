@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { View, StyleSheet, ScrollView, Image, Modal, Alert, TouchableOpacity, Text as RNText } from 'react-native';
+import { View, StyleSheet, ScrollView, Image, Modal, Alert, Text as RNText } from 'react-native';
 import { Text, Appbar, Button, TextInput, IconButton, Portal, Card, Divider, FAB, Chip } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
@@ -10,7 +10,7 @@ import * as ImagePicker from 'expo-image-picker';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 import SmartDropdown from '../../components/SmartDropdown';
-import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, GestureDetector, Gesture, TouchableOpacity } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, useAnimatedReaction, runOnJS } from 'react-native-reanimated';
 
 const RELATIONSHIP_ITEMS = [
@@ -72,13 +72,9 @@ export default function FamilyTreeScreen({ navigation }: any) {
       if (p.father_id && p.mother_id) {
         addPartnerMapping(p.father_id, p.mother_id);
       }
-      const meta = p.metadata ? JSON.parse(p.metadata) : {};
-      if (meta.relationship === 'Pareja') {
-        addPartnerMapping(p.id, myId || '');
-      }
     });
     return map;
-  }, [people, myId]);
+  }, [people]);
 
   // Search state & Sidebar Drawer
   const [searchQuery, setSearchQuery] = useState('');
@@ -1687,10 +1683,6 @@ const filteredList = useMemo(() => {
                   metaPartnerIds.forEach(pId => addPartnerMapping(x.id, pId));
                   if (x.father_id && x.mother_id) {
                     addPartnerMapping(x.father_id, x.mother_id);
-                  }
-                  const meta = x.metadata ? JSON.parse(x.metadata) : {};
-                  if (meta.relationship === 'Pareja') {
-                    addPartnerMapping(x.id, myId || '');
                   }
                 });
 
