@@ -550,13 +550,13 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
       // Position partners next to spouse
       const partnerIds = partnersMap[currId] || [];
-      let partnerOffset = 180;
+      let partnerOffset = 240;
       partnerIds.forEach(partnerId => {
         if (!placedX.has(partnerId)) {
           initialX[partnerId] = currX + partnerOffset;
           placedX.add(partnerId);
           layoutQueue.push(partnerId);
-          partnerOffset = partnerOffset > 0 ? -partnerOffset : -partnerOffset + 180;
+          partnerOffset = partnerOffset > 0 ? -partnerOffset : -partnerOffset + 240;
         }
       });
 
@@ -629,7 +629,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // Spacing Constraint Solver (25 iterations of Relaxation)
     const minDistance = 220;
-    const coupleDistance = 160;
+    const coupleDistance = 240;
     for (let iter = 0; iter < 25; iter++) {
       const genGroups: { [gen: number]: string[] } = {};
       people.forEach(p => {
@@ -693,6 +693,96 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     return coords;
   }, [people, myId]);
+
+  // Derived display labels for visible nodes relative to the clicked/focused node
+  const displayLabels = useMemo(() => {
+    const labels: { [id: string]: string } = {};
+    const refId = focusedNodeId || myId;
+    if (!refId || visiblePeople.length === 0) return labels;
+
+    const findPerson = (id: string) => people.find(p => p.id === id);
+
+    // Re-build partnersMap for checking
+    const partnersMap: { [id: string]: string[] } = {};
+    const addPartnerMapping = (idA: string, idB: string) => {
+      if (!idA || !idB) return;
+      if (!partnersMap[idA]) partnersMap[idA] = [];
+      if (!partnersMap[idA].includes(idB)) partnersMap[idA].push(idB);
+      if (!partnersMap[idB]) partnersMap[idB] = [];
+      if (!partnersMap[idB].includes(idA)) partnersMap[idB].push(idA);
+    };
+    people.forEach(p => {
+      const metaPartnerIds = getPartnerIds(p);
+      metaPartnerIds.forEach(pId => addPartnerMapping(p.id, pId));
+      if (p.father_id && p.mother_id) {
+        addPartnerMapping(p.father_id, p.mother_id);
+      }
+      const meta = p.metadata ? JSON.parse(p.metadata) : {};
+      if (meta.relationship === 'Pareja') {
+        addPartnerMapping(p.id, myId || '');
+      }
+    });
+
+    const getDynamicRelationshipLabel = (personId: string) => {
+      if (personId === refId) {
+        return refId === myId ? 'Yo' : 'Enfocado/a';
+      }
+      
+      const refPerson = findPerson(refId);
+      const person = findPerson(personId);
+      if (!refPerson || !person) return 'Contacto';
+
+      // Is partner?
+      const refPartners = partnersMap[refId] || [];
+      if (refPartners.includes(personId)) return 'Pareja';
+
+      // Is parent?
+      if (refPerson.father_id === personId) return 'Padre';
+      if (refPerson.mother_id === personId) return 'Madre';
+
+      // Is child?
+      if (person.father_id === refId || person.mother_id === refId) return 'Hijo/a';
+
+      // Is grandparent?
+      const fatherNode = refPerson.father_id ? findPerson(refPerson.father_id) : null;
+      const motherNode = refPerson.mother_id ? findPerson(refPerson.mother_id) : null;
+      if (fatherNode?.father_id === personId || motherNode?.father_id === personId) return 'Abuelo';
+      if (fatherNode?.mother_id === personId || motherNode?.mother_id === personId) return 'Abuela';
+
+      // Is sibling?
+      if (refPerson.father_id && person.father_id === refPerson.father_id && refPerson.mother_id && person.mother_id === refPerson.mother_id) {
+        return 'Hermano/a';
+      }
+
+      // If refId is myId, fallback to metadata saved label
+      if (refId === myId) {
+        try {
+          const meta = person.metadata ? JSON.parse(person.metadata) : {};
+          return meta.relationship || 'Contacto';
+        } catch {
+          return 'Contacto';
+        }
+      }
+
+      // Check partner of parents
+      if (fatherNode) {
+        const fatherPartners = partnersMap[fatherNode.id] || [];
+        if (fatherPartners.includes(personId)) return 'Pareja de mi Padre';
+      }
+      if (motherNode) {
+        const motherPartners = partnersMap[motherNode.id] || [];
+        if (motherPartners.includes(personId)) return 'Pareja de mi Madre';
+      }
+
+      return 'Familiar';
+    };
+
+    visiblePeople.forEach(p => {
+      labels[p.id] = getDynamicRelationshipLabel(p.id);
+    });
+
+    return labels;
+  }, [people, visiblePeople, focusedNodeId, myId]);
 
   const findFreePosition = (targetX: number, targetY: number, preferDir: 'left' | 'right' | 'down' | 'up', focusedId: string) => {
     let testX = targetX;
@@ -822,30 +912,34 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // Draw couple lines (only draw once per couple by ordering IDs)
     const drawnCouples = new Set<string>();
+    const visibleIds = new Set(visiblePeople.map(x => x.id));
+
     visiblePeople.forEach(p => {
       const partnerIds = partnersMap[p.id] || [];
       partnerIds.forEach(partnerId => {
-        const key = [p.id, partnerId].sort().join('-');
-        if (!drawnCouples.has(key)) {
-          drawnCouples.add(key);
-          const pPos = nodePositions[p.id];
-          const partPos = nodePositions[partnerId];
-          if (pPos && partPos && pPos.y === partPos.y) {
-            lines.push(
-              <View
-                key={`couple-${keyCount++}`}
-                style={[
-                  styles.connectorLine,
-                  styles.dashedConnector,
-                  {
-                    left: Math.min(pPos.x, partPos.x) + 35,
-                    top: pPos.y,
-                    width: Math.abs(pPos.x - partPos.x) - 70,
-                    height: 2,
-                  }
-                ]}
-              />
-            );
+        if (visibleIds.has(partnerId)) {
+          const key = [p.id, partnerId].sort().join('-');
+          if (!drawnCouples.has(key)) {
+            drawnCouples.add(key);
+            const pPos = nodePositions[p.id];
+            const partPos = nodePositions[partnerId];
+            if (pPos && partPos && pPos.y === partPos.y) {
+              lines.push(
+                <View
+                  key={`couple-${keyCount++}`}
+                  style={[
+                    styles.connectorLine,
+                    styles.dashedConnector,
+                    {
+                      left: Math.min(pPos.x, partPos.x) + 35,
+                      top: pPos.y,
+                      width: Math.abs(pPos.x - partPos.x) - 70,
+                      height: 2,
+                    }
+                  ]}
+                />
+              );
+            }
           }
         }
       });
@@ -857,7 +951,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       if (!pPos) return;
 
       // Check if this is a joint child
-      if (p.father_id && p.mother_id) {
+      if (p.father_id && p.mother_id && visibleIds.has(p.father_id) && visibleIds.has(p.mother_id)) {
         const fPos = nodePositions[p.father_id];
         const mPos = nodePositions[p.mother_id];
         if (fPos && mPos && fPos.y === mPos.y) {
@@ -911,13 +1005,13 @@ export default function FamilyTreeScreen({ navigation }: any) {
         }
       }
 
-      if (p.father_id) {
+      if (p.father_id && visibleIds.has(p.father_id)) {
         const fPos = nodePositions[p.father_id];
         if (fPos) {
           lines.push(...renderOrthogonalLine(pPos.x, pPos.y, fPos.x, fPos.y, `line-father-${p.id}-${keyCount++}`));
         }
       }
-      if (p.mother_id) {
+      if (p.mother_id && visibleIds.has(p.mother_id)) {
         const mPos = nodePositions[p.mother_id];
         if (mPos) {
           lines.push(...renderOrthogonalLine(pPos.x, pPos.y, mPos.x, mPos.y, `line-mother-${p.id}-${keyCount++}`));
@@ -1332,6 +1426,7 @@ const filteredList = useMemo(() => {
 }, [people, searchQuery]);
 
   const panGesture = Gesture.Pan()
+    .minDistance(10)
     .onUpdate((event) => {
       translateX.value = savedTranslateX.value + event.translationX;
       translateY.value = savedTranslateY.value + event.translationY;
@@ -1442,7 +1537,7 @@ const filteredList = useMemo(() => {
                     <ZoomCompensatedText 
                       scale={scale} 
                       name={person.name} 
-                      subtitle={meta.nickname || pos.label} 
+                      subtitle={meta.nickname || displayLabels[person.id] || ''} 
                       isZoomedOut={isZoomedOut} 
                     />
                   </View>
