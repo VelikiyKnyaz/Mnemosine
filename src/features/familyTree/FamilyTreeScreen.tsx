@@ -271,6 +271,30 @@ export default function FamilyTreeScreen({ navigation }: any) {
     return 'Hijo/a';
   };
 
+  const getRelationForPartner = (parentId: string) => {
+    if (parentId === myId) return 'Pareja';
+    const parent = people.find(p => p.id === parentId);
+    if (!parent) return 'Otro';
+    const parentMeta = parent.metadata ? JSON.parse(parent.metadata) : {};
+    const parentRel = parentMeta.relationship || 'Contacto';
+    
+    if (parentRel === 'Yo') return 'Pareja';
+    if (parentRel.includes('Padre') || parentRel.includes('Madre')) {
+      return 'Pareja de mi ' + parentRel;
+    }
+    if (parentRel.includes('Abuelo') || parentRel.includes('Abuela')) {
+      return 'Pareja de mi ' + parentRel;
+    }
+    if (parentRel.includes('Hermano') || parentRel.includes('Hermana')) {
+      return 'Pareja de mi ' + parentRel;
+    }
+    if (parentRel.includes('Hijo') || parentRel.includes('Hija')) {
+      return 'Pareja de mi ' + parentRel;
+    }
+    return 'Pareja de ' + (parentMeta.nickname || parent.name);
+  };
+
+
   const handleDecadeScroll = (event: any) => {
     const { contentOffset } = event.nativeEvent;
     if (contentOffset.x <= 15 && !isLoadingDecades) {
@@ -1280,7 +1304,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       if (preLink.childId && (preLink.role === 'father' || preLink.role === 'mother')) {
         setEditRelationship(getRelationForParent(preLink.childId, preLink.role));
       } else if (preLink.role === 'partner') {
-        setEditRelationship('Pareja');
+        setEditRelationship(getRelationForPartner(preLink.parentId || ''));
       } else if (preLink.role === 'joint_child' && preLink.parentId) {
         setEditRelationship(getRelationForChild(preLink.parentId));
       } else if (preLink.role === 'child' && preLink.parentId) {
@@ -1490,7 +1514,14 @@ const filteredList = useMemo(() => {
                 }
 
                 // Always allow adding a partner (Añadir Pareja)
-                const freePartnerPos = findFreePosition(pos.x + 115, pos.y, 'right', focusedNodeId);
+                let searchPartnerX = pos.x;
+                partnerIds.forEach(pId => {
+                  const partnerPos = nodePositions[pId];
+                  if (partnerPos && partnerPos.x > searchPartnerX) {
+                    searchPartnerX = partnerPos.x;
+                  }
+                });
+                const freePartnerPos = findFreePosition(searchPartnerX + 115, pos.y, 'right', focusedNodeId);
                 addButtons.push(
                   <View key="add-partner" style={[styles.nodeWrapper, { left: freePartnerPos.x - 37.5, top: freePartnerPos.y - 37.5 }]}>
                     <TouchableOpacity 
