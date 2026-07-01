@@ -362,9 +362,44 @@ export default function FamilyTreeScreen({ navigation }: any) {
     if (!focusedNodeId || people.length === 0) return people;
 
     const visibleIds = new Set<string>();
-    const queue = [focusedNodeId];
+    const findPerson = (id: string) => people.find(p => p.id === id);
+
+    // 1. Add focused node
     visibleIds.add(focusedNodeId);
 
+    // 2. Traverse ancestors (up)
+    const queueUp = [focusedNodeId];
+    while (queueUp.length > 0) {
+      const curr = queueUp.shift()!;
+      const p = findPerson(curr);
+      if (p) {
+        if (p.father_id && !visibleIds.has(p.father_id)) {
+          visibleIds.add(p.father_id);
+          queueUp.push(p.father_id);
+        }
+        if (p.mother_id && !visibleIds.has(p.mother_id)) {
+          visibleIds.add(p.mother_id);
+          queueUp.push(p.mother_id);
+        }
+      }
+    }
+
+    // 3. Traverse descendants (down)
+    const queueDown = [focusedNodeId];
+    const descendants = new Set<string>();
+    while (queueDown.length > 0) {
+      const curr = queueDown.shift()!;
+      const children = people.filter(x => x.father_id === curr || x.mother_id === curr);
+      children.forEach(c => {
+        if (!visibleIds.has(c.id)) {
+          visibleIds.add(c.id);
+          descendants.add(c.id);
+          queueDown.push(c.id);
+        }
+      });
+    }
+
+    // 4. Add direct partners of the focused node
     const partnersMap: { [id: string]: string[] } = {};
     const addPartnerMapping = (idA: string, idB: string) => {
       if (!idA || !idB) return;
@@ -386,46 +421,15 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     });
 
-    const findPerson = (id: string) => people.find(p => p.id === id);
-
-    const traverseLineage = (currentId: string, direction: 'up' | 'down') => {
-      const q = [currentId];
-      while (q.length > 0) {
-        const curr = q.shift()!;
-        const p = findPerson(curr);
-        if (!p) continue;
-
-        if (direction === 'up') {
-          if (p.father_id && !visibleIds.has(p.father_id)) {
-            visibleIds.add(p.father_id);
-            q.push(p.father_id);
-          }
-          if (p.mother_id && !visibleIds.has(p.mother_id)) {
-            visibleIds.add(p.mother_id);
-            q.push(p.mother_id);
-          }
-        } else {
-          const children = people.filter(x => x.father_id === curr || x.mother_id === curr);
-          children.forEach(c => {
-            if (!visibleIds.has(c.id)) {
-              visibleIds.add(c.id);
-              q.push(c.id);
-            }
-          });
-        }
-      }
-    };
-
-    traverseLineage(focusedNodeId, 'up');
-    traverseLineage(focusedNodeId, 'down');
-
     const focusedPartners = partnersMap[focusedNodeId] || [];
     focusedPartners.forEach(pId => visibleIds.add(pId));
 
-    people.forEach(p => {
-      if (visibleIds.has(p.id) && p.father_id && p.mother_id) {
-        visibleIds.add(p.father_id);
-        visibleIds.add(p.mother_id);
+    // 5. Add co-parents (other parent) of the focused node's descendants
+    descendants.forEach(dId => {
+      const child = findPerson(dId);
+      if (child) {
+        if (child.father_id) visibleIds.add(child.father_id);
+        if (child.mother_id) visibleIds.add(child.mother_id);
       }
     });
 
@@ -471,8 +475,9 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // BFS generations assignment
     const generations: { [id: string]: number } = {};
-    generations[myId] = 0;
-    const queue = [myId];
+    const rootId = focusedNodeId || myId;
+    generations[rootId] = 0;
+    const queue = [rootId];
 
     while (queue.length > 0) {
       const currId = queue.shift()!;
@@ -524,15 +529,15 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // Initial X positions based on relations
     const initialX: { [id: string]: number } = {};
-    initialX[myId] = centerX;
+    initialX[rootId] = centerX;
 
     const placedX = new Set<string>();
-    placedX.add(myId);
-    const layoutQueue = [myId];
+    placedX.add(rootId);
+    const layoutQueue = [rootId];
 
-    const yoNode = findPerson(myId);
-    const fatherId = yoNode?.father_id;
-    const motherId = yoNode?.mother_id;
+    const rootNode = findPerson(rootId);
+    const fatherId = rootNode?.father_id;
+    const motherId = rootNode?.mother_id;
 
     while (layoutQueue.length > 0) {
       const currId = layoutQueue.shift()!;
@@ -944,15 +949,10 @@ export default function FamilyTreeScreen({ navigation }: any) {
   };
 
   const handleNodePress = (nodeId: string) => {
-    if (focusedNodeId === nodeId) {
-      // Second tap -> view memories
-      navigation.navigate('EntityMemories', { entityId: nodeId });
-    } else {
-      setFocusedNodeId(nodeId);
-      const pos = nodePositions[nodeId];
-      if (pos) {
-        centerOnNode(pos.x, pos.y);
-      }
+    setFocusedNodeId(nodeId);
+    const pos = nodePositions[nodeId];
+    if (pos) {
+      centerOnNode(pos.x, pos.y);
     }
   };
 
