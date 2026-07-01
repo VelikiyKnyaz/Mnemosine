@@ -1410,9 +1410,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       setModalVisible(false);
       setPendingLink(null);
       await loadPeople();
-      if (!selectedPerson) {
-        setFocusedNodeId(targetEntityId); // Auto-focus on new creation
-      }
+      // Keep the current focusedNodeId so the rest of the tree remains visible and the new node is drawn in context.
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'No se pudo guardar.');
