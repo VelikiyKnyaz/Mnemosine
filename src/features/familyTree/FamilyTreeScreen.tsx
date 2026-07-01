@@ -525,26 +525,25 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     });
 
-    // Ensure partners are in the same generation (absolute Y height alignment)
-    people.forEach(p => {
-      const partnerIds = partnersMap[p.id] || [];
-      partnerIds.forEach(partnerId => {
+    // Force partners to share the exact same generation (guarantees equal heights)
+    for (let pass = 0; pass < 5; pass++) {
+      people.forEach(p => {
         const pGen = generations[p.id];
-        const partGen = generations[partnerId];
-        if (pGen !== undefined && partGen === undefined) {
-          generations[partnerId] = pGen;
-        } else if (pGen === undefined && partGen !== undefined) {
-          generations[p.id] = partGen;
-        } else if (pGen !== undefined && partGen !== undefined && pGen !== partGen) {
-          generations[partnerId] = pGen;
+        if (pGen !== undefined) {
+          const partnerIds = partnersMap[p.id] || [];
+          partnerIds.forEach(partnerId => {
+            if (generations[partnerId] !== pGen) {
+              generations[partnerId] = pGen;
+            }
+          });
         }
       });
-    });
+    }
 
     // --- Subtree-width-aware layout ---
     // Constants
-    const NODE_W = 160;   // minimum horizontal space per single node
-    const COUPLE_GAP = 130; // space between partners
+    const NODE_W = 110;   // minimum horizontal space per single node
+    const COUPLE_GAP = 140; // space between partners
     const ROW_H = 140;    // vertical gap between generations
 
     // Find all children of a person that exist in people[]
@@ -646,75 +645,147 @@ export default function FamilyTreeScreen({ navigation }: any) {
       });
     };
 
-    // --- Place ancestors upward ---
-    // For ancestors, we work bottom-up: place parents centered above their child
-    const placeAncestors = (personId: string) => {
-      const p = findPerson(personId);
-      if (!p) return;
+    // --- Place ancestors bottom-up and siblings/uncles side-by-side ---
+    const placeUnclesAndAunts = (parentId: string) => {
+      const parentNode = findPerson(parentId);
+      if (!parentNode) return;
 
-      const px = finalX[personId];
+      const px = finalX[parentId];
       if (px === undefined) return;
 
-      // Father
-      if (p.father_id && !placed.has(p.father_id)) {
-        placed.add(p.father_id);
-        const fatherPartners = (partnersMap[p.father_id] || []).filter(pId => !placed.has(pId));
-        fatherPartners.forEach(pId => placed.add(pId));
+      // Find parents of this parent (grandparents of myId)
+      const gFatherId = parentNode.father_id;
+      const gMotherId = parentNode.mother_id;
 
-        // Place father to left of child center, mother to right
-        if (p.mother_id && placed.has(p.mother_id)) {
-          // Mother already placed (shouldn't happen), just place father
-          finalX[p.father_id] = px - COUPLE_GAP / 2;
-        } else if (p.mother_id) {
-          // Place both parents
-          finalX[p.father_id] = px - COUPLE_GAP / 2;
-          finalX[p.mother_id] = px + COUPLE_GAP / 2;
-          placed.add(p.mother_id);
-          // Place mother's other partners
-          const motherPartners = (partnersMap[p.mother_id] || []).filter(pId => !placed.has(pId));
+      if (gFatherId || gMotherId) {
+        // Find siblings of parentId
+        const siblings = people.filter(p => 
+          p.id !== parentId && 
+          ((gFatherId && p.father_id === gFatherId) || (gMotherId && p.mother_id === gMotherId))
+        );
+
+        // Place siblings to left/right of parentId
+        let leftOffset = -180;
+        let rightOffset = 180;
+        siblings.forEach((sib, idx) => {
+          if (placed.has(sib.id)) return;
+          const isLeft = idx % 2 === 0;
+          const offset = isLeft ? leftOffset : rightOffset;
+          if (isLeft) leftOffset -= 180;
+          else rightOffset += 180;
+
+          const sibX = px + offset;
+          placeUnit(sib.id, sibX);
+        });
+
+        // Place grandparents centered above parentId's position
+        if (gFatherId && !placed.has(gFatherId)) {
+          placed.add(gFatherId);
+          // Place father and his partners
+          const fatherPartners = (partnersMap[gFatherId] || []).filter(pId => !placed.has(pId));
+          fatherPartners.forEach(pId => placed.add(pId));
+
+          if (gMotherId && !placed.has(gMotherId)) {
+            placed.add(gMotherId);
+            finalX[gFatherId] = px - COUPLE_GAP / 2;
+            finalX[gMotherId] = px + COUPLE_GAP / 2;
+
+            // Place mother's other partners
+            const motherPartners = (partnersMap[gMotherId] || []).filter(pId => !placed.has(pId));
+            let offset = COUPLE_GAP;
+            motherPartners.forEach(pId => {
+              placed.add(pId);
+              finalX[pId] = finalX[gMotherId!]! + offset;
+              offset += COUPLE_GAP;
+            });
+            placeUnclesAndAunts(gMotherId);
+          } else {
+            finalX[gFatherId] = px;
+          }
+
+          // Place father's other partners
+          let offset = -COUPLE_GAP;
+          fatherPartners.forEach(pId => {
+            if (pId !== gMotherId) {
+              finalX[pId] = finalX[gFatherId!]! + offset;
+              offset -= COUPLE_GAP;
+            }
+          });
+
+          placeUnclesAndAunts(gFatherId);
+        } else if (gMotherId && !placed.has(gMotherId)) {
+          placed.add(gMotherId);
+          finalX[gMotherId] = px;
+          const motherPartners = (partnersMap[gMotherId] || []).filter(pId => !placed.has(pId));
           let offset = COUPLE_GAP;
           motherPartners.forEach(pId => {
             placed.add(pId);
-            finalX[pId] = finalX[p.mother_id!]! + offset;
+            finalX[pId] = finalX[gMotherId!]! + offset;
             offset += COUPLE_GAP;
           });
-          placeAncestors(p.mother_id);
-        } else {
-          finalX[p.father_id] = px;
+          placeUnclesAndAunts(gMotherId);
         }
-
-        // Place father's other partners
-        let offset = -COUPLE_GAP;
-        fatherPartners.forEach(pId => {
-          if (pId !== p.mother_id) {
-            finalX[pId] = finalX[p.father_id!]! + offset;
-            offset -= COUPLE_GAP;
-          }
-        });
-
-        placeAncestors(p.father_id);
-      } else if (p.mother_id && !placed.has(p.mother_id)) {
-        placed.add(p.mother_id);
-        finalX[p.mother_id] = px;
-        const motherPartners = (partnersMap[p.mother_id] || []).filter(pId => !placed.has(pId));
-        let offset = COUPLE_GAP;
-        motherPartners.forEach(pId => {
-          placed.add(pId);
-          finalX[pId] = finalX[p.mother_id!]! + offset;
-          offset += COUPLE_GAP;
-        });
-        placeAncestors(p.mother_id);
       }
     };
 
     // Start layout from myId
     placeUnit(myId, centerX);
-    placeAncestors(myId);
+    
+    // Place parent units initially centered above myId
+    const yoNode = findPerson(myId);
+    if (yoNode) {
+      if (yoNode.father_id) {
+        if (!placed.has(yoNode.father_id)) {
+          placed.add(yoNode.father_id);
+          const fatherPartners = (partnersMap[yoNode.father_id] || []).filter(pId => !placed.has(pId));
+          fatherPartners.forEach(pId => placed.add(pId));
+
+          if (yoNode.mother_id && !placed.has(yoNode.mother_id)) {
+            placed.add(yoNode.mother_id);
+            finalX[yoNode.father_id] = centerX - COUPLE_GAP / 2;
+            finalX[yoNode.mother_id] = centerX + COUPLE_GAP / 2;
+
+            // Place mother's partners
+            const motherPartners = (partnersMap[yoNode.mother_id] || []).filter(pId => !placed.has(pId));
+            let offset = COUPLE_GAP;
+            motherPartners.forEach(pId => {
+              placed.add(pId);
+              finalX[pId] = finalX[yoNode.mother_id!]! + offset;
+              offset += COUPLE_GAP;
+            });
+            placeUnclesAndAunts(yoNode.mother_id);
+          } else {
+            finalX[yoNode.father_id] = centerX;
+          }
+
+          // Place father's other partners
+          let offset = -COUPLE_GAP;
+          fatherPartners.forEach(pId => {
+            if (pId !== yoNode.mother_id) {
+              finalX[pId] = finalX[yoNode.father_id!]! + offset;
+              offset -= COUPLE_GAP;
+            }
+          });
+          
+          placeUnclesAndAunts(yoNode.father_id);
+        }
+      } else if (yoNode.mother_id && !placed.has(yoNode.mother_id)) {
+        placed.add(yoNode.mother_id);
+        finalX[yoNode.mother_id] = centerX;
+        const motherPartners = (partnersMap[yoNode.mother_id] || []).filter(pId => !placed.has(pId));
+        let offset = COUPLE_GAP;
+        motherPartners.forEach(pId => {
+          placed.add(pId);
+          finalX[pId] = finalX[yoNode.mother_id!]! + offset;
+          offset += COUPLE_GAP;
+        });
+        placeUnclesAndAunts(yoNode.mother_id);
+      }
+    }
 
     // Place any remaining unplaced nodes
     const unplaced = people.filter(p => !placed.has(p.id));
     if (unplaced.length > 0) {
-      // Find bounds of placed nodes
       const placedXValues = Object.values(finalX);
       const maxPlacedX = placedXValues.length > 0 ? Math.max(...placedXValues) : centerX;
       let nextX = maxPlacedX + 200;
@@ -905,32 +976,83 @@ export default function FamilyTreeScreen({ navigation }: any) {
     return { x: testX, y: testY };
   };
 
-  // Straight line connector builder (draws a direct diagonal line)
-  const renderStraightLine = (x1: number, y1: number, x2: number, y2: number, key: string, isDashed = false) => {
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-    const cx = (x1 + x2) / 2;
-    const cy = (y1 + y2) / 2;
+  // Orthogonal connector line builder
+  const renderOrthogonalLine = (x1: number, y1: number, x2: number, y2: number, key: string, isDashed = false) => {
+    const lines = [];
+    
+    // If aligned within 15px horizontally, draw a single straight vertical line (no quiebres/zigzags)
+    if (Math.abs(x1 - x2) < 15) {
+      lines.push(
+        <View
+          key={`${key}-straight-v`}
+          style={[
+            styles.connectorLine,
+            isDashed && styles.dashedConnector,
+            {
+              left: (x1 + x2) / 2,
+              top: Math.min(y1, y2),
+              width: 2,
+              height: Math.abs(y1 - y2),
+            }
+          ]}
+        />
+      );
+      return lines;
+    }
 
-    return [
+    const midY = (y1 + y2) / 2;
+    
+    // Vertical from (x1, y1) to (x1, midY)
+    lines.push(
       <View
-        key={key}
+        key={`${key}-v1`}
         style={[
           styles.connectorLine,
           isDashed && styles.dashedConnector,
           {
-            position: 'absolute',
-            left: cx - distance / 2,
-            top: cy - 1,
-            width: distance,
-            height: 2,
-            transform: [{ rotate: `${angle}deg` }],
+            left: x1,
+            top: Math.min(y1, midY),
+            width: 2,
+            height: Math.abs(y1 - midY),
           }
         ]}
       />
-    ];
+    );
+    
+    // Horizontal from (x1, midY) to (x2, midY)
+    lines.push(
+      <View
+        key={`${key}-h`}
+        style={[
+          styles.connectorLine,
+          isDashed && styles.dashedConnector,
+          {
+            left: Math.min(x1, x2),
+            top: midY,
+            width: Math.abs(x1 - x2) + 2,
+            height: 2,
+          }
+        ]}
+      />
+    );
+    
+    // Vertical from (x2, midY) to (x2, y2)
+    lines.push(
+      <View
+        key={`${key}-v2`}
+        style={[
+          styles.connectorLine,
+          isDashed && styles.dashedConnector,
+          {
+            left: x2,
+            top: Math.min(midY, y2),
+            width: 2,
+            height: Math.abs(midY - y2),
+          }
+        ]}
+      />
+    );
+    return lines;
   };
 
   const renderAllLines = () => {
@@ -973,7 +1095,19 @@ export default function FamilyTreeScreen({ navigation }: any) {
             const partPos = nodePositions[partnerId];
             if (pPos && partPos && pPos.y === partPos.y) {
               lines.push(
-                ...renderStraightLine(pPos.x, pPos.y, partPos.x, partPos.y, `couple-${keyCount++}`, true)
+                <View
+                  key={`couple-${keyCount++}`}
+                  style={[
+                    styles.connectorLine,
+                    styles.dashedConnector,
+                    {
+                      left: Math.min(pPos.x, partPos.x) + 35,
+                      top: pPos.y,
+                      width: Math.abs(pPos.x - partPos.x) - 70,
+                      height: 2,
+                    }
+                  ]}
+                />
               );
             }
           }
@@ -981,21 +1115,95 @@ export default function FamilyTreeScreen({ navigation }: any) {
       });
     });
 
-    // 1. Draw actual family lines (directly from parents to children, straight)
+    // 1. Draw actual family lines
     visiblePeople.forEach((p) => {
       const pPos = nodePositions[p.id];
       if (!pPos) return;
 
+      // Check if this is a joint child
+      if (p.father_id && p.mother_id && visibleIds.has(p.father_id) && visibleIds.has(p.mother_id)) {
+        const fPos = nodePositions[p.father_id];
+        const mPos = nodePositions[p.mother_id];
+        if (fPos && mPos && fPos.y === mPos.y) {
+          const parentMidX = (fPos.x + mPos.x) / 2;
+          const parentY = fPos.y;
+          const midY = (parentY + pPos.y) / 2;
+          
+          // If aligned within 15px horizontally, draw a single straight vertical line (no quiebres/zigzags)
+          if (Math.abs(pPos.x - parentMidX) < 15) {
+            lines.push(
+              <View
+                key={`line-joint-straight-${p.id}-${keyCount++}`}
+                style={[
+                  styles.connectorLine,
+                  {
+                    left: (parentMidX + pPos.x) / 2,
+                    top: parentY,
+                    width: 2,
+                    height: pPos.y - parentY,
+                  }
+                ]}
+              />
+            );
+            return;
+          }
+
+          lines.push(
+            <View
+              key={`line-joint-v1-${p.id}-${keyCount++}`}
+              style={[
+                styles.connectorLine,
+                {
+                  left: parentMidX,
+                  top: parentY,
+                  width: 2,
+                  height: midY - parentY,
+                }
+              ]}
+            />
+          );
+          lines.push(
+            <View
+              key={`line-joint-h-${p.id}-${keyCount++}`}
+              style={[
+                styles.connectorLine,
+                {
+                  left: Math.min(parentMidX, pPos.x),
+                  top: midY,
+                  width: Math.abs(parentMidX - pPos.x) + 2,
+                  height: 2,
+                }
+              ]}
+            />
+          );
+          lines.push(
+            <View
+              key={`line-joint-v2-${p.id}-${keyCount++}`}
+              style={[
+                styles.connectorLine,
+                {
+                  left: pPos.x,
+                  top: midY,
+                  width: 2,
+                  height: pPos.y - midY,
+                }
+              ]}
+            />
+          );
+          return;
+        }
+      }
+
       if (p.father_id && visibleIds.has(p.father_id)) {
         const fPos = nodePositions[p.father_id];
         if (fPos) {
-          lines.push(...renderStraightLine(pPos.x, pPos.y, fPos.x, fPos.y, `line-father-${p.id}-${keyCount++}`));
+          lines.push(...renderOrthogonalLine(pPos.x, pPos.y, fPos.x, fPos.y, `line-father-${p.id}-${keyCount++}`));
         }
       }
       if (p.mother_id && visibleIds.has(p.mother_id)) {
         const mPos = nodePositions[p.mother_id];
         if (mPos) {
-          lines.push(...renderStraightLine(pPos.x, pPos.y, mPos.x, mPos.y, `line-mother-${p.id}-${keyCount++}`));
+          lines.push(...renderOrthogonalLine(pPos.x, pPos.y, mPos.x, mPos.y, `line-mother-${p.id}-${keyCount++}`));
         }
       }
     });
@@ -1007,15 +1215,15 @@ export default function FamilyTreeScreen({ navigation }: any) {
       if (p && pos) {
         if (!p.father_id) {
           const freePos = findFreePosition(pos.x - 80, pos.y - 120, 'left', focusedNodeId);
-          lines.push(...renderStraightLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-father-${p.id}`, true));
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-father-${p.id}`, true));
         }
         if (!p.mother_id) {
           const freePos = findFreePosition(pos.x + 80, pos.y - 120, 'right', focusedNodeId);
-          lines.push(...renderStraightLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-mother-${p.id}`, true));
+          lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-mother-${p.id}`, true));
         }
         // Always draw line to "+" Añadir Pareja bubble
         const freePartnerPos = findFreePosition(pos.x + 115, pos.y, 'right', focusedNodeId);
-        lines.push(...renderStraightLine(pos.x, pos.y, freePartnerPos.x, freePartnerPos.y, `line-add-partner-${p.id}`, true));
+        lines.push(...renderOrthogonalLine(pos.x, pos.y, freePartnerPos.x, freePartnerPos.y, `line-add-partner-${p.id}`, true));
       }
     }
 
