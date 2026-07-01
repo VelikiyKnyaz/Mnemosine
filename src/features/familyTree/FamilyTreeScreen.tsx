@@ -452,7 +452,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     };
 
-    // Find couples via metadata or shared children
+    // Build global partnersMap
     const partnersMap: { [id: string]: string[] } = {};
     const addPartnerMapping = (idA: string, idB: string) => {
       if (!idA || !idB) return;
@@ -473,7 +473,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     });
 
-    // BFS generations assignment (stable, global)
+    // BFS generations assignment (always anchored to myId = gen 0)
     const generations: { [id: string]: number } = {};
     generations[myId] = 0;
     const queue = [myId];
@@ -499,8 +499,8 @@ export default function FamilyTreeScreen({ navigation }: any) {
           queue.push(child.id);
         }
       });
-      const partnerIds = partnersMap[currId] || [];
-      partnerIds.forEach(partnerId => {
+      const pIds = partnersMap[currId] || [];
+      pIds.forEach(partnerId => {
         if (generations[partnerId] === undefined) {
           generations[partnerId] = currGen;
           queue.push(partnerId);
@@ -508,7 +508,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       });
     }
 
-    // Floating/disconnected generation fallback mapping
+    // Fallback for disconnected nodes
     const getGenerationFromLabel = (label: string): number => {
       const l = label.toLowerCase();
       if (l.includes('bisabuel')) return -3;
@@ -519,175 +519,237 @@ export default function FamilyTreeScreen({ navigation }: any) {
       if (l.includes('bisnieto')) return 3;
       return 0;
     };
-
     people.forEach(p => {
       if (generations[p.id] === undefined) {
         generations[p.id] = getGenerationFromLabel(getRelLabel(p, ''));
       }
     });
 
-    // Initial X positions based on relations
-    const initialX: { [id: string]: number } = {};
-    initialX[myId] = centerX;
+    // --- Subtree-width-aware layout ---
+    // Constants
+    const NODE_W = 110;   // minimum horizontal space per single node
+    const COUPLE_GAP = 140; // space between partners
+    const ROW_H = 140;    // vertical gap between generations
 
-    const placedX = new Set<string>();
-    placedX.add(myId);
-    const layoutQueue = [myId];
+    // Find all children of a person that exist in people[]
+    const getChildren = (parentId: string) => 
+      people.filter(p => p.father_id === parentId || p.mother_id === parentId);
 
-    const rootNode = findPerson(myId);
-    const fatherId = rootNode?.father_id;
-    const motherId = rootNode?.mother_id;
+    // Build "family units": a primary person + their partners form a unit
+    // The unit's children are grouped by which partner they share
+    const placed = new Set<string>();
+    const finalX: { [id: string]: number } = {};
 
-    while (layoutQueue.length > 0) {
-      const currId = layoutQueue.shift()!;
-      const currX = initialX[currId];
-      const p = findPerson(currId);
-      if (!p) continue;
+    // Compute the width a subtree rooted at a "family unit" needs
+    const subtreeWidthCache: { [id: string]: number } = {};
 
-      const gen = generations[currId];
-      // spacing gets narrower higher up to fit multiple branches nicely
-      const parentSpacing = gen === 0 ? 180 : gen === -1 ? 120 : gen === -2 ? 80 : 60;
+    const getSubtreeWidth = (personId: string): number => {
+      if (subtreeWidthCache[personId] !== undefined) return subtreeWidthCache[personId];
+      if (placed.has(personId)) { subtreeWidthCache[personId] = NODE_W; return NODE_W; }
 
-      // Position partners next to spouse
-      const partnerIds = partnersMap[currId] || [];
-      let partnerOffset = 180;
-      partnerIds.forEach(partnerId => {
-        if (!placedX.has(partnerId)) {
-          initialX[partnerId] = currX + partnerOffset;
-          placedX.add(partnerId);
-          layoutQueue.push(partnerId);
-          partnerOffset = partnerOffset > 0 ? -partnerOffset : -partnerOffset + 180;
-        }
+      const partners = (partnersMap[personId] || []).filter(pId => !placed.has(pId));
+      // Unit width = person + partners side by side
+      const unitNodeCount = 1 + partners.length;
+      const unitWidth = unitNodeCount * NODE_W + (unitNodeCount > 1 ? (unitNodeCount - 1) * (COUPLE_GAP - NODE_W) : 0);
+
+      // All children of this person (through any partner)
+      const allChildIds = new Set<string>();
+      const childrenDirect = getChildren(personId);
+      childrenDirect.forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
+      partners.forEach(pId => {
+        getChildren(pId).forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
       });
 
-      // Position parents
-      if (p.father_id && !placedX.has(p.father_id)) {
-        initialX[p.father_id] = currX - parentSpacing;
-        placedX.add(p.father_id);
-        layoutQueue.push(p.father_id);
-      }
-      if (p.mother_id && !placedX.has(p.mother_id)) {
-        initialX[p.mother_id] = currX + parentSpacing;
-        placedX.add(p.mother_id);
-        layoutQueue.push(p.mother_id);
+      if (allChildIds.size === 0) {
+        subtreeWidthCache[personId] = unitWidth;
+        return unitWidth;
       }
 
-      // Position children grouped by biological parent couples
-      const children = people.filter(x => (x.father_id === currId || x.mother_id === currId) && !placedX.has(x.id));
-      if (children.length > 0) {
-        const groups: { [otherParentId: string]: any[] } = {};
-        const individualChildren: any[] = [];
+      // Temporarily mark placed to avoid infinite recursion
+      placed.add(personId);
+      partners.forEach(pId => placed.add(pId));
 
-        children.forEach(child => {
-          const otherParentId = child.father_id === currId ? child.mother_id : child.father_id;
-          if (otherParentId) {
-            if (!groups[otherParentId]) groups[otherParentId] = [];
-            groups[otherParentId].push(child);
-          } else {
-            individualChildren.push(child);
+      let childrenTotalWidth = 0;
+      const childArr = Array.from(allChildIds);
+      childArr.forEach(cId => {
+        childrenTotalWidth += getSubtreeWidth(cId);
+      });
+
+      // Unmark
+      placed.delete(personId);
+      partners.forEach(pId => placed.delete(pId));
+
+      const totalWidth = Math.max(unitWidth, childrenTotalWidth);
+      subtreeWidthCache[personId] = totalWidth;
+      return totalWidth;
+    };
+
+    // Place a family unit (person + partners) centered at a given X, then recursively place children
+    const placeUnit = (personId: string, cx: number) => {
+      if (placed.has(personId)) return;
+      placed.add(personId);
+
+      const partners = (partnersMap[personId] || []).filter(pId => !placed.has(pId));
+      partners.forEach(pId => placed.add(pId));
+
+      // Place the unit members centered around cx
+      const allMembers = [personId, ...partners];
+      const unitWidth = allMembers.length * NODE_W + (allMembers.length > 1 ? (allMembers.length - 1) * (COUPLE_GAP - NODE_W) : 0);
+      let memberX = cx - unitWidth / 2 + NODE_W / 2;
+      allMembers.forEach(mId => {
+        finalX[mId] = memberX;
+        memberX += COUPLE_GAP;
+      });
+
+      // Gather all children
+      const allChildIds = new Set<string>();
+      allMembers.forEach(mId => {
+        getChildren(mId).forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
+      });
+
+      if (allChildIds.size === 0) return;
+
+      const childArr = Array.from(allChildIds);
+
+      // Calculate total children width
+      let childrenTotalWidth = 0;
+      const childWidths: number[] = [];
+      childArr.forEach(cId => {
+        const w = getSubtreeWidth(cId);
+        childWidths.push(w);
+        childrenTotalWidth += w;
+      });
+
+      // Place children centered under the unit
+      let childStartX = cx - childrenTotalWidth / 2;
+      childArr.forEach((cId, idx) => {
+        const cw = childWidths[idx];
+        const childCx = childStartX + cw / 2;
+        placeUnit(cId, childCx);
+        childStartX += cw;
+      });
+    };
+
+    // --- Place ancestors upward ---
+    // For ancestors, we work bottom-up: place parents centered above their child
+    const placeAncestors = (personId: string) => {
+      const p = findPerson(personId);
+      if (!p) return;
+
+      const px = finalX[personId];
+      if (px === undefined) return;
+
+      // Father
+      if (p.father_id && !placed.has(p.father_id)) {
+        placed.add(p.father_id);
+        const fatherPartners = (partnersMap[p.father_id] || []).filter(pId => !placed.has(pId));
+        fatherPartners.forEach(pId => placed.add(pId));
+
+        // Place father to left of child center, mother to right
+        if (p.mother_id && placed.has(p.mother_id)) {
+          // Mother already placed (shouldn't happen), just place father
+          finalX[p.father_id] = px - COUPLE_GAP / 2;
+        } else if (p.mother_id) {
+          // Place both parents
+          finalX[p.father_id] = px - COUPLE_GAP / 2;
+          finalX[p.mother_id] = px + COUPLE_GAP / 2;
+          placed.add(p.mother_id);
+          // Place mother's other partners
+          const motherPartners = (partnersMap[p.mother_id] || []).filter(pId => !placed.has(pId));
+          let offset = COUPLE_GAP;
+          motherPartners.forEach(pId => {
+            placed.add(pId);
+            finalX[pId] = finalX[p.mother_id!]! + offset;
+            offset += COUPLE_GAP;
+          });
+          placeAncestors(p.mother_id);
+        } else {
+          finalX[p.father_id] = px;
+        }
+
+        // Place father's other partners
+        let offset = -COUPLE_GAP;
+        fatherPartners.forEach(pId => {
+          if (pId !== p.mother_id) {
+            finalX[pId] = finalX[p.father_id!]! + offset;
+            offset -= COUPLE_GAP;
           }
         });
 
-        Object.keys(groups).forEach(otherParentId => {
-          const groupChildren = groups[otherParentId];
-          const hasOtherParentPos = initialX[otherParentId] !== undefined;
-          const centerAnchor = hasOtherParentPos ? (currX + initialX[otherParentId]) / 2 : currX;
-          const spacing = 180;
-          const totalW = (groupChildren.length - 1) * spacing;
-          const startX = centerAnchor - totalW / 2;
-          groupChildren.forEach((child, idx) => {
-            initialX[child.id] = startX + idx * spacing;
-            placedX.add(child.id);
-            layoutQueue.push(child.id);
-          });
+        placeAncestors(p.father_id);
+      } else if (p.mother_id && !placed.has(p.mother_id)) {
+        placed.add(p.mother_id);
+        finalX[p.mother_id] = px;
+        const motherPartners = (partnersMap[p.mother_id] || []).filter(pId => !placed.has(pId));
+        let offset = COUPLE_GAP;
+        motherPartners.forEach(pId => {
+          placed.add(pId);
+          finalX[pId] = finalX[p.mother_id!]! + offset;
+          offset += COUPLE_GAP;
         });
-
-        if (individualChildren.length > 0) {
-          const spacing = 180;
-          const totalW = (individualChildren.length - 1) * spacing;
-          const startX = currX - totalW / 2;
-          individualChildren.forEach((child, idx) => {
-            initialX[child.id] = startX + idx * spacing;
-            placedX.add(child.id);
-            layoutQueue.push(child.id);
-          });
-        }
+        placeAncestors(p.mother_id);
       }
+    };
+
+    // Start layout from myId
+    placeUnit(myId, centerX);
+    placeAncestors(myId);
+
+    // Place any remaining unplaced nodes
+    const unplaced = people.filter(p => !placed.has(p.id));
+    if (unplaced.length > 0) {
+      // Find bounds of placed nodes
+      const placedXValues = Object.values(finalX);
+      const maxPlacedX = placedXValues.length > 0 ? Math.max(...placedXValues) : centerX;
+      let nextX = maxPlacedX + 200;
+      unplaced.forEach(p => {
+        if (!placed.has(p.id)) {
+          placeUnit(p.id, nextX);
+          nextX += 200;
+        }
+      });
     }
 
-    // Place any remaining floating nodes
+    // --- Final overlap resolution pass ---
+    // Group by generation, sort by X, push apart any that are too close
+    const genGroups: { [gen: number]: string[] } = {};
     people.forEach(p => {
-      if (!placedX.has(p.id)) {
-        // Place them based on generation, spread around center
-        initialX[p.id] = centerX - 300 + Math.random() * 600;
-        placedX.add(p.id);
-      }
+      const gen = generations[p.id] ?? 0;
+      if (!genGroups[gen]) genGroups[gen] = [];
+      genGroups[gen].push(p.id);
     });
 
-    // Save target/preferred positions to center around them
-    const preferredX = { ...initialX };
-
-    // Spacing Constraint Solver (25 iterations of Relaxation)
-    const minDistance = 200;
-    const coupleDistance = 170;
-    for (let iter = 0; iter < 25; iter++) {
-      const genGroups: { [gen: number]: string[] } = {};
-      people.forEach(p => {
-        const gen = generations[p.id] ?? 0;
-        if (!genGroups[gen]) genGroups[gen] = [];
-        genGroups[gen].push(p.id);
-      });
-
+    for (let iter = 0; iter < 30; iter++) {
+      let changed = false;
       Object.keys(genGroups).forEach(genStr => {
-        const gen = parseInt(genStr);
-        const ids = genGroups[gen];
+        const ids = genGroups[parseInt(genStr)];
         if (ids.length <= 1) return;
+        ids.sort((a, b) => (finalX[a] ?? 0) - (finalX[b] ?? 0));
 
-        ids.sort((a, b) => initialX[a] - initialX[b]);
-
-        // Left-to-right push pass
         for (let i = 0; i < ids.length - 1; i++) {
           const a = ids[i];
           const b = ids[i + 1];
+          const ax = finalX[a] ?? 0;
+          const bx = finalX[b] ?? 0;
           const aPartners = partnersMap[a] || [];
           const isCouple = aPartners.includes(b) || (partnersMap[b] || []).includes(a);
-          const reqDist = isCouple ? coupleDistance : minDistance;
-          if (initialX[b] < initialX[a] + reqDist) {
-            initialX[b] = initialX[a] + reqDist;
+          const minDist = isCouple ? COUPLE_GAP : NODE_W + 10;
+          if (bx - ax < minDist) {
+            const push = (minDist - (bx - ax)) / 2 + 1;
+            finalX[a] = ax - push;
+            finalX[b] = bx + push;
+            changed = true;
           }
         }
-
-        // Right-to-left push pass
-        for (let i = ids.length - 1; i > 0; i--) {
-          const a = ids[i];
-          const b = ids[i - 1];
-          const aPartners = partnersMap[a] || [];
-          const isCouple = aPartners.includes(b) || (partnersMap[b] || []).includes(a);
-          const reqDist = isCouple ? coupleDistance : minDistance;
-          if (initialX[b] > initialX[a] - reqDist) {
-            initialX[b] = initialX[a] - reqDist;
-          }
-        }
-
-        // Center nodes in this generation around the target average position
-        let sumCurrentX = 0;
-        let sumPreferredX = 0;
-        ids.forEach(id => {
-          sumCurrentX += initialX[id];
-          sumPreferredX += preferredX[id] ?? centerX;
-        });
-        const offset = (sumPreferredX - sumCurrentX) / ids.length;
-        ids.forEach(id => {
-          initialX[id] += offset;
-        });
       });
+      if (!changed) break;
     }
 
     // Assign final coordinates
     people.forEach(p => {
       const gen = generations[p.id] ?? 0;
-      const x = initialX[p.id];
-      const y = centerY + gen * 140;
+      const x = finalX[p.id] ?? centerX;
+      const y = centerY + gen * ROW_H;
       coords[p.id] = { x, y, label: getRelLabel(p, 'Contacto') };
     });
 
