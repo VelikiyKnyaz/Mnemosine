@@ -439,9 +439,9 @@ export default function FamilyTreeScreen({ navigation }: any) {
   // Derived stable positions for all nodes
   const nodePositions = useMemo(() => {
     const coords: { [id: string]: { x: number, y: number, label: string } } = {};
-    if (!myId || visiblePeople.length === 0) return coords;
+    if (!myId || people.length === 0) return coords;
 
-    const findPerson = (id: string) => visiblePeople.find(p => p.id === id);
+    const findPerson = (id: string) => people.find(p => p.id === id);
 
     const getRelLabel = (p: any, fallback: string) => {
       try {
@@ -473,11 +473,10 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     });
 
-    // BFS generations assignment
+    // BFS generations assignment (stable, global)
     const generations: { [id: string]: number } = {};
-    const rootId = focusedNodeId || myId;
-    generations[rootId] = 0;
-    const queue = [rootId];
+    generations[myId] = 0;
+    const queue = [myId];
 
     while (queue.length > 0) {
       const currId = queue.shift()!;
@@ -493,7 +492,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
         generations[p.mother_id] = currGen - 1;
         queue.push(p.mother_id);
       }
-      const children = visiblePeople.filter(x => x.father_id === currId || x.mother_id === currId);
+      const children = people.filter(x => x.father_id === currId || x.mother_id === currId);
       children.forEach(child => {
         if (generations[child.id] === undefined) {
           generations[child.id] = currGen + 1;
@@ -521,7 +520,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       return 0;
     };
 
-    visiblePeople.forEach(p => {
+    people.forEach(p => {
       if (generations[p.id] === undefined) {
         generations[p.id] = getGenerationFromLabel(getRelLabel(p, ''));
       }
@@ -529,13 +528,13 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // Initial X positions based on relations
     const initialX: { [id: string]: number } = {};
-    initialX[rootId] = centerX;
+    initialX[myId] = centerX;
 
     const placedX = new Set<string>();
-    placedX.add(rootId);
-    const layoutQueue = [rootId];
+    placedX.add(myId);
+    const layoutQueue = [myId];
 
-    const rootNode = findPerson(rootId);
+    const rootNode = findPerson(myId);
     const fatherId = rootNode?.father_id;
     const motherId = rootNode?.mother_id;
 
@@ -574,7 +573,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
 
       // Position children grouped by biological parent couples
-      const children = visiblePeople.filter(x => (x.father_id === currId || x.mother_id === currId) && !placedX.has(x.id));
+      const children = people.filter(x => (x.father_id === currId || x.mother_id === currId) && !placedX.has(x.id));
       if (children.length > 0) {
         const groups: { [otherParentId: string]: any[] } = {};
         const individualChildren: any[] = [];
@@ -617,7 +616,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     }
 
     // Place any remaining floating nodes
-    visiblePeople.forEach(p => {
+    people.forEach(p => {
       if (!placedX.has(p.id)) {
         // Place them based on generation, spread around center
         initialX[p.id] = centerX - 300 + Math.random() * 600;
@@ -633,7 +632,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     const coupleDistance = 160;
     for (let iter = 0; iter < 25; iter++) {
       const genGroups: { [gen: number]: string[] } = {};
-      visiblePeople.forEach(p => {
+      people.forEach(p => {
         const gen = generations[p.id] ?? 0;
         if (!genGroups[gen]) genGroups[gen] = [];
         genGroups[gen].push(p.id);
@@ -685,7 +684,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     }
 
     // Assign final coordinates
-    visiblePeople.forEach(p => {
+    people.forEach(p => {
       const gen = generations[p.id] ?? 0;
       const x = initialX[p.id];
       const y = centerY + gen * 140;
@@ -693,7 +692,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     });
 
     return coords;
-  }, [visiblePeople, myId]);
+  }, [people, myId]);
 
   const findFreePosition = (targetX: number, targetY: number, preferDir: 'left' | 'right' | 'down' | 'up', focusedId: string) => {
     let testX = targetX;
