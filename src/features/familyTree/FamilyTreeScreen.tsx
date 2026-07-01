@@ -550,13 +550,13 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
       // Position partners next to spouse
       const partnerIds = partnersMap[currId] || [];
-      let partnerOffset = 240;
+      let partnerOffset = 180;
       partnerIds.forEach(partnerId => {
         if (!placedX.has(partnerId)) {
           initialX[partnerId] = currX + partnerOffset;
           placedX.add(partnerId);
           layoutQueue.push(partnerId);
-          partnerOffset = partnerOffset > 0 ? -partnerOffset : -partnerOffset + 240;
+          partnerOffset = partnerOffset > 0 ? -partnerOffset : -partnerOffset + 180;
         }
       });
 
@@ -628,8 +628,8 @@ export default function FamilyTreeScreen({ navigation }: any) {
     const preferredX = { ...initialX };
 
     // Spacing Constraint Solver (25 iterations of Relaxation)
-    const minDistance = 220;
-    const coupleDistance = 240;
+    const minDistance = 200;
+    const coupleDistance = 170;
     for (let iter = 0; iter < 25; iter++) {
       const genGroups: { [gen: number]: string[] } = {};
       people.forEach(p => {
@@ -1517,10 +1517,17 @@ const filteredList = useMemo(() => {
                 const meta = person.metadata ? JSON.parse(person.metadata) : {};
 
                 return (
-                  <View key={`node-${person.id}`} style={[styles.nodeWrapper, { left: pos.x - 37.5, top: pos.y - 37.5 }]}>
-                    <TouchableOpacity 
-                      activeOpacity={0.8} 
-                      onPress={() => handleNodePress(person.id)}
+                  <TouchableOpacity 
+                    key={`node-${person.id}`} 
+                    activeOpacity={0.8}
+                    onPress={() => handleNodePress(person.id)}
+                    style={[
+                      styles.nodeWrapper, 
+                      { left: pos.x - 37.5, top: pos.y - 37.5 },
+                      isFocused && { zIndex: 10 }
+                    ]}
+                  >
+                    <View 
                       style={[
                         styles.nodeBubble,
                         isFocused && styles.focusedBubble,
@@ -1533,14 +1540,14 @@ const filteredList = useMemo(() => {
                         style={styles.nodeAvatar} 
                       />
                       {person.id === myId && <View style={styles.meBadge}><Text style={styles.meBadgeText}>Yo</Text></View>}
-                    </TouchableOpacity>
+                    </View>
                     <ZoomCompensatedText 
                       scale={scale} 
                       name={person.name} 
                       subtitle={meta.nickname || displayLabels[person.id] || ''} 
                       isZoomedOut={isZoomedOut} 
                     />
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
 
@@ -1634,7 +1641,7 @@ const filteredList = useMemo(() => {
                   const partnerPos = nodePositions[partnerId];
                   if (partnerPos) {
                     const midX = (pos.x + partnerPos.x) / 2;
-                    const midY = pos.y;
+                    const midY = pos.y + 70;
                     const coupleKey = [p.id, partnerId].sort().join('-');
                     addButtons.push(
                       <View key={`add-joint-child-${coupleKey}`} style={[styles.nodeWrapper, { left: midX - 37.5, top: midY - 37.5 }]}>
