@@ -527,230 +527,219 @@ export default function FamilyTreeScreen({ navigation }: any) {
     });
 
     // --- Subtree-width-aware layout ---
-    // Constants
-    const NODE_W = 110;   // minimum horizontal space per single node
-    const COUPLE_GAP = 140; // space between partners
-    const ROW_H = 140;    // vertical gap between generations
-
-    // Find all children of a person that exist in people[]
-    const getChildren = (parentId: string) => 
-      people.filter(p => p.father_id === parentId || p.mother_id === parentId);
-
-    // Build "family units": a primary person + their partners form a unit
-    // The unit's children are grouped by which partner they share
-    const placed = new Set<string>();
     const finalX: { [id: string]: number } = {};
+    const placed = new Set<string>();
+    const visibleIds = new Set(visiblePeople.map(p => p.id));
 
-    // Compute the width a subtree rooted at a "family unit" needs
+    // Get children of a person that are visible
+    const getVisibleChildren = (parentId: string) => 
+      people.filter(p => (p.father_id === parentId || p.mother_id === parentId) && visibleIds.has(p.id));
+
+    // Width calculation for descendant subtrees
     const subtreeWidthCache: { [id: string]: number } = {};
-
-    const getSubtreeWidth = (personId: string): number => {
+    const getDescendantSubtreeWidth = (personId: string): number => {
       if (subtreeWidthCache[personId] !== undefined) return subtreeWidthCache[personId];
-      if (placed.has(personId)) { subtreeWidthCache[personId] = NODE_W; return NODE_W; }
-
-      const partners = (partnersMap[personId] || []).filter(pId => !placed.has(pId));
-      // Unit width = person + partners side by side
+      
+      const partners = (partnersMap[personId] || []).filter(pId => visibleIds.has(pId));
       const unitNodeCount = 1 + partners.length;
-      const unitWidth = unitNodeCount * NODE_W + (unitNodeCount > 1 ? (unitNodeCount - 1) * (COUPLE_GAP - NODE_W) : 0);
+      const unitWidth = unitNodeCount * 110 + (unitNodeCount > 1 ? (unitNodeCount - 1) * 30 : 0);
 
-      // All children of this person (through any partner)
-      const allChildIds = new Set<string>();
-      const childrenDirect = getChildren(personId);
-      childrenDirect.forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
-      partners.forEach(pId => {
-        getChildren(pId).forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
-      });
-
-      if (allChildIds.size === 0) {
+      const children = getVisibleChildren(personId);
+      if (children.length === 0) {
         subtreeWidthCache[personId] = unitWidth;
         return unitWidth;
       }
 
-      // Temporarily mark placed to avoid infinite recursion
-      placed.add(personId);
-      partners.forEach(pId => placed.add(pId));
-
       let childrenTotalWidth = 0;
-      const childArr = Array.from(allChildIds);
-      childArr.forEach(cId => {
-        childrenTotalWidth += getSubtreeWidth(cId);
+      children.forEach((child, idx) => {
+        childrenTotalWidth += getDescendantSubtreeWidth(child.id);
+        if (idx > 0) childrenTotalWidth += 60; // sibling gap
       });
-
-      // Unmark
-      placed.delete(personId);
-      partners.forEach(pId => placed.delete(pId));
 
       const totalWidth = Math.max(unitWidth, childrenTotalWidth);
       subtreeWidthCache[personId] = totalWidth;
       return totalWidth;
     };
 
-    // Place a family unit (person + partners) centered at a given X, then recursively place children
-    const placeUnit = (personId: string, cx: number) => {
+    // Sibling offsets helper
+    const getSiblingOffsets = (siblingIds: string[]) => {
+      let totalWidth = 0;
+      const widths = siblingIds.map(id => getDescendantSubtreeWidth(id));
+      const totalW = widths.reduce((a, b) => a + b, 0) + (siblingIds.length - 1) * 60;
+      
+      const offsets: { [id: string]: number } = {};
+      let startX = -totalW / 2;
+      siblingIds.forEach((sibId, idx) => {
+        const w = widths[idx];
+        const sibCx = startX + w / 2;
+        offsets[sibId] = sibCx;
+        startX += w + 60;
+      });
+      return offsets;
+    };
+
+    // Recursive placement of descendants
+    const placeDescendants = (personId: string, cx: number) => {
       if (placed.has(personId)) return;
       placed.add(personId);
 
-      const partners = (partnersMap[personId] || []).filter(pId => !placed.has(pId));
+      const partners = (partnersMap[personId] || []).filter(pId => visibleIds.has(pId));
       partners.forEach(pId => placed.add(pId));
 
-      // Place the unit members centered around cx
       const allMembers = [personId, ...partners];
-      const unitWidth = allMembers.length * NODE_W + (allMembers.length > 1 ? (allMembers.length - 1) * (COUPLE_GAP - NODE_W) : 0);
-      let memberX = cx - unitWidth / 2 + NODE_W / 2;
+      const unitWidth = allMembers.length * 110 + (allMembers.length > 1 ? (allMembers.length - 1) * 30 : 0);
+      
+      let memberX = cx - unitWidth / 2 + 55;
       allMembers.forEach(mId => {
         finalX[mId] = memberX;
-        memberX += COUPLE_GAP;
+        memberX += 140;
       });
 
-      // Gather all children
-      const allChildIds = new Set<string>();
-      allMembers.forEach(mId => {
-        getChildren(mId).forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
-      });
+      const children = getVisibleChildren(personId);
+      if (children.length === 0) return;
 
-      if (allChildIds.size === 0) return;
-
-      const childArr = Array.from(allChildIds);
-
-      // Calculate total children width
       let childrenTotalWidth = 0;
-      const childWidths: number[] = [];
-      childArr.forEach(cId => {
-        const w = getSubtreeWidth(cId);
-        childWidths.push(w);
+      const childWidths = children.map(c => {
+        const w = getDescendantSubtreeWidth(c.id);
         childrenTotalWidth += w;
+        return w;
       });
+      childrenTotalWidth += (children.length - 1) * 60;
 
-      // Place children centered under the unit
       let childStartX = cx - childrenTotalWidth / 2;
-      childArr.forEach((cId, idx) => {
+      children.forEach((c, idx) => {
         const cw = childWidths[idx];
         const childCx = childStartX + cw / 2;
-        placeUnit(cId, childCx);
-        childStartX += cw;
+        placeDescendants(c.id, childCx);
+        childStartX += cw + 60;
       });
     };
 
-    // --- Place ancestors upward ---
-    // For ancestors, we work bottom-up: place parents centered above their child
-    const placeAncestors = (personId: string) => {
-      const p = findPerson(personId);
-      if (!p) return;
+    // Sibling group placement
+    const placeSiblingGroup = (siblingIds: string[], cx: number) => {
+      let totalWidth = 0;
+      const widths = siblingIds.map(id => getDescendantSubtreeWidth(id));
+      totalWidth += widths.reduce((a, b) => a + b, 0) + (siblingIds.length - 1) * 60;
 
-      const px = finalX[personId];
-      if (px === undefined) return;
+      let startX = cx - totalWidth / 2;
+      siblingIds.forEach((sibId, idx) => {
+        const w = widths[idx];
+        const sibCx = startX + w / 2;
+        placeDescendants(sibId, sibCx);
+        startX += w + 60;
+      });
+    };
 
-      // Father
-      if (p.father_id && !placed.has(p.father_id)) {
-        placed.add(p.father_id);
-        const fatherPartners = (partnersMap[p.father_id] || []).filter(pId => !placed.has(pId));
-        fatherPartners.forEach(pId => placed.add(pId));
+    // Bidirectional placement starting from focusedNodeId
+    const focusId = focusedNodeId || myId;
+    
+    // Step 1: Place focus node and its siblings (Gen 0 and down)
+    const focusNode = findPerson(focusId);
+    const siblings = focusNode && (focusNode.father_id || focusNode.mother_id)
+      ? people.filter(c => (c.father_id === focusNode.father_id || c.mother_id === focusNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
+      : [focusId];
+    
+    placeSiblingGroup(siblings, centerX);
 
-        // Place father to left of child center, mother to right
-        if (p.mother_id && placed.has(p.mother_id)) {
-          // Mother already placed (shouldn't happen), just place father
-          finalX[p.father_id] = px - COUPLE_GAP / 2;
-        } else if (p.mother_id) {
-          // Place both parents
-          finalX[p.father_id] = px - COUPLE_GAP / 2;
-          finalX[p.mother_id] = px + COUPLE_GAP / 2;
-          placed.add(p.mother_id);
-          // Place mother's other partners
-          const motherPartners = (partnersMap[p.mother_id] || []).filter(pId => !placed.has(pId));
-          let offset = COUPLE_GAP;
-          motherPartners.forEach(pId => {
-            placed.add(pId);
-            finalX[pId] = finalX[p.mother_id!]! + offset;
-            offset += COUPLE_GAP;
-          });
-          placeAncestors(p.mother_id);
-        } else {
-          finalX[p.father_id] = px;
-        }
+    // Step 2: Traverse upwards to place ancestors recursively
+    const placeAncestorsOf = (childId: string) => {
+      const childNode = findPerson(childId);
+      if (!childNode) return;
 
-        // Place father's other partners
-        let offset = -COUPLE_GAP;
-        fatherPartners.forEach(pId => {
-          if (pId !== p.mother_id) {
-            finalX[pId] = finalX[p.father_id!]! + offset;
-            offset -= COUPLE_GAP;
-          }
-        });
+      const fId = childNode.father_id;
+      const mId = childNode.mother_id;
+      const fVisible = fId && visibleIds.has(fId);
+      const mVisible = mId && visibleIds.has(mId);
 
-        placeAncestors(p.father_id);
-      } else if (p.mother_id && !placed.has(p.mother_id)) {
-        placed.add(p.mother_id);
-        finalX[p.mother_id] = px;
-        const motherPartners = (partnersMap[p.mother_id] || []).filter(pId => !placed.has(pId));
-        let offset = COUPLE_GAP;
-        motherPartners.forEach(pId => {
-          placed.add(pId);
-          finalX[pId] = finalX[p.mother_id!]! + offset;
-          offset += COUPLE_GAP;
-        });
-        placeAncestors(p.mother_id);
+      if (!fVisible && !mVisible) return;
+
+      const childX = finalX[childId];
+      if (childX === undefined) return;
+
+      if (fVisible && mVisible) {
+        placed.add(fId);
+        placed.add(mId);
+
+        const fNode = findPerson(fId);
+        const fatherSiblings = fNode && (fNode.father_id || fNode.mother_id)
+          ? people.filter(c => (c.father_id === fNode.father_id || c.mother_id === fNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
+          : [];
+
+        const mNode = findPerson(mId);
+        const motherSiblings = mNode && (mNode.father_id || mNode.mother_id)
+          ? people.filter(c => (c.father_id === mNode.father_id || c.mother_id === mNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
+          : [];
+
+        const patSiblings = fatherSiblings.length > 0 ? fatherSiblings : [fId];
+        const matSiblings = motherSiblings.length > 0 ? motherSiblings : [mId];
+
+        const patOffsets = getSiblingOffsets(patSiblings);
+        const matOffsets = getSiblingOffsets(matSiblings);
+
+        const oF = patOffsets[fId] || 0;
+        const oM = matOffsets[mId] || 0;
+
+        const xF = childX - 70;
+        const xM = childX + 70;
+
+        const cPat = xF - oF;
+        const cMat = xM - oM;
+
+        placeSiblingGroup(patSiblings, cPat);
+        placeSiblingGroup(matSiblings, cMat);
+
+        placeAncestorsOf(fId);
+        placeAncestorsOf(mId);
+      } else if (fVisible) {
+        placed.add(fId);
+        const fNode = findPerson(fId);
+        const fatherSiblings = fNode && (fNode.father_id || fNode.mother_id)
+          ? people.filter(c => (c.father_id === fNode.father_id || c.mother_id === fNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
+          : [];
+        const patSiblings = fatherSiblings.length > 0 ? fatherSiblings : [fId];
+        const patOffsets = getSiblingOffsets(patSiblings);
+        const oF = patOffsets[fId] || 0;
+
+        const cPat = childX - oF;
+        placeSiblingGroup(patSiblings, cPat);
+        placeAncestorsOf(fId);
+      } else if (mVisible) {
+        placed.add(mId);
+        const mNode = findPerson(mId);
+        const motherSiblings = mNode && (mNode.father_id || mNode.mother_id)
+          ? people.filter(c => (c.father_id === mNode.father_id || c.mother_id === mNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
+          : [];
+        const matSiblings = motherSiblings.length > 0 ? motherSiblings : [mId];
+        const matOffsets = getSiblingOffsets(matSiblings);
+        const oM = matOffsets[mId] || 0;
+
+        const cMat = childX - oM;
+        placeSiblingGroup(matSiblings, cMat);
+        placeAncestorsOf(mId);
       }
     };
 
-    // Start layout from myId
-    placeUnit(myId, centerX);
-    placeAncestors(myId);
+    placeAncestorsOf(focusId);
 
-    // Place any remaining unplaced nodes
-    const unplaced = people.filter(p => !placed.has(p.id));
+    // Place any remaining unplaced visible nodes
+    const unplaced = visiblePeople.filter(p => !placed.has(p.id));
     if (unplaced.length > 0) {
-      // Find bounds of placed nodes
       const placedXValues = Object.values(finalX);
       const maxPlacedX = placedXValues.length > 0 ? Math.max(...placedXValues) : centerX;
       let nextX = maxPlacedX + 200;
       unplaced.forEach(p => {
         if (!placed.has(p.id)) {
-          placeUnit(p.id, nextX);
+          placeDescendants(p.id, nextX);
           nextX += 200;
         }
       });
-    }
-
-    // --- Final overlap resolution pass ---
-    // Group by generation, sort by X, push apart any that are too close
-    const genGroups: { [gen: number]: string[] } = {};
-    people.forEach(p => {
-      const gen = generations[p.id] ?? 0;
-      if (!genGroups[gen]) genGroups[gen] = [];
-      genGroups[gen].push(p.id);
-    });
-
-    for (let iter = 0; iter < 30; iter++) {
-      let changed = false;
-      Object.keys(genGroups).forEach(genStr => {
-        const ids = genGroups[parseInt(genStr)];
-        if (ids.length <= 1) return;
-        ids.sort((a, b) => (finalX[a] ?? 0) - (finalX[b] ?? 0));
-
-        for (let i = 0; i < ids.length - 1; i++) {
-          const a = ids[i];
-          const b = ids[i + 1];
-          const ax = finalX[a] ?? 0;
-          const bx = finalX[b] ?? 0;
-          const aPartners = partnersMap[a] || [];
-          const isCouple = aPartners.includes(b) || (partnersMap[b] || []).includes(a);
-          const minDist = isCouple ? COUPLE_GAP : NODE_W + 10;
-          if (bx - ax < minDist) {
-            const push = (minDist - (bx - ax)) / 2 + 1;
-            finalX[a] = ax - push;
-            finalX[b] = bx + push;
-            changed = true;
-          }
-        }
-      });
-      if (!changed) break;
     }
 
     // Assign final coordinates
     people.forEach(p => {
       const gen = generations[p.id] ?? 0;
       const x = finalX[p.id] ?? centerX;
-      const y = centerY + gen * ROW_H;
+      const y = centerY + gen * 140;
       coords[p.id] = { x, y, label: getRelLabel(p, 'Contacto') };
     });
 
