@@ -439,7 +439,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
   // Derived stable positions for all nodes
   const nodePositions = useMemo(() => {
     const coords: { [id: string]: { x: number, y: number, label: string } } = {};
-    if (!myId || people.length === 0) return coords;
+    if (!myId || people.length === 0 || visiblePeople.length === 0) return coords;
 
     const findPerson = (id: string) => people.find(p => p.id === id);
 
@@ -452,63 +452,63 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     };
 
-    // Build global partnersMap
-    const partnersMap: { [id: string]: string[] } = {};
-    const addPartnerMapping = (idA: string, idB: string) => {
+    // Build absolute generations (global layout structure starting from myId = gen 0)
+    const generations: { [id: string]: number } = {};
+    generations[myId] = 0;
+    const genQueue = [myId];
+
+    // Build partnersMap globally to traverse generations correctly
+    const globalPartnersMap: { [id: string]: string[] } = {};
+    const addGlobalPartner = (idA: string, idB: string) => {
       if (!idA || !idB) return;
-      if (!partnersMap[idA]) partnersMap[idA] = [];
-      if (!partnersMap[idA].includes(idB)) partnersMap[idA].push(idB);
-      if (!partnersMap[idB]) partnersMap[idB] = [];
-      if (!partnersMap[idB].includes(idA)) partnersMap[idB].push(idA);
+      if (!globalPartnersMap[idA]) globalPartnersMap[idA] = [];
+      if (!globalPartnersMap[idA].includes(idB)) globalPartnersMap[idA].push(idB);
+      if (!globalPartnersMap[idB]) globalPartnersMap[idB] = [];
+      if (!globalPartnersMap[idB].includes(idA)) globalPartnersMap[idB].push(idA);
     };
     people.forEach(p => {
       const metaPartnerIds = getPartnerIds(p);
-      metaPartnerIds.forEach(pId => addPartnerMapping(p.id, pId));
+      metaPartnerIds.forEach(pId => addGlobalPartner(p.id, pId));
       if (p.father_id && p.mother_id) {
-        addPartnerMapping(p.father_id, p.mother_id);
+        addGlobalPartner(p.father_id, p.mother_id);
       }
       const meta = p.metadata ? JSON.parse(p.metadata) : {};
       if (meta.relationship === 'Pareja') {
-        addPartnerMapping(p.id, myId || '');
+        addGlobalPartner(p.id, myId || '');
       }
     });
 
-    // BFS generations assignment (always anchored to myId = gen 0)
-    const generations: { [id: string]: number } = {};
-    generations[myId] = 0;
-    const queue = [myId];
-
-    while (queue.length > 0) {
-      const currId = queue.shift()!;
+    while (genQueue.length > 0) {
+      const currId = genQueue.shift()!;
       const currGen = generations[currId];
       const p = findPerson(currId);
       if (!p) continue;
 
       if (p.father_id && generations[p.father_id] === undefined) {
         generations[p.father_id] = currGen - 1;
-        queue.push(p.father_id);
+        genQueue.push(p.father_id);
       }
       if (p.mother_id && generations[p.mother_id] === undefined) {
         generations[p.mother_id] = currGen - 1;
-        queue.push(p.mother_id);
+        genQueue.push(p.mother_id);
       }
       const children = people.filter(x => x.father_id === currId || x.mother_id === currId);
       children.forEach(child => {
         if (generations[child.id] === undefined) {
           generations[child.id] = currGen + 1;
-          queue.push(child.id);
+          genQueue.push(child.id);
         }
       });
-      const pIds = partnersMap[currId] || [];
+      const pIds = globalPartnersMap[currId] || [];
       pIds.forEach(partnerId => {
         if (generations[partnerId] === undefined) {
           generations[partnerId] = currGen;
-          queue.push(partnerId);
+          genQueue.push(partnerId);
         }
       });
     }
 
-    // Fallback for disconnected nodes
+    // Fallback generations for disconnected nodes in the global tree
     const getGenerationFromLabel = (label: string): number => {
       const l = label.toLowerCase();
       if (l.includes('bisabuel')) return -3;
@@ -525,22 +525,45 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     });
 
-    // --- Subtree-width-aware layout ---
-    // Constants
-    const NODE_W = 110;   // minimum horizontal space per single node
-    const COUPLE_GAP = 140; // space between partners
-    const ROW_H = 140;    // vertical gap between generations
+    // Build visiblePartnersMap (only containing visible partners mapping)
+    const partnersMap: { [id: string]: string[] } = {};
+    const addPartnerMapping = (idA: string, idB: string) => {
+      if (!idA || !idB) return;
+      if (!partnersMap[idA]) partnersMap[idA] = [];
+      if (!partnersMap[idA].includes(idB)) partnersMap[idA].push(idB);
+      if (!partnersMap[idB]) partnersMap[idB] = [];
+      if (!partnersMap[idB].includes(idA)) partnersMap[idB].push(idA);
+    };
 
-    // Find all children of a person that exist in people[]
+    const visibleIds = new Set(visiblePeople.map(x => x.id));
+    visiblePeople.forEach(p => {
+      const metaPartnerIds = getPartnerIds(p);
+      metaPartnerIds.forEach(pId => {
+        if (visibleIds.has(pId)) {
+          addPartnerMapping(p.id, pId);
+        }
+      });
+      if (p.father_id && p.mother_id && visibleIds.has(p.father_id) && visibleIds.has(p.mother_id)) {
+        addPartnerMapping(p.father_id, p.mother_id);
+      }
+      const meta = p.metadata ? JSON.parse(p.metadata) : {};
+      if (meta.relationship === 'Pareja') {
+        if (visibleIds.has(myId || '')) {
+          addPartnerMapping(p.id, myId || '');
+        }
+      }
+    });
+
+    // --- Subtree-width-aware layout (ONLY FOR VISIBLE NODES) ---
+    const NODE_W = 110;
+    const COUPLE_GAP = 140;
+    const ROW_H = 140;
+
     const getChildren = (parentId: string) => 
-      people.filter(p => p.father_id === parentId || p.mother_id === parentId);
+      visiblePeople.filter(p => p.father_id === parentId || p.mother_id === parentId);
 
-    // Build "family units": a primary person + their partners form a unit
-    // The unit's children are grouped by which partner they share
     const placed = new Set<string>();
     const finalX: { [id: string]: number } = {};
-
-    // Compute the width a subtree rooted at a "family unit" needs
     const subtreeWidthCache: { [id: string]: number } = {};
 
     const getSubtreeWidth = (personId: string): number => {
@@ -548,14 +571,11 @@ export default function FamilyTreeScreen({ navigation }: any) {
       if (placed.has(personId)) { subtreeWidthCache[personId] = NODE_W; return NODE_W; }
 
       const partners = (partnersMap[personId] || []).filter(pId => !placed.has(pId));
-      // Unit width = person + partners side by side
       const unitNodeCount = 1 + partners.length;
       const unitWidth = unitNodeCount * NODE_W + (unitNodeCount > 1 ? (unitNodeCount - 1) * (COUPLE_GAP - NODE_W) : 0);
 
-      // All children of this person (through any partner)
       const allChildIds = new Set<string>();
-      const childrenDirect = getChildren(personId);
-      childrenDirect.forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
+      getChildren(personId).forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
       partners.forEach(pId => {
         getChildren(pId).forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
       });
@@ -565,7 +585,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
         return unitWidth;
       }
 
-      // Temporarily mark placed to avoid infinite recursion
       placed.add(personId);
       partners.forEach(pId => placed.add(pId));
 
@@ -575,7 +594,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
         childrenTotalWidth += getSubtreeWidth(cId);
       });
 
-      // Unmark
       placed.delete(personId);
       partners.forEach(pId => placed.delete(pId));
 
@@ -584,7 +602,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
       return totalWidth;
     };
 
-    // Place a family unit (person + partners) centered at a given X, then recursively place children
     const placeUnit = (personId: string, cx: number) => {
       if (placed.has(personId)) return;
       placed.add(personId);
@@ -592,7 +609,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
       const partners = (partnersMap[personId] || []).filter(pId => !placed.has(pId));
       partners.forEach(pId => placed.add(pId));
 
-      // Place the unit members centered around cx
       const allMembers = [personId, ...partners];
       const unitWidth = allMembers.length * NODE_W + (allMembers.length > 1 ? (allMembers.length - 1) * (COUPLE_GAP - NODE_W) : 0);
       let memberX = cx - unitWidth / 2 + NODE_W / 2;
@@ -601,7 +617,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
         memberX += COUPLE_GAP;
       });
 
-      // Gather all children
       const allChildIds = new Set<string>();
       allMembers.forEach(mId => {
         getChildren(mId).forEach(c => { if (!placed.has(c.id)) allChildIds.add(c.id); });
@@ -610,8 +625,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
       if (allChildIds.size === 0) return;
 
       const childArr = Array.from(allChildIds);
-
-      // Calculate total children width
       let childrenTotalWidth = 0;
       const childWidths: number[] = [];
       childArr.forEach(cId => {
@@ -620,7 +633,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
         childrenTotalWidth += w;
       });
 
-      // Place children centered under the unit
       let childStartX = cx - childrenTotalWidth / 2;
       childArr.forEach((cId, idx) => {
         const cw = childWidths[idx];
@@ -630,8 +642,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
       });
     };
 
-    // --- Place ancestors upward ---
-    // For ancestors, we work bottom-up: place parents centered above their child
     const placeAncestors = (personId: string) => {
       const p = findPerson(personId);
       if (!p) return;
@@ -639,22 +649,17 @@ export default function FamilyTreeScreen({ navigation }: any) {
       const px = finalX[personId];
       if (px === undefined) return;
 
-      // Father
-      if (p.father_id && !placed.has(p.father_id)) {
+      if (p.father_id && visibleIds.has(p.father_id) && !placed.has(p.father_id)) {
         placed.add(p.father_id);
         const fatherPartners = (partnersMap[p.father_id] || []).filter(pId => !placed.has(pId));
         fatherPartners.forEach(pId => placed.add(pId));
 
-        // Place father to left of child center, mother to right
-        if (p.mother_id && placed.has(p.mother_id)) {
-          // Mother already placed (shouldn't happen), just place father
+        if (p.mother_id && visibleIds.has(p.mother_id) && placed.has(p.mother_id)) {
           finalX[p.father_id] = px - COUPLE_GAP / 2;
-        } else if (p.mother_id) {
-          // Place both parents
+        } else if (p.mother_id && visibleIds.has(p.mother_id)) {
           finalX[p.father_id] = px - COUPLE_GAP / 2;
           finalX[p.mother_id] = px + COUPLE_GAP / 2;
           placed.add(p.mother_id);
-          // Place mother's other partners
           const motherPartners = (partnersMap[p.mother_id] || []).filter(pId => !placed.has(pId));
           let offset = COUPLE_GAP;
           motherPartners.forEach(pId => {
@@ -667,7 +672,6 @@ export default function FamilyTreeScreen({ navigation }: any) {
           finalX[p.father_id] = px;
         }
 
-        // Place father's other partners
         let offset = -COUPLE_GAP;
         fatherPartners.forEach(pId => {
           if (pId !== p.mother_id) {
@@ -677,7 +681,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
         });
 
         placeAncestors(p.father_id);
-      } else if (p.mother_id && !placed.has(p.mother_id)) {
+      } else if (p.mother_id && visibleIds.has(p.mother_id) && !placed.has(p.mother_id)) {
         placed.add(p.mother_id);
         finalX[p.mother_id] = px;
         const motherPartners = (partnersMap[p.mother_id] || []).filter(pId => !placed.has(pId));
@@ -691,18 +695,20 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
     };
 
-    // Start layout from myId
-    placeUnit(myId, centerX);
-    placeAncestors(myId);
+    // Anchor starting coordinates of visible layout to focusedNodeId or myId
+    const rootLayoutId = focusedNodeId || myId;
+    if (rootLayoutId && visibleIds.has(rootLayoutId)) {
+      placeUnit(rootLayoutId, centerX);
+      placeAncestors(rootLayoutId);
+    }
 
-    // Place any remaining unplaced nodes
-    const unplaced = people.filter(p => !placed.has(p.id));
-    if (unplaced.length > 0) {
-      // Find bounds of placed nodes
+    // Place remaining unplaced visible nodes
+    const unplacedVisible = visiblePeople.filter(p => !placed.has(p.id));
+    if (unplacedVisible.length > 0) {
       const placedXValues = Object.values(finalX);
       const maxPlacedX = placedXValues.length > 0 ? Math.max(...placedXValues) : centerX;
       let nextX = maxPlacedX + 200;
-      unplaced.forEach(p => {
+      unplacedVisible.forEach(p => {
         if (!placed.has(p.id)) {
           placeUnit(p.id, nextX);
           nextX += 200;
@@ -710,10 +716,9 @@ export default function FamilyTreeScreen({ navigation }: any) {
       });
     }
 
-    // --- Final overlap resolution pass ---
-    // Group by generation, sort by X, push apart any that are too close
+    // --- Final overlap resolution pass (visible nodes only) ---
     const genGroups: { [gen: number]: string[] } = {};
-    people.forEach(p => {
+    visiblePeople.forEach(p => {
       const gen = generations[p.id] ?? 0;
       if (!genGroups[gen]) genGroups[gen] = [];
       genGroups[gen].push(p.id);
@@ -745,8 +750,8 @@ export default function FamilyTreeScreen({ navigation }: any) {
       if (!changed) break;
     }
 
-    // Assign final coordinates
-    people.forEach(p => {
+    // Assign final coordinates to visible nodes
+    visiblePeople.forEach(p => {
       const gen = generations[p.id] ?? 0;
       const x = finalX[p.id] ?? centerX;
       const y = centerY + gen * ROW_H;
@@ -754,7 +759,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     });
 
     return coords;
-  }, [people, myId]);
+  }, [people, visiblePeople, focusedNodeId, myId]);
 
   // Derived display labels for visible nodes relative to the clicked/focused node
   const displayLabels = useMemo(() => {
