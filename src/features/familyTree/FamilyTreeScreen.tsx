@@ -318,12 +318,93 @@ export default function FamilyTreeScreen({ navigation }: any) {
     }
   }, [myId, containerWidth, containerHeight]);
 
+  // Derived visible people based on focusedNodeId (Context-Focus filtering)
+  const visiblePeople = useMemo(() => {
+    if (!focusedNodeId || people.length === 0) return people;
+
+    const visibleIds = new Set<string>();
+    const queue = [focusedNodeId];
+    visibleIds.add(focusedNodeId);
+
+    const getPartnerId = (person: any) => {
+      try {
+        const meta = person.metadata ? JSON.parse(person.metadata) : {};
+        return meta.partner_id || null;
+      } catch {
+        return null;
+      }
+    };
+    
+    const partnersMap: { [id: string]: string } = {};
+    people.forEach(p => {
+      const metaPartner = getPartnerId(p);
+      if (metaPartner) {
+        partnersMap[p.id] = metaPartner;
+        partnersMap[metaPartner] = p.id;
+      }
+      if (p.father_id && p.mother_id) {
+        partnersMap[p.father_id] = p.mother_id;
+        partnersMap[p.mother_id] = p.father_id;
+      }
+      const meta = p.metadata ? JSON.parse(p.metadata) : {};
+      if (meta.relationship === 'Pareja') {
+        partnersMap[p.id] = myId || '';
+        if (myId) partnersMap[myId] = p.id;
+      }
+    });
+
+    const findPerson = (id: string) => people.find(p => p.id === id);
+
+    const traverseLineage = (currentId: string, direction: 'up' | 'down') => {
+      const q = [currentId];
+      while (q.length > 0) {
+        const curr = q.shift()!;
+        const p = findPerson(curr);
+        if (!p) continue;
+
+        if (direction === 'up') {
+          if (p.father_id && !visibleIds.has(p.father_id)) {
+            visibleIds.add(p.father_id);
+            q.push(p.father_id);
+          }
+          if (p.mother_id && !visibleIds.has(p.mother_id)) {
+            visibleIds.add(p.mother_id);
+            q.push(p.mother_id);
+          }
+        } else {
+          const children = people.filter(x => x.father_id === curr || x.mother_id === curr);
+          children.forEach(c => {
+            if (!visibleIds.has(c.id)) {
+              visibleIds.add(c.id);
+              q.push(c.id);
+            }
+          });
+        }
+      }
+    };
+
+    traverseLineage(focusedNodeId, 'up');
+    traverseLineage(focusedNodeId, 'down');
+
+    const focusedPartner = partnersMap[focusedNodeId];
+    if (focusedPartner) visibleIds.add(focusedPartner);
+
+    people.forEach(p => {
+      if (visibleIds.has(p.id) && p.father_id && p.mother_id) {
+        visibleIds.add(p.father_id);
+        visibleIds.add(p.mother_id);
+      }
+    });
+
+    return people.filter(p => visibleIds.has(p.id));
+  }, [people, focusedNodeId, myId]);
+
   // Derived stable positions for all nodes
   const nodePositions = useMemo(() => {
     const coords: { [id: string]: { x: number, y: number, label: string } } = {};
-    if (!myId || people.length === 0) return coords;
+    if (!myId || visiblePeople.length === 0) return coords;
 
-    const findPerson = (id: string) => people.find(p => p.id === id);
+    const findPerson = (id: string) => visiblePeople.find(p => p.id === id);
 
     const getRelLabel = (p: any, fallback: string) => {
       try {
@@ -380,7 +461,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
         generations[p.mother_id] = currGen - 1;
         queue.push(p.mother_id);
       }
-      const children = people.filter(x => x.father_id === currId || x.mother_id === currId);
+      const children = visiblePeople.filter(x => x.father_id === currId || x.mother_id === currId);
       children.forEach(child => {
         if (generations[child.id] === undefined) {
           generations[child.id] = currGen + 1;
@@ -406,7 +487,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       return 0;
     };
 
-    people.forEach(p => {
+    visiblePeople.forEach(p => {
       if (generations[p.id] === undefined) {
         generations[p.id] = getGenerationFromLabel(getRelLabel(p, ''));
       }
@@ -455,7 +536,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       }
 
       // Position children
-      const children = people.filter(x => (x.father_id === currId || x.mother_id === currId) && !placedX.has(x.id));
+      const children = visiblePeople.filter(x => (x.father_id === currId || x.mother_id === currId) && !placedX.has(x.id));
       if (children.length > 0) {
         const hasPartner = partnerId && initialX[partnerId] !== undefined;
         const centerAnchor = hasPartner ? (currX + initialX[partnerId]) / 2 : currX;
@@ -472,7 +553,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     }
 
     // Place any remaining floating nodes
-    people.forEach(p => {
+    visiblePeople.forEach(p => {
       if (!placedX.has(p.id)) {
         // Place them based on generation, spread around center
         initialX[p.id] = centerX - 300 + Math.random() * 600;
@@ -488,7 +569,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     const coupleDistance = 160;
     for (let iter = 0; iter < 25; iter++) {
       const genGroups: { [gen: number]: string[] } = {};
-      people.forEach(p => {
+      visiblePeople.forEach(p => {
         const gen = generations[p.id] ?? 0;
         if (!genGroups[gen]) genGroups[gen] = [];
         genGroups[gen].push(p.id);
@@ -538,7 +619,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     }
 
     // Assign final coordinates
-    people.forEach(p => {
+    visiblePeople.forEach(p => {
       const gen = generations[p.id] ?? 0;
       const x = initialX[p.id];
       const y = centerY + gen * 140;
@@ -546,15 +627,15 @@ export default function FamilyTreeScreen({ navigation }: any) {
     });
 
     return coords;
-  }, [people, myId]);
+  }, [visiblePeople, myId]);
 
   const findFreePosition = (targetX: number, targetY: number, preferDir: 'left' | 'right' | 'down' | 'up', focusedId: string) => {
     let testX = targetX;
     let testY = targetY;
 
     const isCollision = (tx: number, ty: number) => {
-      // Check collision with all people nodes
-      return people.some(node => {
+      // Check collision with all visiblePeople nodes
+      return visiblePeople.some(node => {
         if (node.id === focusedId) return false;
         const nPos = nodePositions[node.id];
         if (!nPos) return false;
@@ -682,7 +763,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // Draw couple lines (only draw once per couple by ordering IDs)
     const drawnCouples = new Set<string>();
-    people.forEach(p => {
+    visiblePeople.forEach(p => {
       const partnerId = partnersMap[p.id];
       if (partnerId) {
         const key = [p.id, partnerId].sort().join('-');
@@ -712,7 +793,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
     });
 
     // 1. Draw actual family lines
-    people.forEach((p) => {
+    visiblePeople.forEach((p) => {
       const pPos = nodePositions[p.id];
       if (!pPos) return;
 
@@ -787,7 +868,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // 2. Draw lines to active "+" bubbles of the focused node
     if (focusedNodeId) {
-      const p = people.find(x => x.id === focusedNodeId);
+      const p = visiblePeople.find(x => x.id === focusedNodeId);
       const pos = nodePositions[focusedNodeId];
       if (p && pos) {
         if (!p.father_id) {
@@ -803,7 +884,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
           const freePos = findFreePosition(pos.x + 115, pos.y, 'right', focusedNodeId);
           lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-partner-${p.id}`, true));
         }
-        const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
+        const nodeChildren = visiblePeople.filter(x => x.father_id === p.id || x.mother_id === p.id);
         if (nodeChildren.length === 0) {
           const freePos = findFreePosition(pos.x, pos.y + 120, 'down', focusedNodeId);
           lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-child-${p.id}`, true));
@@ -1283,7 +1364,7 @@ const filteredList = useMemo(() => {
               {renderAllLines()}
 
               {/* RENDER ALL PEOPLE IN FIXED COORDINATES */}
-              {people.map((person) => {
+              {visiblePeople.map((person) => {
                 const pos = nodePositions[person.id];
                 if (!pos) return null;
                 const isFocused = focusedNodeId === person.id;
@@ -1319,7 +1400,7 @@ const filteredList = useMemo(() => {
 
               {/* DYNAMIC ADD BRANCH (+) BUBBLES */}
               {focusedNodeId && (() => {
-                const p = people.find(x => x.id === focusedNodeId);
+                const p = visiblePeople.find(x => x.id === focusedNodeId);
                 const pos = nodePositions[focusedNodeId];
                 if (!p || !pos) return null;
 
@@ -1335,7 +1416,7 @@ const filteredList = useMemo(() => {
                     return null;
                   }
                 };
-                people.forEach(x => {
+                visiblePeople.forEach(x => {
                   const metaPartner = getPartnerId(x);
                   if (metaPartner) {
                     partnersMap[x.id] = metaPartner;
@@ -1402,41 +1483,44 @@ const filteredList = useMemo(() => {
                   );
                 }
 
-                const handleAddChildPress = () => {
-                  if (partnerId) {
-                    Alert.alert(
-                      'Añadir Hijo/a',
-                      '¿Quieres añadir un hijo en común con su pareja o un hijo individual?',
-                      [
-                        { text: 'Cancelar', style: 'cancel' },
-                        { 
-                          text: 'Hijo Individual', 
-                          onPress: () => openCreateModal({ parentId: p.id, role: 'child' }) 
-                        },
-                        { 
-                          text: 'Hijo en Común', 
-                          onPress: () => openCreateModal({ parentId: p.id, partnerId: partnerId, role: 'joint_child' }) 
-                        }
-                      ]
+                if (partnerId) {
+                  const partnerPos = nodePositions[partnerId];
+                  if (partnerPos) {
+                    const midX = (pos.x + partnerPos.x) / 2;
+                    const midY = pos.y;
+                    const coupleKey = [p.id, partnerId].sort().join('-');
+                    addButtons.push(
+                      <View key={`add-joint-child-${coupleKey}`} style={[styles.nodeWrapper, { left: midX - 37.5, top: midY - 37.5 }]}>
+                        <TouchableOpacity 
+                          activeOpacity={0.8} 
+                          onPress={() => openCreateModal({ parentId: p.id, partnerId: partnerId, role: 'joint_child' })}
+                          style={[styles.plusBubble, { backgroundColor: '#e8def8', borderColor: '#6200ee' }]}
+                        >
+                          <IconButton icon="account-multiple-plus" size={24} iconColor="#6200ee" />
+                        </TouchableOpacity>
+                        <ZoomCompensatedLabel scale={scale} label="Hijo en Común" />
+                      </View>
                     );
-                  } else {
-                    openCreateModal({ parentId: p.id, role: 'child' });
                   }
+                }
+
+                const handleAddIndividualChild = () => {
+                  openCreateModal({ parentId: p.id, role: 'child' });
                 };
 
-                const nodeChildren = people.filter(x => x.father_id === p.id || x.mother_id === p.id);
+                const nodeChildren = visiblePeople.filter(x => x.father_id === p.id || x.mother_id === p.id);
                 if (nodeChildren.length === 0) {
                   const freePos = findFreePosition(pos.x, pos.y + 120, 'down', focusedNodeId);
                   addButtons.push(
-                    <View key="add-child" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
+                    <View key="add-child-ind" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
                       <TouchableOpacity 
                         activeOpacity={0.8} 
-                        onPress={handleAddChildPress}
+                        onPress={handleAddIndividualChild}
                         style={styles.plusBubble}
                       >
                         <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
                       </TouchableOpacity>
-                      <ZoomCompensatedLabel scale={scale} label="Asignar Hijo/a" />
+                      <ZoomCompensatedLabel scale={scale} label="Hijo Individual" />
                     </View>
                   );
                 } else {
@@ -1452,15 +1536,15 @@ const filteredList = useMemo(() => {
                   });
                   const freePos = findFreePosition(rightMostPos.x + 115, rightMostPos.y, 'right', focusedNodeId);
                   addButtons.push(
-                    <View key="add-child" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
+                    <View key="add-child-ind" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
                       <TouchableOpacity 
                         activeOpacity={0.8} 
-                        onPress={handleAddChildPress}
+                        onPress={handleAddIndividualChild}
                         style={styles.plusBubble}
                       >
                         <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
                       </TouchableOpacity>
-                      <ZoomCompensatedLabel scale={scale} label="Asignar Hijo/a" />
+                      <ZoomCompensatedLabel scale={scale} label="Hijo Individual" />
                     </View>
                   );
                 }
