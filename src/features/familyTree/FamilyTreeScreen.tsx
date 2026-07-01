@@ -537,7 +537,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
     // Width calculation for descendant subtrees
     const subtreeWidthCache: { [id: string]: number } = {};
-    const getDescendantSubtreeWidth = (personId: string): number => {
+    const getSubtreeWidth = (personId: string): number => {
       if (subtreeWidthCache[personId] !== undefined) return subtreeWidthCache[personId];
       
       const partners = (partnersMap[personId] || []).filter(pId => visibleIds.has(pId));
@@ -552,7 +552,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
 
       let childrenTotalWidth = 0;
       children.forEach((child, idx) => {
-        childrenTotalWidth += getDescendantSubtreeWidth(child.id);
+        childrenTotalWidth += getSubtreeWidth(child.id);
         if (idx > 0) childrenTotalWidth += 60; // sibling gap
       });
 
@@ -561,46 +561,25 @@ export default function FamilyTreeScreen({ navigation }: any) {
       return totalWidth;
     };
 
-    // Sibling offsets helper
-    const getSiblingOffsets = (siblingIds: string[]) => {
-      let totalWidth = 0;
-      const widths = siblingIds.map(id => getDescendantSubtreeWidth(id));
-      const totalW = widths.reduce((a, b) => a + b, 0) + (siblingIds.length - 1) * 60;
-      
-      const offsets: { [id: string]: number } = {};
-      let startX = -totalW / 2;
-      siblingIds.forEach((sibId, idx) => {
-        const w = widths[idx];
-        const sibCx = startX + w / 2;
-        offsets[sibId] = sibCx;
-        startX += w + 60;
-      });
-      return offsets;
-    };
-
     // Recursive placement of descendants
-    const placeDescendants = (personId: string, cx: number) => {
+    const placeCoupleAndDescendants = (personId: string, partnerId: string | null, cx: number) => {
       if (placed.has(personId)) return;
       placed.add(personId);
 
-      const partners = (partnersMap[personId] || []).filter(pId => visibleIds.has(pId));
-      partners.forEach(pId => placed.add(pId));
-
-      const allMembers = [personId, ...partners];
-      const unitWidth = allMembers.length * 110 + (allMembers.length > 1 ? (allMembers.length - 1) * 30 : 0);
-      
-      let memberX = cx - unitWidth / 2 + 55;
-      allMembers.forEach(mId => {
-        finalX[mId] = memberX;
-        memberX += 140;
-      });
+      if (partnerId) {
+        placed.add(partnerId);
+        finalX[personId] = cx - 70;
+        finalX[partnerId] = cx + 70;
+      } else {
+        finalX[personId] = cx;
+      }
 
       const children = getVisibleChildren(personId);
       if (children.length === 0) return;
 
       let childrenTotalWidth = 0;
       const childWidths = children.map(c => {
-        const w = getDescendantSubtreeWidth(c.id);
+        const w = getSubtreeWidth(c.id);
         childrenTotalWidth += w;
         return w;
       });
@@ -610,36 +589,44 @@ export default function FamilyTreeScreen({ navigation }: any) {
       children.forEach((c, idx) => {
         const cw = childWidths[idx];
         const childCx = childStartX + cw / 2;
-        placeDescendants(c.id, childCx);
+        
+        const cPartners = (partnersMap[c.id] || []).filter(pId => visibleIds.has(pId));
+        const cPartner = cPartners[0] || null;
+
+        placeCoupleAndDescendants(c.id, cPartner, childCx);
         childStartX += cw + 60;
       });
     };
 
     // Sibling group placement
-    const placeSiblingGroup = (siblingIds: string[], cx: number) => {
+    const placeSiblings = (siblingIds: string[], cx: number) => {
       let totalWidth = 0;
-      const widths = siblingIds.map(id => getDescendantSubtreeWidth(id));
+      const widths = siblingIds.map(id => getSubtreeWidth(id));
       totalWidth += widths.reduce((a, b) => a + b, 0) + (siblingIds.length - 1) * 60;
 
       let startX = cx - totalWidth / 2;
       siblingIds.forEach((sibId, idx) => {
         const w = widths[idx];
         const sibCx = startX + w / 2;
-        placeDescendants(sibId, sibCx);
+        
+        const sibPartners = (partnersMap[sibId] || []).filter(pId => visibleIds.has(pId));
+        const sibPartner = sibPartners[0] || null;
+
+        placeCoupleAndDescendants(sibId, sibPartner, sibCx);
         startX += w + 60;
       });
     };
 
     // Bidirectional placement starting from focusedNodeId
     const focusId = focusedNodeId || myId;
-    
-    // Step 1: Place focus node and its siblings (Gen 0 and down)
     const focusNode = findPerson(focusId);
+
+    // Step 1: Place focus node and its siblings (Gen 0 and down)
     const siblings = focusNode && (focusNode.father_id || focusNode.mother_id)
       ? people.filter(c => (c.father_id === focusNode.father_id || c.mother_id === focusNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
       : [focusId];
     
-    placeSiblingGroup(siblings, centerX);
+    placeSiblings(siblings, centerX);
 
     // Step 2: Traverse upwards to place ancestors recursively
     const placeAncestorsOf = (childId: string) => {
@@ -657,64 +644,59 @@ export default function FamilyTreeScreen({ navigation }: any) {
       if (childX === undefined) return;
 
       if (fVisible && mVisible) {
+        // Place Father and Mother at childX - 70 and childX + 70
         placed.add(fId);
         placed.add(mId);
+        finalX[fId] = childX - 70;
+        finalX[mId] = childX + 70;
 
+        // Paternal uncles/aunts (excluding Father)
         const fNode = findPerson(fId);
         const fatherSiblings = fNode && (fNode.father_id || fNode.mother_id)
-          ? people.filter(c => (c.father_id === fNode.father_id || c.mother_id === fNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
+          ? people.filter(c => (c.father_id === fNode.father_id || c.mother_id === fNode.mother_id) && visibleIds.has(c.id) && c.id !== fId).map(c => c.id)
           : [];
+        if (fatherSiblings.length > 0) {
+          let patWidth = fatherSiblings.reduce((sum, id) => sum + getSubtreeWidth(id), 0) + (fatherSiblings.length - 1) * 60;
+          placeSiblings(fatherSiblings, (childX - 70) - 60 - patWidth / 2);
+        }
 
+        // Maternal uncles/aunts (excluding Mother)
         const mNode = findPerson(mId);
         const motherSiblings = mNode && (mNode.father_id || mNode.mother_id)
-          ? people.filter(c => (c.father_id === mNode.father_id || c.mother_id === mNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
+          ? people.filter(c => (c.father_id === mNode.father_id || c.mother_id === mNode.mother_id) && visibleIds.has(c.id) && c.id !== mId).map(c => c.id)
           : [];
-
-        const patSiblings = fatherSiblings.length > 0 ? fatherSiblings : [fId];
-        const matSiblings = motherSiblings.length > 0 ? motherSiblings : [mId];
-
-        const patOffsets = getSiblingOffsets(patSiblings);
-        const matOffsets = getSiblingOffsets(matSiblings);
-
-        const oF = patOffsets[fId] || 0;
-        const oM = matOffsets[mId] || 0;
-
-        const xF = childX - 70;
-        const xM = childX + 70;
-
-        const cPat = xF - oF;
-        const cMat = xM - oM;
-
-        placeSiblingGroup(patSiblings, cPat);
-        placeSiblingGroup(matSiblings, cMat);
+        if (motherSiblings.length > 0) {
+          let matWidth = motherSiblings.reduce((sum, id) => sum + getSubtreeWidth(id), 0) + (motherSiblings.length - 1) * 60;
+          placeSiblings(motherSiblings, (childX + 70) + 60 + matWidth / 2);
+        }
 
         placeAncestorsOf(fId);
         placeAncestorsOf(mId);
       } else if (fVisible) {
         placed.add(fId);
+        finalX[fId] = childX;
+
         const fNode = findPerson(fId);
         const fatherSiblings = fNode && (fNode.father_id || fNode.mother_id)
-          ? people.filter(c => (c.father_id === fNode.father_id || c.mother_id === fNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
+          ? people.filter(c => (c.father_id === fNode.father_id || c.mother_id === fNode.mother_id) && visibleIds.has(c.id) && c.id !== fId).map(c => c.id)
           : [];
-        const patSiblings = fatherSiblings.length > 0 ? fatherSiblings : [fId];
-        const patOffsets = getSiblingOffsets(patSiblings);
-        const oF = patOffsets[fId] || 0;
-
-        const cPat = childX - oF;
-        placeSiblingGroup(patSiblings, cPat);
+        if (fatherSiblings.length > 0) {
+          let patWidth = fatherSiblings.reduce((sum, id) => sum + getSubtreeWidth(id), 0) + (fatherSiblings.length - 1) * 60;
+          placeSiblings(fatherSiblings, childX - 60 - patWidth / 2);
+        }
         placeAncestorsOf(fId);
       } else if (mVisible) {
         placed.add(mId);
+        finalX[mId] = childX;
+
         const mNode = findPerson(mId);
         const motherSiblings = mNode && (mNode.father_id || mNode.mother_id)
-          ? people.filter(c => (c.father_id === mNode.father_id || c.mother_id === mNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
+          ? people.filter(c => (c.father_id === mNode.father_id || c.mother_id === mNode.mother_id) && visibleIds.has(c.id) && c.id !== mId).map(c => c.id)
           : [];
-        const matSiblings = motherSiblings.length > 0 ? motherSiblings : [mId];
-        const matOffsets = getSiblingOffsets(matSiblings);
-        const oM = matOffsets[mId] || 0;
-
-        const cMat = childX - oM;
-        placeSiblingGroup(matSiblings, cMat);
+        if (motherSiblings.length > 0) {
+          let matWidth = motherSiblings.reduce((sum, id) => sum + getSubtreeWidth(id), 0) + (motherSiblings.length - 1) * 60;
+          placeSiblings(motherSiblings, childX + 60 + matWidth / 2);
+        }
         placeAncestorsOf(mId);
       }
     };
@@ -729,7 +711,7 @@ export default function FamilyTreeScreen({ navigation }: any) {
       let nextX = maxPlacedX + 200;
       unplaced.forEach(p => {
         if (!placed.has(p.id)) {
-          placeDescendants(p.id, nextX);
+          placeCoupleAndDescendants(p.id, null, nextX);
           nextX += 200;
         }
       });
