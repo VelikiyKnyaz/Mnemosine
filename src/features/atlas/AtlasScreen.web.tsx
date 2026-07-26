@@ -4,7 +4,7 @@ import { Appbar, Text } from 'react-native-paper';
 
 /**
  * react-native-maps needs a native view manager and cannot run in Snack's web
- * preview. Android and iOS keep resolving AtlasScreen.tsx with the full map.
+ * preview. Android and iOS resolve AtlasScreen.native.tsx with the full map.
  */
 export default function AtlasScreenWeb() {
   return (
