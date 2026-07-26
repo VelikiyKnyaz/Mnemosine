@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { Audio } from 'expo-av';
-import { Directory, File, Paths } from 'expo-file-system';
 
 export function useAudioRecorder() {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
@@ -44,23 +43,9 @@ export function useAudioRecorder() {
       const uri = recording.getURI();
 
       if (uri) {
-        try {
-          const recordingsDirectory = new Directory(Paths.document, 'recordings');
-          recordingsDirectory.create({ idempotent: true, intermediates: true });
-
-          const source = new File(uri);
-          const extension = source.extension || '.m4a';
-          const destination = new File(
-            recordingsDirectory,
-            `memory-${Date.now()}${extension}`
-          );
-          source.move(destination);
-          setRecordUri(destination.uri);
-        } catch (fileError) {
-          // Keep capture usable in Snack even if a platform cannot move the file.
-          console.warn('Could not persist recording; using temporary URI.', fileError);
-          setRecordUri(uri);
-        }
+        // Snack mantiene accesible esta URI durante la sesión, tiempo suficiente
+        // para transcribirla inmediatamente después de guardar el recuerdo.
+        setRecordUri(uri);
       }
       setRecording(null);
     } catch (err) {
@@ -69,21 +54,9 @@ export function useAudioRecorder() {
   };
 
   const cancelRecording = async () => {
-    let uriToDelete = recordUri;
     if (recording) {
       setIsRecording(false);
       await recording.stopAndUnloadAsync();
-      uriToDelete = uriToDelete || recording.getURI();
-    }
-    if (uriToDelete) {
-      try {
-        const file = new File(uriToDelete);
-        if (file.exists) {
-          file.delete();
-        }
-      } catch (fileError) {
-        console.warn('Could not discard recording file.', fileError);
-      }
     }
     setRecording(null);
     setRecordUri(null);
