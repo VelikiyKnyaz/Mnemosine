@@ -10,6 +10,9 @@ dist/
 web-build/
 expo-env.d.ts
 
+# Snack no puede importar documentos binarios ajenos al bundle de la app
+docs/*.pdf
+
 # Native
 .kotlin/
 *.orig.*

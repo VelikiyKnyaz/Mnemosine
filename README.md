@@ -4,8 +4,8 @@ Prototipo móvil para capturar recuerdos en texto o audio y organizarlos por
 tiempo, lugares, personas y relaciones. El proyecto usa React Native con Expo
 SDK 54, SQLite local y Supabase para las funciones de cuenta y conexión social.
 
-El norte de producto y diseño está definido en el
-[Documento Maestro v0.1](docs/Mnemosine_Documento_Maestro_v0.1.pdf).
+El norte de producto y diseño está definido en el Documento Maestro v0.1.
+Consulta las [notas de documentación](docs/README.md) para acceder al original.
 
 ## Estado actual
 

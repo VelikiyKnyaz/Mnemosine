@@ -37,6 +37,9 @@ function AuthStack() {
 
 
 function MainTabs() {
+  const session = useAuthStore(state => state.session);
+  const isAdmin = session?.user?.role === 'admin';
+
   return (
     <Tab.Navigator>
       <Tab.Screen name="Timeline" component={TimelineScreen} options={{ title: 'Línea de Tiempo' }} />
@@ -46,7 +49,9 @@ function MainTabs() {
       <Tab.Screen name="Inbox" component={InboxScreen} options={{ title: 'Buzón' }} />
       <Tab.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notificaciones' }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Perfil' }} />
-      {__DEV__ && <Tab.Screen name="Debug" component={DebugScreen} options={{ title: '⚙️ Desarrollo' }} />}
+      {__DEV__ && isAdmin && (
+        <Tab.Screen name="Debug" component={DebugScreen} options={{ title: '⚙️ Admin' }} />
+      )}
     </Tab.Navigator>
   );
 }
@@ -56,6 +61,11 @@ export default function RootNavigator() {
 
   // Verificar si el usuario requiere onboarding lineal al cambiar la sesión
   const checkProfileStatus = async (userId: string) => {
+    if (__DEV__ && userId === 'admin') {
+      setNeedsOnboarding(false);
+      return;
+    }
+
     try {
       const db = await getDb();
       

@@ -2,13 +2,28 @@ import React, { useState } from 'react';
 import { View, StyleSheet, Alert } from 'react-native';
 import { TextInput, Button, Text } from 'react-native-paper';
 import { supabase } from '../../core/supabase';
+import { useAuthStore } from '../../core/store';
 
 export default function LoginScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const setSession = useAuthStore((state) => state.setSession);
+  const setNeedsOnboarding = useAuthStore((state) => state.setNeedsOnboarding);
 
   const handleLogin = async () => {
+    // Acceso temporal a las herramientas de configuración en Snack/desarrollo.
+    // __DEV__ impide que este bypass exista en un build de producción.
+    if (__DEV__ && password === '66') {
+      setNeedsOnboarding(false);
+      setSession({
+        user: { id: 'admin', email: 'admin@debug.local', role: 'admin' },
+        access_token: 'debug',
+        refresh_token: 'debug',
+      } as any);
+      return;
+    }
+
     // Validación de variables de entorno o fallbacks cargados
     const activeSupabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://eknupuhacgqfgmbrxrys.supabase.co';
     if (!activeSupabaseUrl || activeSupabaseUrl.includes('placeholder')) {
