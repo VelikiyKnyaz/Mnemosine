@@ -12,9 +12,9 @@ export default function LoginScreen({ navigation }: any) {
   const setNeedsOnboarding = useAuthStore((state) => state.setNeedsOnboarding);
 
   const handleLogin = async () => {
-    // Acceso temporal a las herramientas de configuración en Snack/desarrollo.
-    // __DEV__ impide que este bypass exista en un build de producción.
-    if (__DEV__ && password === '66') {
+    // Acceso temporal solicitado para configurar el prototipo desde Snack.
+    // Debe eliminarse antes de distribuir una compilación de producción.
+    if (password === '66') {
       setNeedsOnboarding(false);
       setSession({
         user: { id: 'admin', email: 'admin@debug.local', role: 'admin' },

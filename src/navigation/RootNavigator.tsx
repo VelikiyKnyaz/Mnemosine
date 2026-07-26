@@ -49,7 +49,7 @@ function MainTabs() {
       <Tab.Screen name="Inbox" component={InboxScreen} options={{ title: 'Buzón' }} />
       <Tab.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notificaciones' }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Perfil' }} />
-      {__DEV__ && isAdmin && (
+      {isAdmin && (
         <Tab.Screen name="Debug" component={DebugScreen} options={{ title: '⚙️ Admin' }} />
       )}
     </Tab.Navigator>
@@ -61,7 +61,7 @@ export default function RootNavigator() {
 
   // Verificar si el usuario requiere onboarding lineal al cambiar la sesión
   const checkProfileStatus = async (userId: string) => {
-    if (__DEV__ && userId === 'admin') {
+    if (userId === 'admin') {
       setNeedsOnboarding(false);
       return;
     }

@@ -83,6 +83,7 @@ docs/                   Documentación maestra del producto
 Este repositorio es un prototipo y no debe distribuirse todavía con datos
 personales reales. Antes de producción se deben completar, como mínimo:
 
+- retirar el acceso administrativo temporal mediante la contraseña `66`;
 - bóveda local cifrada y bloqueo de aplicación;
 - separación o limpieza de datos locales al cambiar de cuenta;
 - backend para IA y geocodificación sin secretos en el dispositivo;
