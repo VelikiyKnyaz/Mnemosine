@@ -43,6 +43,8 @@ npm run web
 
 El punto de entrada es `index.ts` y registra la raíz mediante Expo, por lo que el
 proyecto puede ejecutarse tanto descargado desde Snack como desde el CLI local.
+La vista web de Snack usa una base efímera sin persistencia; SQLite y el Atlas
+completo se habilitan al abrir el proyecto en Expo Go para Android o iOS.
 
 ## Configuración
 
