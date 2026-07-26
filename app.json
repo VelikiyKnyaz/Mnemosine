@@ -14,7 +14,13 @@
       "predictiveBackGestureEnabled": false
     },
     "plugins": [
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Permite que Mnemósine use el micrófono para grabar recuerdos."
+        }
+      ]
     ]
   }
 }

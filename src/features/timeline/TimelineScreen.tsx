@@ -8,6 +8,7 @@ import BiographerCard from '../biographer/BiographerCard';
 import CaptureModal from '../capture/CaptureModal';
 import MemoryEditModal from '../../components/MemoryEditModal';
 import { getDb } from '../../core/database';
+import { processPendingMemories } from '../../core/ai_processor';
 import { calculateDatesFromMarkers } from '../../core/chrono_engine';
 import { getConfig } from '../../core/config';
 
@@ -223,7 +224,7 @@ export default function TimelineScreen() {
     setSession(null);
   };
 
-  const loadMemories = async () => {
+  const loadMemories = useCallback(async () => {
     try {
       const db = await getDb();
       const allRows = await db.getAllAsync('SELECT * FROM memories ORDER BY start_date ASC, created_at DESC');
@@ -231,13 +232,17 @@ export default function TimelineScreen() {
     } catch (err) {
       console.error(err);
     }
-  };
+  }, []);
 
   const isFocused = useIsFocused();
 
   useEffect(() => {
-    loadMemories();
-  }, [modalVisible]);
+    if (!isFocused) return;
+
+    processPendingMemories()
+      .catch(console.error)
+      .finally(loadMemories);
+  }, [isFocused, modalVisible, loadMemories]);
 
   // Auto-refresh while any memories are still processing
   useEffect(() => {
@@ -247,7 +252,7 @@ export default function TimelineScreen() {
     
     const interval = setInterval(loadMemories, 5000);
     return () => clearInterval(interval);
-  }, [isFocused, memories]);
+  }, [isFocused, memories, loadMemories]);
 
   const handleQuestionPress = (q: string) => {
     setInitialQuestion(q);

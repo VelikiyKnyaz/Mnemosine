@@ -31,7 +31,9 @@ export default function SmartDropdown({
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return items.slice(0, 15);
+    if (!query.trim()) {
+      return items.slice(0, 15).map(item => ({ ...item, matchScore: 0 }));
+    }
     const q = query.toLowerCase();
     return items
       .map(item => ({

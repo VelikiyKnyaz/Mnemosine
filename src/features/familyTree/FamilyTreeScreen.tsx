@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { View, StyleSheet, ScrollView, Image, Modal, Alert, Text as RNText } from 'react-native';
-import { Text, Appbar, Button, TextInput, IconButton, Portal, Card, Divider, FAB, Chip } from 'react-native-paper';
+import { View, StyleSheet, ScrollView, Image, Alert, Text as RNText } from 'react-native';
+import { Text, Appbar, Button, TextInput, IconButton, Portal, Modal, Card, Divider, FAB, Chip } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { useIsFocused } from '@react-navigation/native';
 import { supabase } from '../../core/supabase';
@@ -1893,7 +1893,7 @@ const filteredList = useMemo(() => {
     {/* Sidebar Contacts List Overlay / Drawer */}
     <Portal>
       <Modal visible={sidebarOpen} onDismiss={() => setSidebarOpen(false)} contentContainerStyle={styles.sidebarContent}>
-        <Appbar.Header style={styles.sidebarHeader} elevation={0}>
+        <Appbar.Header style={styles.sidebarHeader}>
           <Appbar.Content title="Todos los Miembros" titleStyle={styles.sidebarTitle} />
           <IconButton icon="close" onPress={() => setSidebarOpen(false)} />
         </Appbar.Header>
@@ -2359,6 +2359,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#f1f3f5',
+    elevation: 0,
   },
   sidebarTitle: {
     fontWeight: 'bold',

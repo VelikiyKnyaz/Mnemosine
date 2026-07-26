@@ -166,7 +166,7 @@ export default function InboxScreen({ navigation }: any) {
   const shareTasks = tasks.filter(t => t.ambiguity_type === 'SHARE_PROMPT');
 
   const renderDateTask = (task: any) => (
-    <Card key={task.id} style={styles.card} mode="flat">
+    <Card key={task.id} style={styles.card} mode="contained">
       <Card.Content>
         <Title style={{ fontSize: 15, fontWeight: 'bold' }}>📅 ¿Cuándo fue?</Title>
         <Paragraph style={styles.questionText}>{task.question}</Paragraph>
@@ -213,7 +213,7 @@ export default function InboxScreen({ navigation }: any) {
   );
 
   const renderRelationshipTask = (task: any) => (
-    <Card key={task.id} style={styles.card} mode="flat">
+    <Card key={task.id} style={styles.card} mode="contained">
       <Card.Content>
         <Title style={{ fontSize: 15, fontWeight: 'bold' }}>👥 Relación Familiar Pendiente</Title>
         <Paragraph style={styles.questionText}>{task.question}</Paragraph>
@@ -249,7 +249,7 @@ export default function InboxScreen({ navigation }: any) {
   const renderShareTask = (task: any) => {
     const isBusy = sharingTaskId === task.id;
     return (
-      <Card key={task.id} style={styles.card} mode="flat">
+      <Card key={task.id} style={styles.card} mode="contained">
         <Card.Content>
           <Title style={{ fontSize: 15, fontWeight: 'bold', color: '#6200ee' }}>👥 Compartir Recuerdo</Title>
           <Paragraph style={styles.questionText}>{task.question}</Paragraph>

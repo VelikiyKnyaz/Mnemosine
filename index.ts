@@ -1,2 +1,4 @@
 import App from './App';
-export default App;
+import { registerRootComponent } from 'expo';
+
+registerRootComponent(App);

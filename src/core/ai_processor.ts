@@ -208,7 +208,9 @@ export async function generateTerritorialHierarchy(db: any, entityId: string, en
   }
 }
 
-export const processPendingMemories = async () => {
+let processingPromise: Promise<void> | null = null;
+
+const runPendingMemoryProcessing = async () => {
   try {
     const db = await getDb();
     
@@ -232,6 +234,17 @@ export const processPendingMemories = async () => {
 
       if (!memory) {
         break;
+      }
+
+      // Claim the item before doing network work. Combined with the module-level
+      // promise lock, this prevents duplicate pivots when capture and screen focus
+      // trigger processing at nearly the same time.
+      const claim = await db.runAsync(
+        "UPDATE memories SET sync_status = 'PROCESSING_AI' WHERE id = ? AND sync_status = 'PENDING_AI'",
+        memory.id
+      );
+      if (claim.changes === 0) {
+        continue;
       }
 
       let textToProcess = memory.raw_text || '';
@@ -311,6 +324,9 @@ export const processPendingMemories = async () => {
         const existingNamesStr = allContextEntities.map(e => e.name).join(', ');
 
         const aiData = await extractMemoryData(textToProcess, existingNamesStr, memory.time_context || '', memory.space_context || '');
+        aiData.entities = Array.isArray(aiData.entities) ? aiData.entities : [];
+        aiData.time_markers = Array.isArray(aiData.time_markers) ? aiData.time_markers : [];
+        aiData.ambiguities = Array.isArray(aiData.ambiguities) ? aiData.ambiguities : [];
 
         // =====================================================================
         // POST-PROCESSING: Deterministic code-level fixes
@@ -444,11 +460,12 @@ export const processPendingMemories = async () => {
         // =====================================================================
         // UPDATE MEMORY
         // =====================================================================
-        const memoryTitle = aiData.title?.trim() || null;
-        await db.runAsync(
-          "UPDATE memories SET raw_text = ?, title = ?, start_date = ?, end_date = ?, sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
-          textToProcess.trim(), memoryTitle, dates.start_date, dates.end_date, memory.id
-        );
+        await db.withTransactionAsync(async () => {
+          const memoryTitle = aiData.title?.trim() || null;
+          await db.runAsync(
+            "UPDATE memories SET raw_text = ?, title = ?, start_date = ?, end_date = ? WHERE id = ?",
+            textToProcess.trim(), memoryTitle, dates.start_date, dates.end_date, memory.id
+          );
 
         // =====================================================================
         // INSERT REMAINING SEGMENTS with ACTUAL computed context from segment[0]
@@ -644,16 +661,25 @@ export const processPendingMemories = async () => {
         // Detección de personas conectadas para sugerir compartir recuerdo
         await checkAndCreateShareTasks(db, memory.id);
 
+          // Only expose the final state after every local relation has committed.
+          await db.runAsync(
+            "UPDATE memories SET sync_status = 'PROCESSED_LOCAL' WHERE id = ?",
+            memory.id
+          );
+        });
+
         console.log(`Memory ${memory.id} processed successfully.`);
 
       } catch (innerError) {
         console.error(`Failed to process memory ${memory.id}:`, innerError);
         try {
-          await db.runAsync("UPDATE memories SET sync_status = 'PROCESSED_LOCAL' WHERE id = ?", memory.id);
+          // Keep the original available and retry on the next processing trigger.
+          await db.runAsync("UPDATE memories SET sync_status = 'PENDING_AI' WHERE id = ?", memory.id);
         } catch (dbErr) {
-          console.error(`Failed to update status for broken memory ${memory.id}:`, dbErr);
-          break;
+          console.error(`Failed to restore pending status for memory ${memory.id}:`, dbErr);
         }
+        // Avoid an immediate infinite retry loop while the provider/network is down.
+        break;
       }
     }
 
@@ -680,4 +706,15 @@ export const processPendingMemories = async () => {
   } catch (err) {
     console.error('Error in processPendingMemories:', err);
   }
+};
+
+export const processPendingMemories = (): Promise<void> => {
+  if (processingPromise) {
+    return processingPromise;
+  }
+
+  processingPromise = runPendingMemoryProcessing().finally(() => {
+    processingPromise = null;
+  });
+  return processingPromise;
 };

@@ -240,7 +240,7 @@ export default function OnboardingScreen() {
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {step === 1 && (
-          <Card style={styles.stepCard} mode="flat">
+          <Card style={styles.stepCard} mode="contained">
             <Card.Content>
               <Title style={styles.title}>¡Te damos la bienvenida!</Title>
               <Text variant="bodyMedium" style={styles.subtitle}>
@@ -272,7 +272,7 @@ export default function OnboardingScreen() {
         )}
 
         {step === 2 && (
-          <Card style={styles.stepCard} mode="flat">
+          <Card style={styles.stepCard} mode="contained">
             <Card.Content>
               <Title style={styles.title}>Contexto Temporal y Espacial</Title>
               <Text variant="bodyMedium" style={styles.subtitle}>
@@ -333,7 +333,7 @@ export default function OnboardingScreen() {
         )}
 
         {step === 3 && (
-          <Card style={styles.stepCard} mode="flat">
+          <Card style={styles.stepCard} mode="contained">
             <Card.Content>
               <Title style={styles.title}>Foto de Perfil</Title>
               <Text variant="bodyMedium" style={styles.subtitle}>

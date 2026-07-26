@@ -844,7 +844,11 @@ export default function AtlasScreen({ route, navigation }: any) {
     try {
       const db = await getDb();
       // Set parent, but don't confirm coordinates yet - let user adjust marker
-      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", actionEntity.id, actionEntity.id);
+      if (parentId === actionEntity.id) {
+        Alert.alert('Relación inválida', 'Un lugar no puede contenerse a sí mismo.');
+        return;
+      }
+      await db.runAsync("UPDATE entities SET parent_id = ? WHERE id = ?", parentId, actionEntity.id);
 
       // Teleport map to parent's location ONLY IF the actionEntity does not have its own location yet
       // Actually, per user request: "ni debe trasladarse un lugar a el si la ciudad es el padre."
@@ -1814,9 +1818,9 @@ export default function AtlasScreen({ route, navigation }: any) {
           <View style={{ backgroundColor: 'white', padding: 20, borderRadius: 10, width: '80%' }}>
             <Text style={{ fontWeight: 'bold', marginBottom: 10 }}>¿A qué territorio pertenece "{actionEntity.title}"?</Text>
             <SmartDropdown
-              data={allLocations.filter(loc => loc.id !== actionEntity.id)}
-              labelField="name"
-              valueField="id"
+              label="Territorio padre"
+              value=""
+              items={allLocations.filter(loc => loc.id !== actionEntity.id)}
               placeholder="Buscar territorio..."
               onSelect={(item: any) => { if (item) assignParentToAction(item.id); }}
             />

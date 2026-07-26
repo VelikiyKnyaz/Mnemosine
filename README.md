@@ -1,11 +1,88 @@
-# Sample Snack app
+# Mnemósine
 
-Open the `App.js` file to start writing some code. You can preview the changes directly on your phone or tablet by scanning the **QR code** or use the iOS or Android emulators. When you're done, click **Save** and share the link!
+Prototipo móvil para capturar recuerdos en texto o audio y organizarlos por
+tiempo, lugares, personas y relaciones. El proyecto usa React Native con Expo
+SDK 54, SQLite local y Supabase para las funciones de cuenta y conexión social.
 
-When you're ready to see everything that Expo provides (or if you want to use your own editor) you can **Download** your project and use it with [expo cli](https://docs.expo.dev/get-started/installation/#expo-cli)).
+El norte de producto y diseño está definido en el
+[Documento Maestro v0.1](docs/Mnemosine_Documento_Maestro_v0.1.pdf).
 
-All projects created in Snack are publicly available, so you can easily share the link to this project via link, or embed it on a web page with the `<>` button.
+## Estado actual
 
-If you're having problems, you can tweet to us [@expo](https://twitter.com/expo) or ask in our [forums](https://forums.expo.dev/c/expo-dev-tools/61) or [Discord](https://chat.expo.dev/).
+El prototipo incluye:
 
-Snack is Open Source. You can find the code on the [GitHub repo](https://github.com/expo/snack).
+- captura de recuerdos en texto y audio;
+- extracción asistida de fechas, lugares, personas y ambigüedades;
+- línea de tiempo, atlas, red familiar y catálogo de elementos;
+- buzón para resolver datos pendientes y sugerencias de compartir;
+- autenticación, perfil, conexiones y recuerdos compartidos mediante Supabase;
+- persistencia local con SQLite.
+
+La implementación todavía no representa el MVP privado completo descrito en el
+documento maestro. En particular, faltan cifrado local, exportación y borrado
+integral, versionado/procedencia de transformaciones de IA, aislamiento local
+por cuenta y controles de privacidad por recuerdo.
+
+## Ejecutar localmente
+
+Requisitos: Node.js y una versión reciente de Expo Go compatible con SDK 54.
+
+```bash
+npm install
+npm run typecheck
+npm start
+```
+
+También están disponibles:
+
+```bash
+npm run android
+npm run ios
+npm run web
+```
+
+El punto de entrada es `index.ts` y registra la raíz mediante Expo, por lo que el
+proyecto puede ejecutarse tanto descargado desde Snack como desde el CLI local.
+
+## Configuración
+
+Copia `.env.example` como `.env` y completa las variables necesarias:
+
+```env
+EXPO_PUBLIC_SUPABASE_URL=
+EXPO_PUBLIC_SUPABASE_ANON_KEY=
+EXPO_PUBLIC_OPENAI_API_KEY=
+EXPO_PUBLIC_GOOGLE_MAPS_KEY=
+```
+
+En Snack, configura los mismos valores en el entorno del proyecto y reinicia la
+previsualización para limpiar la caché.
+
+La clave anónima de Supabase puede estar en el cliente únicamente si las tablas
+y el almacenamiento tienen políticas RLS correctas. Las claves de OpenAI y
+Google Maps expuestas como `EXPO_PUBLIC_*` son aceptables solo para probar este
+prototipo controlado: una versión distribuible debe llamar a esos proveedores
+desde un backend autenticado y aplicar límites de uso.
+
+## Estructura
+
+```text
+App.tsx                 Inicialización de base de datos y proveedores
+index.ts                Entrada registrada con Expo
+src/core/               SQLite, IA, configuración y sincronización
+src/features/           Pantallas agrupadas por capacidad
+src/components/         Componentes reutilizables
+src/navigation/         Navegación de autenticación, pestañas y detalle
+docs/                   Documentación maestra del producto
+```
+
+## Alcance de seguridad
+
+Este repositorio es un prototipo y no debe distribuirse todavía con datos
+personales reales. Antes de producción se deben completar, como mínimo:
+
+- bóveda local cifrada y bloqueo de aplicación;
+- separación o limpieza de datos locales al cambiar de cuenta;
+- backend para IA y geocodificación sin secretos en el dispositivo;
+- esquema remoto versionado, políticas RLS y pruebas de autorización;
+- exportación, borrado, procedencia y revisiones de accesibilidad.

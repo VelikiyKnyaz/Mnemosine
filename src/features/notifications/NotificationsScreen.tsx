@@ -254,7 +254,7 @@ export default function NotificationsScreen() {
     });
 
     return (
-      <Card style={styles.card} mode="flat">
+      <Card style={styles.card} mode="contained">
         <Card.Content style={styles.cardContent}>
           <Image
             source={{
@@ -322,7 +322,7 @@ export default function NotificationsScreen() {
     const entitiesList = Array.isArray(item.raw.entities) ? item.raw.entities : [];
 
     return (
-      <Card style={styles.card} mode="flat">
+      <Card style={styles.card} mode="contained">
         <TouchableOpacity activeOpacity={0.8} onPress={() => toggleExpand(item.id)}>
           <Card.Content style={styles.cardContent}>
             <Image

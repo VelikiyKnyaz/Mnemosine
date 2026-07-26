@@ -276,7 +276,7 @@ export default function MemberProfileScreen({ route, navigation }: any) {
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
-          <Card style={styles.profileCard} mode="flat">
+          <Card style={styles.profileCard} mode="contained">
             <Card.Content style={styles.avatarSection}>
               <Image
                 source={{

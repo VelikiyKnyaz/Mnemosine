@@ -165,9 +165,18 @@ export const initDatabase = async () => {
     try {
       await database.execAsync(query);
     } catch (e) {
-      // Ignorar si la columna ya existe
+      const message = e instanceof Error ? e.message : String(e);
+      if (!/duplicate column name|already exists/i.test(message)) {
+        console.warn('[Mnemosine DB] Migration failed:', message);
+      }
     }
   }
+
+  // A terminated app can leave an item claimed but unfinished. Return those
+  // memories to the retry queue without altering their original contents.
+  await database.runAsync(
+    "UPDATE memories SET sync_status = 'PENDING_AI' WHERE sync_status = 'PROCESSING_AI'"
+  );
 };
 
 export const inheritCoordinatesFromParent = async (childId: string, parentId: string) => {

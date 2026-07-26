@@ -318,7 +318,7 @@ export default function ProfileScreen() {
     <View style={styles.container}>
       <Appbar.Header style={styles.appbar}>
         <Appbar.Content title="Mi Perfil" titleStyle={styles.headerTitle} />
-        <Appbar.Action icon="logout" onPress={handleLogout} title="Cerrar Sesión" />
+        <Appbar.Action icon="logout" onPress={handleLogout} accessibilityLabel="Cerrar sesión" />
       </Appbar.Header>
 
       <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>

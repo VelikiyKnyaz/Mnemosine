@@ -2,25 +2,13 @@ import React, { useState } from 'react';
 import { View, StyleSheet, Alert } from 'react-native';
 import { TextInput, Button, Text } from 'react-native-paper';
 import { supabase } from '../../core/supabase';
-import { useAuthStore } from '../../core/store';
 
 export default function LoginScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const setSession = useAuthStore((state) => state.setSession);
 
   const handleLogin = async () => {
-    // Admin Bypass Secreto
-    if (password === '66') {
-      setSession({
-        user: { id: 'admin', email: 'admin@debug.local', role: 'admin' },
-        access_token: 'debug',
-        refresh_token: 'debug',
-      } as any);
-      return;
-    }
-
     // Validación de variables de entorno o fallbacks cargados
     const activeSupabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://eknupuhacgqfgmbrxrys.supabase.co';
     if (!activeSupabaseUrl || activeSupabaseUrl.includes('placeholder')) {
@@ -32,15 +20,13 @@ export default function LoginScreen({ navigation }: any) {
     }
 
     setLoading(true);
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
     setLoading(false);
     if (error) {
       Alert.alert('Error', error.message);
-    } else {
-      setSession(data.session);
     }
   };
 
