@@ -1,2544 +1,1374 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { View, StyleSheet, ScrollView, Image, Alert, Text as RNText } from 'react-native';
-import { Text, Appbar, Button, TextInput, IconButton, Portal, Modal, Card, Divider, FAB, Chip } from 'react-native-paper';
-import { getDb } from '../../core/database';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import {
+  Alert,
+  Image,
+  Modal,
+  RefreshControl,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
+import {
+  Appbar,
+  Button,
+  FAB,
+  IconButton,
+  Searchbar,
+  Surface,
+  Text,
+  TouchableRipple,
+} from 'react-native-paper';
 import { useIsFocused } from '@react-navigation/native';
-import { supabase } from '../../core/supabase';
-import { useAuthStore } from '../../core/store';
-import { syncConnections } from '../../core/socialSync';
-import * as ImagePicker from 'expo-image-picker';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
-import SmartDropdown from '../../components/SmartDropdown';
-import { GestureHandlerRootView, GestureDetector, Gesture, TouchableOpacity } from 'react-native-gesture-handler';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming, useAnimatedReaction, runOnJS } from 'react-native-reanimated';
+import { getDb } from '../../core/database';
+import { supabase } from '../../core/supabase';
+import { syncConnections } from '../../core/socialSync';
+import { useAuthStore } from '../../core/store';
+import PersonEditorModal, {
+  PersonEditorValues,
+} from './PersonEditorModal';
+import RelationshipBoard from './RelationshipBoard';
+import RelationshipManagerModal from './RelationshipManagerModal';
+import {
+  buildRelationshipSnapshot,
+  getAvatarUri,
+  getBirthLabel,
+  getExplicitPartnerIds,
+  getPartnerMetadata,
+  matchesPersonSearch,
+  normalizeBirthYear,
+  parsePersonMetadata,
+  PersonRecord,
+  RelationshipKind,
+  wouldCreateParentCycle,
+} from './relationshipModel';
 
-const RELATIONSHIP_ITEMS = [
-  { id: 'Padre', name: 'Padre' },
-  { id: 'Madre', name: 'Madre' },
-  { id: 'Hermano/a', name: 'Hermano/a' },
-  { id: 'Hijo/a', name: 'Hijo/a' },
-  { id: 'Abuelo/a', name: 'Abuelo/a' },
-  { id: 'Tío/a', name: 'Tío/a' },
-  { id: 'Primo/a', name: 'Primo/a' },
-  { id: 'Pareja', name: 'Pareja' },
-  { id: 'Amigo/a', name: 'Amigo/a' },
-  { id: 'Otro', name: 'Otro' },
-];
+interface EditorState {
+  personId: string | null;
+  anchorId?: string;
+  pendingKind?: RelationshipKind;
+  suggestedRelationship?: string;
+}
 
-const CANVAS_WIDTH = 1400;
-const CANVAS_HEIGHT = 1200;
-const centerX = CANVAS_WIDTH / 2;
-const centerY = CANVAS_HEIGHT / 2;
-
-const getPartnerIds = (person: any) => {
-  if (!person) return [];
-  try {
-    const meta = person.metadata ? JSON.parse(person.metadata) : {};
-    const ids = new Set<string>();
-    if (meta.partner_id) ids.add(meta.partner_id);
-    if (Array.isArray(meta.partner_ids)) {
-      meta.partner_ids.forEach((id: string) => ids.add(id));
-    }
-    return Array.from(ids);
-  } catch {
-    return [];
-  }
+const RELATIONSHIP_SUGGESTIONS: Record<RelationshipKind, string> = {
+  father: 'Padre',
+  mother: 'Madre',
+  partner: 'Pareja',
+  sibling: 'Hermano/a',
+  child_as_father: 'Hijo/a',
+  child_as_mother: 'Hijo/a',
 };
 
+function nicknamesFrom(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  return value
+    .split(',')
+    .map((nickname) => nickname.trim())
+    .filter(Boolean);
+}
+
 export default function FamilyTreeScreen({ navigation }: any) {
-  const [people, setPeople] = useState<any[]>([]);
-  const isFocused = useIsFocused();
   const session = useAuthStore((state) => state.session);
-  const myId = session?.user?.id;
+  const myId = session?.user?.id as string | undefined;
+  const isFocused = useIsFocused();
 
-  // Tree focus state
-  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
-  const [activePartnerMap, setActivePartnerMap] = useState<{ [personId: string]: string }>({});
-
-  // Shared global partners map
-  const partnersMap = useMemo(() => {
-    const map: { [id: string]: string[] } = {};
-    const addPartnerMapping = (idA: string, idB: string) => {
-      if (!idA || !idB) return;
-      if (!map[idA]) map[idA] = [];
-      if (!map[idA].includes(idB)) map[idA].push(idB);
-      if (!map[idB]) map[idB] = [];
-      if (!map[idB].includes(idA)) map[idB].push(idA);
-    };
-    people.forEach(p => {
-      const metaPartnerIds = getPartnerIds(p);
-      metaPartnerIds.forEach(pId => addPartnerMapping(p.id, pId));
-      if (p.father_id && p.mother_id) {
-        addPartnerMapping(p.father_id, p.mother_id);
-      }
-    });
-    return map;
-  }, [people]);
-
-  // Search state & Sidebar Drawer
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  // Edit/Create Modal state
-  const [modalVisible, setModalVisible] = useState(false);
-  const [selectedPerson, setSelectedPerson] = useState<any | null>(null); // null means "Create New"
-  const [editName, setEditName] = useState('');
-  const [editNickname, setEditNickname] = useState('');
-  const [editRelationship, setEditRelationship] = useState('');
-  const [editAvatarUrl, setEditAvatarUrl] = useState('');
-  const [editUsername, setEditUsername] = useState('');
-  const [editBirthDate, setEditBirthDate] = useState('');
-  const [editDecade, setEditDecade] = useState('');
-  const [editFatherId, setEditFatherId] = useState<string | null>(null);
-  const [editMotherId, setEditMotherId] = useState<string | null>(null);
-  const [isLinked, setIsLinked] = useState(false);
+  const [people, setPeople] = useState<PersonRecord[]>([]);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [directoryVisible, setDirectoryVisible] = useState(false);
+  const [directoryQuery, setDirectoryQuery] = useState('');
+  const [managerVisible, setManagerVisible] = useState(false);
+  const [managerKind, setManagerKind] =
+    useState<RelationshipKind>('father');
+  const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [relationshipBusy, setRelationshipBusy] = useState(false);
 
-  // Connection mapping state for direct linking from tree '+' buttons
-  const [pendingLink, setPendingLink] = useState<{
-    childId?: string;
-    parentId?: string;
-    partnerId?: string;
-    role: 'father' | 'mother' | 'child' | 'partner' | 'joint_child';
-  } | null>(null);
+  const ensureCurrentUser = useCallback(
+    async (db: Awaited<ReturnType<typeof getDb>>) => {
+      if (!myId) return;
 
-  const ensureMeNode = async (db: any, currentUserId: string) => {
-    try {
-      const existingMe = await db.getFirstAsync(
+      const existing = await db.getFirstAsync<{ id: string }>(
         "SELECT id FROM entities WHERE id = ? AND type = 'PERSON'",
-        currentUserId
+        myId,
       );
+      if (existing) return;
 
-      if (!existingMe) {
-        const profile = await db.getFirstAsync("SELECT * FROM user_profile WHERE id = ?", currentUserId) || 
-                        await db.getFirstAsync("SELECT * FROM user_profile LIMIT 1");
-        
-        const myName = profile?.full_name || 'Yo';
-        const myAvatarUrl = profile?.avatar_url || '';
-        const myBirthDate = profile?.birth_date || '1995-01-01';
+      const profile =
+        (await db.getFirstAsync<any>(
+          'SELECT * FROM user_profile WHERE id = ?',
+          myId,
+        )) ??
+        (await db.getFirstAsync<any>('SELECT * FROM user_profile LIMIT 1'));
+      const name = profile?.full_name || 'Yo';
+      const metadata = {
+        nickname: 'Yo',
+        relationship: 'Yo',
+        avatar_url: profile?.avatar_url || '',
+        username: profile?.username || '',
+        user_id: myId,
+        is_linked: true,
+        connection_status: 'ACCEPTED',
+      };
 
-        const meta = {
-          nickname: 'Yo',
-          relationship: 'Yo',
-          avatar_url: myAvatarUrl,
-          username: profile?.username || '',
-          user_id: currentUserId,
-          is_linked: true,
-          connection_status: 'ACCEPTED'
-        };
+      await db.runAsync(
+        "INSERT INTO entities (id, type, name, metadata, is_confirmed, birth_date) VALUES (?, 'PERSON', ?, ?, 1, ?)",
+        myId,
+        name,
+        JSON.stringify(metadata),
+        profile?.birth_date || '',
+      );
+    },
+    [myId],
+  );
 
-        await db.runAsync(
-          "INSERT INTO entities (id, type, name, metadata, is_confirmed, birth_date) VALUES (?, 'PERSON', ?, ?, 1, ?)",
-          currentUserId,
-          myName,
-          JSON.stringify(meta),
-          myBirthDate
-        );
-        console.log(`[Tree] Created default (Yo) node for user ID ${currentUserId}`);
-      }
-    } catch (err) {
-      console.warn('[Tree] Error ensuring Yo node:', err);
-    }
-  };
-
-  const loadPeople = async () => {
+  const loadPeople = useCallback(async () => {
     try {
       const db = await getDb();
-      if (myId) {
-        await ensureMeNode(db, myId);
-      }
-      const rows = await db.getAllAsync<any>(`
-        SELECT e.id, e.name, e.metadata, e.father_id, e.mother_id, e.birth_date, COUNT(me.memory_id) as mentions
+      await ensureCurrentUser(db);
+      const rows = await db.getAllAsync<PersonRecord>(`
+        SELECT
+          e.id,
+          e.name,
+          e.metadata,
+          e.father_id,
+          e.mother_id,
+          e.birth_date,
+          COUNT(me.memory_id) AS mentions
         FROM entities e
         LEFT JOIN memory_entities me ON e.id = me.entity_id
         WHERE e.type = 'PERSON'
         GROUP BY e.id
+        ORDER BY e.name COLLATE NOCASE
       `);
-      setPeople(rows);
-      
-      // Auto-focus on "Yo" initially
-      if (!focusedNodeId && myId) {
-        setFocusedNodeId(myId);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
+      const normalizedRows = rows.map((row) => ({
+        ...row,
+        mentions: Number(row.mentions || 0),
+      }));
 
-  const handleSyncAndLoad = async () => {
-    if (myId) {
-      await syncConnections(myId);
+      setPeople(normalizedRows);
+      setFocusedId((current) => {
+        if (
+          current &&
+          normalizedRows.some((person) => person.id === current)
+        ) {
+          return current;
+        }
+        if (myId && normalizedRows.some((person) => person.id === myId)) {
+          return myId;
+        }
+        return normalizedRows[0]?.id ?? null;
+      });
+    } catch (error) {
+      console.error('[Relationship tree] Could not load people:', error);
+      Alert.alert('No se pudo cargar el árbol relacional');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-    await loadPeople();
-  };
+  }, [ensureCurrentUser, myId]);
+
+  const refresh = useCallback(
+    async (syncRemote: boolean) => {
+      setRefreshing(true);
+      if (syncRemote && myId) {
+        try {
+          await syncConnections(myId);
+        } catch (error) {
+          console.warn('[Relationship tree] Remote sync failed:', error);
+        }
+      }
+      await loadPeople();
+    },
+    [loadPeople, myId],
+  );
 
   useEffect(() => {
     if (isFocused) {
-      handleSyncAndLoad();
+      void refresh(true);
     }
-    
-    if (myId) {
-      const channel = supabase.channel('connections_tree')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, () => {
-          handleSyncAndLoad();
-        })
-        .subscribe();
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    }
-  }, [isFocused, myId]);
+  }, [isFocused, refresh]);
 
-  // Derived relative birth year calculations for vertical positions
-  const getBirthYear = (node: any) => {
-    if (!node) return null;
-    if (node.birth_date) {
-      const yr = parseInt(node.birth_date.substring(0, 4));
-      if (!isNaN(yr)) return yr;
-    }
-    const meta = node.metadata ? JSON.parse(node.metadata) : {};
-    if (meta.birth_date) {
-      const yr = parseInt(meta.birth_date.substring(0, 4));
-      if (!isNaN(yr)) return yr;
-    }
-    return null;
-  };
+  useEffect(() => {
+    if (!myId) return;
 
-  const focusedNode = useMemo(() => {
-    return people.find(p => p.id === focusedNodeId) || null;
-  }, [people, focusedNodeId]);
+    const channel = supabase
+      .channel(`relationship_tree_${myId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'connections' },
+        () => {
+          void refresh(true);
+        },
+      )
+      .subscribe();
 
-  // Gesture values
-  const scale = useSharedValue(1);
-  const savedScale = useSharedValue(1);
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
-  const savedTranslateX = useSharedValue(0);
-  const savedTranslateY = useSharedValue(0);
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [myId, refresh]);
 
-  // Container layout measurements
-  const [containerWidth, setContainerWidth] = useState(360);
-  const [containerHeight, setContainerHeight] = useState(500);
-
-  const [decadesList, setDecadesList] = useState<string[]>([
-    '1920s', '1930s', '1940s', '1950s', '1960s', '1970s', '1980s', '1990s', '2000s', '2010s', '2020s'
-  ]);
-  const [isLoadingDecades, setIsLoadingDecades] = useState(false);
-  const [isZoomedOut, setIsZoomedOut] = useState(false);
-
-  useAnimatedReaction(
-    () => scale.value,
-    (currentScale) => {
-      const shouldBeZoomedOut = currentScale < 0.75;
-      if (shouldBeZoomedOut !== isZoomedOut) {
-        runOnJS(setIsZoomedOut)(shouldBeZoomedOut);
-      }
-    },
-    [isZoomedOut]
+  const snapshot = useMemo(
+    () => buildRelationshipSnapshot(people, focusedId),
+    [focusedId, people],
   );
 
-  // Helper functions for relationship auto-assignment relative to Yo (the user)
-  const getRelationForParent = (childId: string, role: 'father' | 'mother') => {
-    if (childId === myId) {
-      return role === 'father' ? 'Padre' : 'Madre';
-    }
-    const childPos = nodePositions[childId];
-    if (!childPos) return '';
-    const label = childPos.label;
-    if (label === 'Yo' || label === 'Hermano/a') {
-      return role === 'father' ? 'Padre' : 'Madre';
-    }
-    if (label === 'Padre' || label === 'Madre' || label === 'Tío/a' || label === 'Tio/a') {
-      return role === 'father' ? 'Abuelo' : 'Abuela';
-    }
-    if (label === 'Hijo/a') {
-      return 'Pareja';
-    }
-    if (label === 'Abuelo' || label === 'Abuela') {
-      return role === 'father' ? 'Bisabuelo' : 'Bisabuela';
-    }
-    if (label === 'Pareja') {
-      return role === 'father' ? 'Suegro' : 'Suegra';
-    }
-    return '';
+  const editorPerson = useMemo(
+    () =>
+      editorState?.personId
+        ? people.find((person) => person.id === editorState.personId) ?? null
+        : null,
+    [editorState?.personId, people],
+  );
+
+  const filteredDirectory = useMemo(
+    () =>
+      people.filter((person) =>
+        matchesPersonSearch(person, directoryQuery),
+      ),
+    [directoryQuery, people],
+  );
+
+  const showManager = (kind?: RelationshipKind) => {
+    if (!snapshot) return;
+    setManagerKind(kind ?? 'child_as_father');
+    setManagerVisible(true);
   };
 
-  const getRelationForChild = (parentId: string) => {
-    if (parentId === myId) {
-      return 'Hijo/a';
-    }
-    const parentPos = nodePositions[parentId];
-    if (!parentPos) return 'Hijo/a';
-    const label = parentPos.label;
-    if (label === 'Yo') {
-      return 'Hijo/a';
-    }
-    if (label === 'Padre' || label === 'Madre') {
-      return 'Hermano/a';
-    }
-    if (label === 'Hermano/a') {
-      return 'Sobrino/a';
-    }
-    if (label === 'Hijo/a') {
-      return 'Nieto/a';
-    }
-    if (label === 'Abuelo' || label === 'Abuela') {
-      return 'Tío/a';
-    }
-    if (label === 'Tío/a' || label === 'Tio/a') {
-      return 'Primo/a';
-    }
-    return 'Hijo/a';
-  };
-
-  const getRelationForPartner = (parentId: string) => {
-    if (parentId === myId) return 'Pareja';
-    const parent = people.find(p => p.id === parentId);
-    if (!parent) return 'Otro';
-    const parentMeta = parent.metadata ? JSON.parse(parent.metadata) : {};
-    const parentRel = parentMeta.relationship || 'Contacto';
-    
-    if (parentRel === 'Yo') return 'Pareja';
-    if (parentRel.includes('Padre') || parentRel.includes('Madre')) {
-      return 'Pareja de mi ' + parentRel;
-    }
-    if (parentRel.includes('Abuelo') || parentRel.includes('Abuela')) {
-      return 'Pareja de mi ' + parentRel;
-    }
-    if (parentRel.includes('Hermano') || parentRel.includes('Hermana')) {
-      return 'Pareja de mi ' + parentRel;
-    }
-    if (parentRel.includes('Hijo') || parentRel.includes('Hija')) {
-      return 'Pareja de mi ' + parentRel;
-    }
-    return 'Pareja de ' + (parentMeta.nickname || parent.name);
-  };
-
-
-  const handleDecadeScroll = (event: any) => {
-    const { contentOffset } = event.nativeEvent;
-    if (contentOffset.x <= 15 && !isLoadingDecades) {
-      setIsLoadingDecades(true);
-      setTimeout(() => {
-        setDecadesList((prev) => {
-          const oldestDecStr = prev[0];
-          const oldestDecVal = parseInt(oldestDecStr);
-          if (isNaN(oldestDecVal) || oldestDecVal <= 1700) {
-            setIsLoadingDecades(false);
-            return prev;
-          }
-          const olderDecades: string[] = [];
-          for (let i = 5; i >= 1; i--) {
-            olderDecades.push(`${oldestDecVal - i * 10}s`);
-          }
-          setIsLoadingDecades(false);
-          return [...olderDecades, ...prev];
-        });
-      }, 500);
-    }
-  };
-
-  const handleContainerLayout = (event: any) => {
-    const { width, height } = event.nativeEvent.layout;
-    setContainerWidth(width);
-    setContainerHeight(height);
-  };
-
-  // Animate and center camera on a node
-  const centerOnNode = (nodeX: number, nodeY: number) => {
-    translateX.value = withTiming(containerWidth / 2 - nodeX, { duration: 450 });
-    translateY.value = withTiming(containerHeight / 2 - nodeY, { duration: 450 });
-    scale.value = withTiming(1.0, { duration: 450 });
-    
-    savedTranslateX.value = containerWidth / 2 - nodeX;
-    savedTranslateY.value = containerHeight / 2 - nodeY;
-    savedScale.value = 1.0;
-  };
-
-  const handleZoomIn = () => {
-    const nextScale = Math.min(scale.value + 0.25, 3.0);
-    scale.value = withTiming(nextScale, { duration: 200 });
-    savedScale.value = nextScale;
-  };
-
-  const handleZoomOut = () => {
-    const nextScale = Math.max(scale.value - 0.25, 0.4);
-    scale.value = withTiming(nextScale, { duration: 200 });
-    savedScale.value = nextScale;
-  };
-
-  // Center on Yo initially when layout is ready
-  useEffect(() => {
-    if (myId && containerWidth && containerHeight) {
-      translateX.value = containerWidth / 2 - centerX;
-      translateY.value = containerHeight / 2 - centerY;
-      savedTranslateX.value = containerWidth / 2 - centerX;
-      savedTranslateY.value = containerHeight / 2 - centerY;
-    }
-  }, [myId, containerWidth, containerHeight]);
-
-  // Derived visible people based on focusedNodeId (Context-Focus filtering)
-  const visiblePeople = useMemo(() => {
-    if (!focusedNodeId || people.length === 0) return people;
-
-    const visibleIds = new Set<string>();
-    const findPerson = (id: string) => people.find(p => p.id === id);
-
-    const getActivePartner = (pId: string) => {
-      const partners = partnersMap[pId] || [];
-      if (partners.length <= 1) return partners[0] || null;
-      return activePartnerMap[pId] || partners[0] || null;
-    };
-
-    // 1. Add focused node
-    visibleIds.add(focusedNodeId);
-
-    // 2. Traverse ancestors (up)
-    const queueUp = [focusedNodeId];
-    while (queueUp.length > 0) {
-      const curr = queueUp.shift()!;
-      const p = findPerson(curr);
-      if (p) {
-        if (p.father_id && !visibleIds.has(p.father_id)) {
-          visibleIds.add(p.father_id);
-          queueUp.push(p.father_id);
-        }
-        if (p.mother_id && !visibleIds.has(p.mother_id)) {
-          visibleIds.add(p.mother_id);
-          queueUp.push(p.mother_id);
-        }
-      }
-    }
-
-    // 3. Traverse descendants (down) with active partner filtering
-    const queueDown = [focusedNodeId];
-    const descendants = new Set<string>();
-    while (queueDown.length > 0) {
-      const curr = queueDown.shift()!;
-      const activePartner = getActivePartner(curr);
-
-      const children = people.filter(x => x.father_id === curr || x.mother_id === curr);
-      children.forEach(c => {
-        const otherParentId = c.father_id === curr ? c.mother_id : c.father_id;
-        
-        if (otherParentId && otherParentId !== activePartner) {
-          return;
-        }
-
-        if (!visibleIds.has(c.id)) {
-          visibleIds.add(c.id);
-          descendants.add(c.id);
-          queueDown.push(c.id);
-        }
-      });
-    }
-
-    // 4. Add the active partners of all collected visible nodes
-    Array.from(visibleIds).forEach(id => {
-      const activePartner = getActivePartner(id);
-      if (activePartner) {
-        visibleIds.add(activePartner);
-      }
+  const openCreateEditor = (
+    pendingKind?: RelationshipKind,
+    anchorId?: string,
+  ) => {
+    setEditorState({
+      personId: null,
+      anchorId,
+      pendingKind,
+      suggestedRelationship: pendingKind
+        ? RELATIONSHIP_SUGGESTIONS[pendingKind]
+        : '',
     });
-
-    // 5. Add co-parents (other parent) of the focused node's descendants
-    descendants.forEach(dId => {
-      const child = findPerson(dId);
-      if (child) {
-        if (child.father_id) visibleIds.add(child.father_id);
-        if (child.mother_id) visibleIds.add(child.mother_id);
-      }
-    });
-
-    return people.filter(p => visibleIds.has(p.id));
-  }, [people, focusedNodeId, activePartnerMap, partnersMap, myId]);
-
-  // Derived stable positions for all nodes
-  const nodePositions = useMemo(() => {
-    const coords: { [id: string]: { x: number, y: number, label: string } } = {};
-    if (!myId || people.length === 0) return coords;
-
-    const findPerson = (id: string) => people.find(p => p.id === id);
-
-    const getRelLabel = (p: any, fallback: string) => {
-      try {
-        const meta = p.metadata ? JSON.parse(p.metadata) : {};
-        return meta.relationship || fallback;
-      } catch {
-        return fallback;
-      }
-    };
-
-    // BFS generations assignment (always anchored to myId = gen 0)
-    const generations: { [id: string]: number } = {};
-    generations[myId] = 0;
-    const queue = [myId];
-
-    while (queue.length > 0) {
-      const currId = queue.shift()!;
-      const currGen = generations[currId];
-      const p = findPerson(currId);
-      if (!p) continue;
-
-      if (p.father_id && generations[p.father_id] === undefined) {
-        generations[p.father_id] = currGen - 1;
-        queue.push(p.father_id);
-      }
-      if (p.mother_id && generations[p.mother_id] === undefined) {
-        generations[p.mother_id] = currGen - 1;
-        queue.push(p.mother_id);
-      }
-      const children = people.filter(x => x.father_id === currId || x.mother_id === currId);
-      children.forEach(child => {
-        if (generations[child.id] === undefined) {
-          generations[child.id] = currGen + 1;
-          queue.push(child.id);
-        }
-      });
-      const pIds = partnersMap[currId] || [];
-      pIds.forEach(partnerId => {
-        if (generations[partnerId] === undefined) {
-          generations[partnerId] = currGen;
-          queue.push(partnerId);
-        }
-      });
-    }
-
-    // Fallback for disconnected nodes
-    const getGenerationFromLabel = (label: string): number => {
-      const l = label.toLowerCase();
-      if (l.includes('bisabuel')) return -3;
-      if (l.includes('abuel')) return -2;
-      if (l.includes('padre') || l.includes('madre') || l.includes('tío') || l.includes('tio') || l.includes('suegro') || l.includes('suegra')) return -1;
-      if (l.includes('hijo') || l.includes('sobrino') || l.includes('yerno') || l.includes('nuera')) return 1;
-      if (l.includes('nieto')) return 2;
-      if (l.includes('bisnieto')) return 3;
-      return 0;
-    };
-    people.forEach(p => {
-      if (generations[p.id] === undefined) {
-        generations[p.id] = getGenerationFromLabel(getRelLabel(p, ''));
-      }
-    });
-
-    // --- Subtree-width-aware layout ---
-    const finalX: { [id: string]: number } = {};
-    const placed = new Set<string>();
-    const visibleIds = new Set(visiblePeople.map(p => p.id));
-
-    // Get children of a person that are visible
-    const getVisibleChildren = (parentId: string) => 
-      people.filter(p => (p.father_id === parentId || p.mother_id === parentId) && visibleIds.has(p.id));
-
-    // Width calculation for descendant subtrees
-    const subtreeWidthCache: { [id: string]: number } = {};
-    const getSubtreeWidth = (personId: string): number => {
-      if (subtreeWidthCache[personId] !== undefined) return subtreeWidthCache[personId];
-      
-      const partners = (partnersMap[personId] || []).filter(pId => visibleIds.has(pId));
-      const unitNodeCount = 1 + partners.length;
-      const unitWidth = unitNodeCount * 110 + (unitNodeCount > 1 ? (unitNodeCount - 1) * 30 : 0);
-
-      const children = getVisibleChildren(personId);
-      if (children.length === 0) {
-        subtreeWidthCache[personId] = unitWidth;
-        return unitWidth;
-      }
-
-      let childrenTotalWidth = 0;
-      children.forEach((child, idx) => {
-        childrenTotalWidth += getSubtreeWidth(child.id);
-        if (idx > 0) childrenTotalWidth += 60; // sibling gap
-      });
-
-      const totalWidth = Math.max(unitWidth, childrenTotalWidth);
-      subtreeWidthCache[personId] = totalWidth;
-      return totalWidth;
-    };
-
-    // Recursive placement of descendants
-    const placeCoupleAndDescendants = (personId: string, partnerId: string | null, cx: number) => {
-      if (placed.has(personId)) return;
-      placed.add(personId);
-
-      if (partnerId) {
-        placed.add(partnerId);
-        finalX[personId] = cx - 70;
-        finalX[partnerId] = cx + 70;
-      } else {
-        finalX[personId] = cx;
-      }
-
-      const children = getVisibleChildren(personId);
-      if (children.length === 0) return;
-
-      let childrenTotalWidth = 0;
-      const childWidths = children.map(c => {
-        const w = getSubtreeWidth(c.id);
-        childrenTotalWidth += w;
-        return w;
-      });
-      childrenTotalWidth += (children.length - 1) * 60;
-
-      let childStartX = cx - childrenTotalWidth / 2;
-      children.forEach((c, idx) => {
-        const cw = childWidths[idx];
-        const childCx = childStartX + cw / 2;
-        
-        const cPartners = (partnersMap[c.id] || []).filter(pId => visibleIds.has(pId));
-        const cPartner = cPartners[0] || null;
-
-        placeCoupleAndDescendants(c.id, cPartner, childCx);
-        childStartX += cw + 60;
-      });
-    };
-
-    // Sibling group placement
-    const placeSiblings = (siblingIds: string[], cx: number) => {
-      let totalWidth = 0;
-      const widths = siblingIds.map(id => getSubtreeWidth(id));
-      totalWidth += widths.reduce((a, b) => a + b, 0) + (siblingIds.length - 1) * 60;
-
-      let startX = cx - totalWidth / 2;
-      siblingIds.forEach((sibId, idx) => {
-        const w = widths[idx];
-        const sibCx = startX + w / 2;
-        
-        const sibPartners = (partnersMap[sibId] || []).filter(pId => visibleIds.has(pId));
-        const sibPartner = sibPartners[0] || null;
-
-        placeCoupleAndDescendants(sibId, sibPartner, sibCx);
-        startX += w + 60;
-      });
-    };
-
-    // Bidirectional placement starting from focusedNodeId
-    const focusId = focusedNodeId || myId;
-    const focusNode = findPerson(focusId);
-
-    // Step 1: Place focus node and its siblings (Gen 0 and down)
-    const siblings = focusNode && (focusNode.father_id || focusNode.mother_id)
-      ? people.filter(c => (c.father_id === focusNode.father_id || c.mother_id === focusNode.mother_id) && visibleIds.has(c.id)).map(c => c.id)
-      : [focusId];
-    
-    placeSiblings(siblings, centerX);
-
-    // Step 2: Traverse upwards to place ancestors recursively
-    const placeAncestorsOf = (childId: string) => {
-      const childNode = findPerson(childId);
-      if (!childNode) return;
-
-      const fId = childNode.father_id;
-      const mId = childNode.mother_id;
-      const fVisible = fId && visibleIds.has(fId);
-      const mVisible = mId && visibleIds.has(mId);
-
-      if (!fVisible && !mVisible) return;
-
-      const childX = finalX[childId];
-      if (childX === undefined) return;
-
-      if (fVisible && mVisible) {
-        // Place Father and Mother at childX - 70 and childX + 70
-        placed.add(fId);
-        placed.add(mId);
-        finalX[fId] = childX - 70;
-        finalX[mId] = childX + 70;
-
-        // Paternal uncles/aunts (excluding Father)
-        const fNode = findPerson(fId);
-        const fatherSiblings = fNode && (fNode.father_id || fNode.mother_id)
-          ? people.filter(c => (c.father_id === fNode.father_id || c.mother_id === fNode.mother_id) && visibleIds.has(c.id) && c.id !== fId).map(c => c.id)
-          : [];
-        if (fatherSiblings.length > 0) {
-          let patWidth = fatherSiblings.reduce((sum, id) => sum + getSubtreeWidth(id), 0) + (fatherSiblings.length - 1) * 60;
-          placeSiblings(fatherSiblings, (childX - 70) - 60 - patWidth / 2);
-        }
-
-        // Maternal uncles/aunts (excluding Mother)
-        const mNode = findPerson(mId);
-        const motherSiblings = mNode && (mNode.father_id || mNode.mother_id)
-          ? people.filter(c => (c.father_id === mNode.father_id || c.mother_id === mNode.mother_id) && visibleIds.has(c.id) && c.id !== mId).map(c => c.id)
-          : [];
-        if (motherSiblings.length > 0) {
-          let matWidth = motherSiblings.reduce((sum, id) => sum + getSubtreeWidth(id), 0) + (motherSiblings.length - 1) * 60;
-          placeSiblings(motherSiblings, (childX + 70) + 60 + matWidth / 2);
-        }
-
-        placeAncestorsOf(fId);
-        placeAncestorsOf(mId);
-      } else if (fVisible) {
-        placed.add(fId);
-        finalX[fId] = childX;
-
-        const fNode = findPerson(fId);
-        const fatherSiblings = fNode && (fNode.father_id || fNode.mother_id)
-          ? people.filter(c => (c.father_id === fNode.father_id || c.mother_id === fNode.mother_id) && visibleIds.has(c.id) && c.id !== fId).map(c => c.id)
-          : [];
-        if (fatherSiblings.length > 0) {
-          let patWidth = fatherSiblings.reduce((sum, id) => sum + getSubtreeWidth(id), 0) + (fatherSiblings.length - 1) * 60;
-          placeSiblings(fatherSiblings, childX - 60 - patWidth / 2);
-        }
-        placeAncestorsOf(fId);
-      } else if (mVisible) {
-        placed.add(mId);
-        finalX[mId] = childX;
-
-        const mNode = findPerson(mId);
-        const motherSiblings = mNode && (mNode.father_id || mNode.mother_id)
-          ? people.filter(c => (c.father_id === mNode.father_id || c.mother_id === mNode.mother_id) && visibleIds.has(c.id) && c.id !== mId).map(c => c.id)
-          : [];
-        if (motherSiblings.length > 0) {
-          let matWidth = motherSiblings.reduce((sum, id) => sum + getSubtreeWidth(id), 0) + (motherSiblings.length - 1) * 60;
-          placeSiblings(motherSiblings, childX + 60 + matWidth / 2);
-        }
-        placeAncestorsOf(mId);
-      }
-    };
-
-    placeAncestorsOf(focusId);
-
-    // Place any remaining unplaced visible nodes
-    const unplaced = visiblePeople.filter(p => !placed.has(p.id));
-    if (unplaced.length > 0) {
-      const placedXValues = Object.values(finalX);
-      const maxPlacedX = placedXValues.length > 0 ? Math.max(...placedXValues) : centerX;
-      let nextX = maxPlacedX + 200;
-      unplaced.forEach(p => {
-        if (!placed.has(p.id)) {
-          placeCoupleAndDescendants(p.id, null, nextX);
-          nextX += 200;
-        }
-      });
-    }
-
-    // --- Fail-safe Overlap Resolution Pass (Solid as Iron) ---
-    const genGroups: { [gen: number]: string[] } = {};
-    visiblePeople.forEach(p => {
-      const gen = generations[p.id] ?? 0;
-      if (!genGroups[gen]) genGroups[gen] = [];
-      genGroups[gen].push(p.id);
-    });
-
-    for (let iter = 0; iter < 50; iter++) {
-      let changed = false;
-      Object.keys(genGroups).forEach(genStr => {
-        const gen = parseInt(genStr);
-        const ids = genGroups[gen];
-        if (ids.length <= 1) return;
-
-        ids.sort((a, b) => (finalX[a] ?? centerX) - (finalX[b] ?? centerX));
-
-        for (let i = 0; i < ids.length - 1; i++) {
-          const a = ids[i];
-          const b = ids[i + 1];
-          const ax = finalX[a] ?? centerX;
-          const bx = finalX[b] ?? centerX;
-
-          const aPartners = partnersMap[a] || [];
-          const isCouple = aPartners.includes(b) || (partnersMap[b] || []).includes(a);
-          const minDist = isCouple ? 140 : 130;
-
-          if (bx - ax < minDist) {
-            const overlap = minDist - (bx - ax);
-            finalX[a] = ax - overlap / 2;
-            finalX[b] = bx + overlap / 2;
-            changed = true;
-          }
-        }
-      });
-      if (!changed) break;
-    }
-
-    // Assign final coordinates
-    people.forEach(p => {
-      const gen = generations[p.id] ?? 0;
-      const x = finalX[p.id] ?? centerX;
-      const y = centerY + gen * 140;
-      coords[p.id] = { x, y, label: getRelLabel(p, 'Contacto') };
-    });
-
-    return coords;
-  }, [people, myId, partnersMap]);
-
-  // Derived display labels for visible nodes relative to the clicked/focused node
-  const displayLabels = useMemo(() => {
-    const labels: { [id: string]: string } = {};
-    const refId = focusedNodeId || myId;
-    if (!refId || visiblePeople.length === 0) return labels;
-
-    const findPerson = (id: string) => people.find(p => p.id === id);
-
-    const getDynamicRelationshipLabel = (personId: string) => {
-      if (personId === refId) {
-        return refId === myId ? 'Yo' : 'Enfocado/a';
-      }
-      
-      const refPerson = findPerson(refId);
-      const person = findPerson(personId);
-      if (!refPerson || !person) return 'Contacto';
-
-      // Is partner?
-      const refPartners = partnersMap[refId] || [];
-      if (refPartners.includes(personId)) return 'Pareja';
-
-      // Is parent?
-      if (refPerson.father_id === personId) return 'Padre';
-      if (refPerson.mother_id === personId) return 'Madre';
-
-      // Is child?
-      if (person.father_id === refId || person.mother_id === refId) return 'Hijo/a';
-
-      // Is grandparent?
-      const fatherNode = refPerson.father_id ? findPerson(refPerson.father_id) : null;
-      const motherNode = refPerson.mother_id ? findPerson(refPerson.mother_id) : null;
-      if (fatherNode?.father_id === personId || motherNode?.father_id === personId) return 'Abuelo';
-      if (fatherNode?.mother_id === personId || motherNode?.mother_id === personId) return 'Abuela';
-
-      // Is sibling?
-      if (refPerson.father_id && person.father_id === refPerson.father_id && refPerson.mother_id && person.mother_id === refPerson.mother_id) {
-        return 'Hermano/a';
-      }
-
-      // If refId is myId, fallback to metadata saved label
-      if (refId === myId) {
-        try {
-          const meta = person.metadata ? JSON.parse(person.metadata) : {};
-          return meta.relationship || 'Contacto';
-        } catch {
-          return 'Contacto';
-        }
-      }
-
-      // Check partner of parents
-      if (fatherNode) {
-        const fatherPartners = partnersMap[fatherNode.id] || [];
-        if (fatherPartners.includes(personId)) return 'Pareja de mi Padre';
-      }
-      if (motherNode) {
-        const motherPartners = partnersMap[motherNode.id] || [];
-        if (motherPartners.includes(personId)) return 'Pareja de mi Madre';
-      }
-
-      return 'Familiar';
-    };
-
-    visiblePeople.forEach(p => {
-      labels[p.id] = getDynamicRelationshipLabel(p.id);
-    });
-
-    return labels;
-  }, [people, visiblePeople, focusedNodeId, myId, partnersMap]);
-
-  const findFreePosition = (targetX: number, targetY: number, preferDir: 'left' | 'right' | 'down' | 'up', focusedId: string) => {
-    let testX = targetX;
-    let testY = targetY;
-
-    const isCollision = (tx: number, ty: number) => {
-      // Check collision with all visiblePeople nodes
-      return visiblePeople.some(node => {
-        if (node.id === focusedId) return false;
-        const nPos = nodePositions[node.id];
-        if (!nPos) return false;
-        const dx = Math.abs(nPos.x - tx);
-        const dy = Math.abs(nPos.y - ty);
-        return dx < 95 && dy < 110;
-      });
-    };
-
-    let step = 0;
-    const maxSteps = 15;
-    while (isCollision(testX, testY) && step < maxSteps) {
-      step++;
-      if (preferDir === 'left') {
-        testX -= 70;
-      } else if (preferDir === 'right') {
-        testX += 70;
-      } else if (preferDir === 'down') {
-        testY += 70;
-      } else if (preferDir === 'up') {
-        testY -= 70;
-      }
-      
-      if (step === 6) {
-        if (preferDir === 'left' || preferDir === 'right') {
-          testY -= 80;
-          testX = targetX;
-        } else {
-          testX += 80;
-          testY = targetY;
-        }
-      }
-    }
-    return { x: testX, y: testY };
   };
 
-  // Orthogonal connector line builder (optimized for straight lines)
-  const renderOrthogonalLine = (x1: number, y1: number, x2: number, y2: number, key: string, isDashed = false) => {
-    if (Math.abs(x1 - x2) < 1) {
-      return [
-        <View
-          key={`${key}-straight-v`}
-          style={[
-            styles.connectorLine,
-            isDashed && styles.dashedConnector,
-            {
-              left: x1,
-              top: Math.min(y1, y2),
-              width: 2,
-              height: Math.abs(y1 - y2),
-            }
-          ]}
-        />
-      ];
-    }
-    if (Math.abs(y1 - y2) < 1) {
-      return [
-        <View
-          key={`${key}-straight-h`}
-          style={[
-            styles.connectorLine,
-            isDashed && styles.dashedConnector,
-            {
-              left: Math.min(x1, x2),
-              top: y1,
-              width: Math.abs(x1 - x2) + 2,
-              height: 2,
-            }
-          ]}
-        />
-      ];
-    }
-
-    const midY = (y1 + y2) / 2;
-    const lines = [];
-    
-    // Vertical from (x1, y1) to (x1, midY)
-    lines.push(
-      <View
-        key={`${key}-v1`}
-        style={[
-          styles.connectorLine,
-          isDashed && styles.dashedConnector,
-          {
-            left: x1,
-            top: Math.min(y1, midY),
-            width: 2,
-            height: Math.abs(y1 - midY),
-          }
-        ]}
-      />
+  const getPersonFromDb = async (
+    id: string,
+  ): Promise<PersonRecord | null> => {
+    const db = await getDb();
+    return db.getFirstAsync<PersonRecord>(
+      `SELECT
+        id, name, metadata, father_id, mother_id, birth_date, 0 AS mentions
+       FROM entities
+       WHERE id = ? AND type = 'PERSON'`,
+      id,
     );
-    
-    // Horizontal from (x1, midY) to (x2, midY)
-    lines.push(
-      <View
-        key={`${key}-h`}
-        style={[
-          styles.connectorLine,
-          isDashed && styles.dashedConnector,
-          {
-            left: Math.min(x1, x2),
-            top: midY,
-            width: Math.abs(x1 - x2) + 2,
-            height: 2,
-          }
-        ]}
-      />
-    );
-    
-    // Vertical from (x2, midY) to (x2, y2)
-    lines.push(
-      <View
-        key={`${key}-v2`}
-        style={[
-          styles.connectorLine,
-          isDashed && styles.dashedConnector,
-          {
-            left: x2,
-            top: Math.min(midY, y2),
-            width: 2,
-            height: Math.abs(midY - y2),
-          }
-        ]}
-      />
-    );
-    return lines;
   };
 
-  const renderAllLines = () => {
-    const lines: React.ReactNode[] = [];
-    let keyCount = 0;
-    const visibleIds = new Set(visiblePeople.map(x => x.id));
-    const findPos = (id: string) => nodePositions[id];
-
-    // 1. Draw couple lines (only draw once per couple by ordering IDs)
-    const drawnCouples = new Set<string>();
-    visiblePeople.forEach(p => {
-      const partnerIds = partnersMap[p.id] || [];
-      partnerIds.forEach(partnerId => {
-        if (visibleIds.has(partnerId)) {
-          const key = [p.id, partnerId].sort().join('-');
-          if (!drawnCouples.has(key)) {
-            drawnCouples.add(key);
-            const pPos = findPos(p.id);
-            const partPos = findPos(partnerId);
-            if (pPos && partPos && pPos.y === partPos.y) {
-              lines.push(
-                <View
-                  key={`couple-${keyCount++}`}
-                  style={[
-                    styles.connectorLine,
-                    styles.dashedConnector,
-                    {
-                      left: Math.min(pPos.x, partPos.x) + 35,
-                      top: pPos.y,
-                      width: Math.abs(pPos.x - partPos.x) - 70,
-                      height: 2,
-                    }
-                  ]}
-                />
-              );
-            }
-          }
-        }
-      });
-    });
-
-    // 2. Group visible children by their visible parents to draw clean children bus lines
-    const parentGroups: { [parentsKey: string]: { fatherId?: string, motherId?: string, children: string[] } } = {};
-
-    visiblePeople.forEach(p => {
-      const fVisible = p.father_id && visibleIds.has(p.father_id);
-      const mVisible = p.mother_id && visibleIds.has(p.mother_id);
-
-      if (fVisible && mVisible) {
-        const key = [p.father_id, p.mother_id].sort().join('+');
-        if (!parentGroups[key]) {
-          parentGroups[key] = { fatherId: p.father_id!, motherId: p.mother_id!, children: [] };
-        }
-        parentGroups[key].children.push(p.id);
-      } else if (fVisible) {
-        const key = `f_${p.father_id}`;
-        if (!parentGroups[key]) {
-          parentGroups[key] = { fatherId: p.father_id!, children: [] };
-        }
-        parentGroups[key].children.push(p.id);
-      } else if (mVisible) {
-        const key = `m_${p.mother_id}`;
-        if (!parentGroups[key]) {
-          parentGroups[key] = { motherId: p.mother_id!, children: [] };
-        }
-        parentGroups[key].children.push(p.id);
-      }
-    });
-
-    // Render the grouped children lines
-    Object.keys(parentGroups).forEach(key => {
-      const { fatherId, motherId, children } = parentGroups[key];
-      if (children.length === 0) return;
-
-      const firstChildPos = findPos(children[0]);
-      if (!firstChildPos) return;
-
-      const childY = firstChildPos.y;
-      let parentY = 0;
-      let parentMidX = 0;
-
-      if (fatherId && motherId) {
-        const fPos = findPos(fatherId);
-        const mPos = findPos(motherId);
-        if (fPos && mPos) {
-          parentY = fPos.y;
-          parentMidX = (fPos.x + mPos.x) / 2;
-        } else if (fPos) {
-          parentY = fPos.y;
-          parentMidX = fPos.x;
-        } else if (mPos) {
-          parentY = mPos.y;
-          parentMidX = mPos.x;
-        }
-      } else if (fatherId) {
-        const fPos = findPos(fatherId);
-        if (fPos) {
-          parentY = fPos.y;
-          parentMidX = fPos.x;
-        }
-      } else if (motherId) {
-        const mPos = findPos(motherId);
-        if (mPos) {
-          parentY = mPos.y;
-          parentMidX = mPos.x;
-        }
-      }
-
-      if (parentY === 0) return; // No visible parent position
-
-      const midY = (parentY + childY) / 2;
-
-      // Find horizontal bounds of children
-      const childPositions = children.map(cId => findPos(cId)).filter(Boolean) as { x: number, y: number }[];
-      if (childPositions.length === 0) return;
-
-      const minChildX = Math.min(...childPositions.map(pos => pos.x));
-      const maxChildX = Math.max(...childPositions.map(pos => pos.x));
-
-      // Draw parent vertical drop down to midY
-      lines.push(
-        <View
-          key={`parent-drop-${key}-${keyCount++}`}
-          style={[
-            styles.connectorLine,
-            {
-              left: parentMidX,
-              top: parentY,
-              width: 2,
-              height: midY - parentY,
-            }
-          ]}
-        />
+  const linkPeople = async (
+    kind: RelationshipKind,
+    anchorId: string,
+    targetId: string,
+  ): Promise<boolean> => {
+    if (anchorId === targetId) {
+      Alert.alert(
+        'Vínculo inválido',
+        'Una persona no puede relacionarse consigo misma.',
       );
+      return false;
+    }
 
-      // Draw horizontal bus line at midY (only if children span horizontally)
-      const busLeft = Math.min(minChildX, parentMidX);
-      const busRight = Math.max(maxChildX, parentMidX);
-      if (busRight > busLeft + 1) {
-        lines.push(
-          <View
-            key={`children-bus-${key}-${keyCount++}`}
-            style={[
-              styles.connectorLine,
-              {
-                left: busLeft,
-                top: midY,
-                width: busRight - busLeft + 2,
-                height: 2,
-              }
-            ]}
-          />
+    const db = await getDb();
+    const currentPeople = people;
+    const anchor =
+      currentPeople.find((person) => person.id === anchorId) ??
+      (await getPersonFromDb(anchorId));
+    const target =
+      currentPeople.find((person) => person.id === targetId) ??
+      (await getPersonFromDb(targetId));
+
+    if (!anchor || !target) {
+      Alert.alert('No se encontró una de las personas');
+      return false;
+    }
+
+    if (kind === 'father' || kind === 'mother') {
+      if (wouldCreateParentCycle(currentPeople, anchorId, targetId)) {
+        Alert.alert(
+          'Ciclo familiar inválido',
+          `${target.name} aparece entre los descendientes de ${anchor.name} y no puede registrarse como progenitor.`,
+        );
+        return false;
+      }
+
+      const field = kind === 'father' ? 'father_id' : 'mother_id';
+      const occupiedId =
+        kind === 'father' ? anchor.father_id : anchor.mother_id;
+      if (occupiedId && occupiedId !== targetId) {
+        Alert.alert(
+          'Lugar ya ocupado',
+          `Quita primero el vínculo de ${
+            kind === 'father' ? 'padre' : 'madre'
+          } actual.`,
+        );
+        return false;
+      }
+      await db.runAsync(
+        `UPDATE entities SET ${field} = ? WHERE id = ?`,
+        targetId,
+        anchorId,
+      );
+    } else if (kind === 'child_as_father' || kind === 'child_as_mother') {
+      if (wouldCreateParentCycle(currentPeople, targetId, anchorId)) {
+        Alert.alert(
+          'Ciclo familiar inválido',
+          `${anchor.name} aparece entre los descendientes de ${target.name} y no puede registrarse como progenitor.`,
+        );
+        return false;
+      }
+
+      const asFather = kind === 'child_as_father';
+      const field = asFather ? 'father_id' : 'mother_id';
+      const occupiedId = asFather ? target.father_id : target.mother_id;
+      if (occupiedId && occupiedId !== anchorId) {
+        Alert.alert(
+          'Lugar ya ocupado',
+          `${target.name} ya tiene ${
+            asFather ? 'padre' : 'madre'
+          } registrado. Quita primero ese vínculo.`,
+        );
+        return false;
+      }
+      await db.runAsync(
+        `UPDATE entities SET ${field} = ? WHERE id = ?`,
+        anchorId,
+        targetId,
+      );
+    } else if (kind === 'sibling') {
+      const sharedParents: Array<{
+        field: 'father_id' | 'mother_id';
+        id: string;
+        occupiedId: string | null;
+      }> = [];
+
+      if (anchor.father_id) {
+        sharedParents.push({
+          field: 'father_id',
+          id: anchor.father_id,
+          occupiedId: target.father_id,
+        });
+      }
+      if (anchor.mother_id) {
+        sharedParents.push({
+          field: 'mother_id',
+          id: anchor.mother_id,
+          occupiedId: target.mother_id,
+        });
+      }
+
+      if (sharedParents.length === 0) {
+        Alert.alert(
+          'Faltan progenitores',
+          `Registra primero al menos un progenitor de ${anchor.name}; ese vínculo permitirá definir la hermandad.`,
+        );
+        return false;
+      }
+
+      const availableParents = sharedParents.filter(
+        ({ occupiedId, id }) => !occupiedId || occupiedId === id,
+      );
+      if (availableParents.length === 0) {
+        Alert.alert(
+          'No se puede compartir un progenitor',
+          `${target.name} ya tiene otros progenitores ocupando esos lugares.`,
+        );
+        return false;
+      }
+
+      for (const parent of availableParents) {
+        if (wouldCreateParentCycle(currentPeople, target.id, parent.id)) {
+          Alert.alert(
+            'Ciclo familiar inválido',
+            'La relación de hermandad produciría un ciclo entre generaciones.',
+          );
+          return false;
+        }
+      }
+
+      for (const parent of availableParents) {
+        await db.runAsync(
+          `UPDATE entities SET ${parent.field} = ? WHERE id = ?`,
+          parent.id,
+          target.id,
+        );
+      }
+    } else {
+      const anchorPartners = new Set(getExplicitPartnerIds(anchor));
+      const targetPartners = new Set(getExplicitPartnerIds(target));
+      anchorPartners.add(targetId);
+      targetPartners.add(anchorId);
+
+      await db.runAsync(
+        'UPDATE entities SET metadata = ? WHERE id = ?',
+        JSON.stringify(
+          getPartnerMetadata(anchor, [...anchorPartners]),
+        ),
+        anchorId,
+      );
+      await db.runAsync(
+        'UPDATE entities SET metadata = ? WHERE id = ?',
+        JSON.stringify(
+          getPartnerMetadata(target, [...targetPartners]),
+        ),
+        targetId,
+      );
+    }
+
+    return true;
+  };
+
+  const handleLinkExisting = async (
+    kind: RelationshipKind,
+    target: PersonRecord,
+  ) => {
+    if (!snapshot) return;
+    setRelationshipBusy(true);
+    try {
+      const linked = await linkPeople(kind, snapshot.focus.id, target.id);
+      if (linked) {
+        setManagerVisible(false);
+        await loadPeople();
+      }
+    } catch (error) {
+      console.error('[Relationship tree] Link failed:', error);
+      Alert.alert('No se pudo crear el vínculo');
+    } finally {
+      setRelationshipBusy(false);
+    }
+  };
+
+  const handleRemoveRelationship = async (
+    kind: RelationshipKind,
+    target: PersonRecord,
+  ) => {
+    if (!snapshot) return;
+    setRelationshipBusy(true);
+
+    try {
+      const db = await getDb();
+      const anchor = snapshot.focus;
+
+      if (kind === 'father') {
+        await db.runAsync(
+          'UPDATE entities SET father_id = NULL WHERE id = ? AND father_id = ?',
+          anchor.id,
+          target.id,
+        );
+      } else if (kind === 'mother') {
+        await db.runAsync(
+          'UPDATE entities SET mother_id = NULL WHERE id = ? AND mother_id = ?',
+          anchor.id,
+          target.id,
+        );
+      } else if (
+        kind === 'child_as_father' ||
+        kind === 'child_as_mother'
+      ) {
+        const field =
+          kind === 'child_as_father' ? 'father_id' : 'mother_id';
+        await db.runAsync(
+          `UPDATE entities SET ${field} = NULL WHERE id = ? AND ${field} = ?`,
+          target.id,
+          anchor.id,
+        );
+      } else if (kind === 'partner') {
+        const anchorExplicit = getExplicitPartnerIds(anchor);
+        const targetExplicit = getExplicitPartnerIds(target);
+        await db.runAsync(
+          'UPDATE entities SET metadata = ? WHERE id = ?',
+          JSON.stringify(
+            getPartnerMetadata(
+              anchor,
+              anchorExplicit.filter((id) => id !== target.id),
+            ),
+          ),
+          anchor.id,
+        );
+        await db.runAsync(
+          'UPDATE entities SET metadata = ? WHERE id = ?',
+          JSON.stringify(
+            getPartnerMetadata(
+              target,
+              targetExplicit.filter((id) => id !== anchor.id),
+            ),
+          ),
+          target.id,
         );
       }
 
-      // Draw vertical drops for each child from midY to childY
-      children.forEach(cId => {
-        const cPos = findPos(cId);
-        if (cPos) {
-          lines.push(
-            <View
-              key={`child-drop-${cId}-${keyCount++}`}
-              style={[
-                styles.connectorLine,
-                {
-                  left: cPos.x,
-                  top: midY,
-                  width: 2,
-                  height: cPos.y - midY,
-                }
-              ]}
-            />
+      await loadPeople();
+    } catch (error) {
+      console.error('[Relationship tree] Unlink failed:', error);
+      Alert.alert('No se pudo quitar el vínculo');
+    } finally {
+      setRelationshipBusy(false);
+    }
+  };
+
+  const syncAliases = async (
+    personId: string,
+    previousValue: unknown,
+    nextValue: string,
+  ) => {
+    const db = await getDb();
+    const previous = nicknamesFrom(previousValue);
+    const next = nicknamesFrom(nextValue);
+
+    for (const nickname of previous) {
+      if (
+        !next.some(
+          (candidate) =>
+            candidate.toLocaleLowerCase('es') ===
+            nickname.toLocaleLowerCase('es'),
+        )
+      ) {
+        await db.runAsync(
+          'DELETE FROM entity_aliases WHERE entity_id = ? AND alias = ? COLLATE NOCASE',
+          personId,
+          nickname,
+        );
+      }
+    }
+
+    for (const nickname of next) {
+      if (
+        !previous.some(
+          (candidate) =>
+            candidate.toLocaleLowerCase('es') ===
+            nickname.toLocaleLowerCase('es'),
+        )
+      ) {
+        try {
+          await db.runAsync(
+            'INSERT INTO entity_aliases (id, alias, entity_id) VALUES (?, ?, ?)',
+            uuidv4(),
+            nickname,
+            personId,
           );
+        } catch {
+          // The alias can already belong to this person.
         }
-      });
-    });
-
-    // 3. Draw lines to active "+" bubbles of the focused node (hidden on zoom out)
-    if (!isZoomedOut && focusedNodeId) {
-      const p = visiblePeople.find(x => x.id === focusedNodeId);
-      const pos = findPos(focusedNodeId);
-      if (p && pos) {
-        if (!p.father_id) {
-          const freePos = findFreePosition(pos.x - 80, pos.y - 120, 'left', focusedNodeId);
-          lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-father-${p.id}`, true));
-        }
-        if (!p.mother_id) {
-          const freePos = findFreePosition(pos.x + 80, pos.y - 120, 'right', focusedNodeId);
-          lines.push(...renderOrthogonalLine(pos.x, pos.y, freePos.x, freePos.y, `line-add-mother-${p.id}`, true));
-        }
-        // Always draw line to "+" Añadir Pareja bubble
-        const freePartnerPos = findFreePosition(pos.x + 115, pos.y, 'right', focusedNodeId);
-        lines.push(...renderOrthogonalLine(pos.x, pos.y, freePartnerPos.x, freePartnerPos.y, `line-add-partner-${p.id}`, true));
       }
-    }
-
-    return lines;
-  };
-
-  const handleNodePress = (nodeId: string) => {
-    setFocusedNodeId(nodeId);
-
-    // Auto-update active partner maps based on clicked node
-    const person = people.find(p => p.id === nodeId);
-    if (person) {
-      // 1. If clicked node is a child with two visible parents, set them as each other's active partners
-      if (person.father_id && person.mother_id) {
-        setActivePartnerMap(prev => ({
-          ...prev,
-          [person.father_id!]: person.mother_id!,
-          [person.mother_id!]: person.father_id!,
-        }));
-      }
-      
-      // 2. If clicked node is a partner of someone, set it as the active partner for that person
-      people.forEach(other => {
-        const otherPartners = partnersMap[other.id] || [];
-        if (otherPartners.includes(nodeId)) {
-          setActivePartnerMap(prev => ({
-            ...prev,
-            [other.id]: nodeId
-          }));
-        }
-      });
-    }
-
-    const pos = nodePositions[nodeId];
-    if (pos) {
-      centerOnNode(pos.x, pos.y);
     }
   };
 
-  const pickImage = async () => {
-    if (isLinked) return;
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permiso Denegado', 'Necesitamos acceso a la galería para cambiar la foto.');
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        setEditAvatarUrl(result.assets[0].uri);
-      }
-    } catch (e) {
-      console.warn('Error al seleccionar imagen:', e);
+  const handleSavePerson = async (values: PersonEditorValues) => {
+    if (!editorState) return;
+    if (!values.name.trim()) {
+      Alert.alert('Falta el nombre', 'Escribe un nombre para continuar.');
+      return;
     }
-  };
 
-  const handleSave = async () => {
-    if (!editName.trim()) {
-      Alert.alert('Falta Nombre', 'Por favor ingresa un nombre.');
+    const birthYear = normalizeBirthYear(values.birthYear);
+    if (birthYear === null) {
+      Alert.alert(
+        'Año inválido',
+        'Usa un año de cuatro cifras o elige una década aproximada.',
+      );
       return;
     }
 
     setSaving(true);
     try {
       const db = await getDb();
-      let targetUserId: string | null = null;
-      let finalName = editName.trim();
-      let finalAvatarUrl = editAvatarUrl;
-      let finalUsername = editUsername.trim().toLowerCase();
-      let linkStatus = isLinked;
-      let connStatus = selectedPerson ? JSON.parse(selectedPerson.metadata || '{}').connection_status : null;
+      const previousMetadata = parsePersonMetadata(editorPerson?.metadata);
+      let finalName = values.name.trim();
+      let finalAvatar = values.avatarUrl;
+      let finalUsername = values.username.trim().toLowerCase();
+      let targetUserId =
+        typeof previousMetadata.user_id === 'string'
+          ? previousMetadata.user_id
+          : null;
+      let connectionStatus =
+        typeof previousMetadata.connection_status === 'string'
+          ? previousMetadata.connection_status
+          : null;
+      let isLinked = Boolean(previousMetadata.is_linked);
 
-      // Handle User Linking/connections
       if (finalUsername && !isLinked) {
-        const { data: targetProfile, error: profileErr } = await supabase
+        const { data: targetProfile, error } = await supabase
           .from('profiles')
           .select('id, username, full_name, avatar_url')
           .eq('username', finalUsername)
           .maybeSingle();
 
-        if (profileErr || !targetProfile) {
-          Alert.alert('Error de Vinculación', 'No se encontró un usuario con ese nombre en la app.');
-          setSaving(false);
+        if (error || !targetProfile) {
+          Alert.alert(
+            'Usuario no encontrado',
+            'No existe una cuenta con ese nombre de usuario.',
+          );
           return;
         }
 
         targetUserId = targetProfile.id;
         finalName = targetProfile.full_name || finalName;
-        finalAvatarUrl = targetProfile.avatar_url || finalAvatarUrl;
-        linkStatus = false;
-        connStatus = 'PENDING_SENT';
+        finalAvatar = targetProfile.avatar_url || finalAvatar;
+        finalUsername = targetProfile.username || finalUsername;
+        connectionStatus = 'PENDING_SENT';
 
-        if (myId && myId !== targetUserId) {
-          const { data: conn } = await supabase
+        if (myId && targetUserId !== myId) {
+          const { data: connection } = await supabase
             .from('connections')
-            .select('*')
-            .or(`and(sender_id.eq.${myId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${myId})`)
+            .select('id')
+            .or(
+              `and(sender_id.eq.${myId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${myId})`,
+            )
             .maybeSingle();
 
-          if (!conn) {
+          if (!connection) {
             await supabase.from('connections').insert({
               sender_id: myId,
               receiver_id: targetUserId,
               status: 'PENDING',
             });
-            Alert.alert('Solicitud Enviada', `Solicitud de conexión enviada a @${finalUsername}.`);
           }
         }
       }
 
-      const targetEntityId = selectedPerson ? selectedPerson.id : uuidv4();
-
-      let finalBirthDate = editBirthDate.trim();
-      let birthDecadeVal = editDecade;
-
-      if (!finalBirthDate && editDecade) {
-        const decadeNum = parseInt(editDecade.substring(0, 4));
-        if (!isNaN(decadeNum)) {
-          finalBirthDate = String(decadeNum + 5);
-        }
-      } else if (finalBirthDate) {
-        birthDecadeVal = '';
-      }
-
-      const meta: any = {
-        nickname: editNickname.trim(),
-        relationship: editRelationship,
-        avatar_url: finalAvatarUrl,
+      const personId = editorPerson?.id ?? uuidv4();
+      const metadata = {
+        ...previousMetadata,
+        nickname: values.nickname.trim(),
+        relationship: values.relationship.trim(),
+        avatar_url: finalAvatar,
         username: finalUsername,
-        user_id: targetUserId || (selectedPerson ? JSON.parse(selectedPerson.metadata || '{}').user_id : null),
-        is_linked: linkStatus,
-        connection_status: linkStatus ? 'ACCEPTED' : connStatus,
-        birth_decade: birthDecadeVal,
+        user_id: targetUserId,
+        is_linked: isLinked,
+        connection_status: isLinked ? 'ACCEPTED' : connectionStatus,
+        birth_decade: birthYear ? '' : values.birthDecade,
       };
 
-      const isFemale = (pNode: any) => {
-        if (!pNode) return false;
-        const pMeta = pNode.metadata ? JSON.parse(pNode.metadata) : {};
-        const rel = (pMeta.relationship || '').toLowerCase();
-        return rel.includes('madre') || rel.includes('tía') || rel.includes('tia') || rel.includes('abuela') || rel.includes('prima') || rel.includes('hermana') || rel.includes('mujer');
-      };
-
-      if (selectedPerson) {
+      if (editorPerson) {
         await db.runAsync(
-          "UPDATE entities SET name = ?, metadata = ?, father_id = ?, mother_id = ?, birth_date = ? WHERE id = ?",
+          'UPDATE entities SET name = ?, metadata = ?, birth_date = ? WHERE id = ?',
           finalName,
-          JSON.stringify(meta),
-          editFatherId,
-          editMotherId,
-          finalBirthDate,
-          targetEntityId
+          JSON.stringify(metadata),
+          birthYear,
+          personId,
         );
       } else {
-        let insertFatherId = editFatherId;
-        let insertMotherId = editMotherId;
-
-        if (pendingLink && pendingLink.role === 'joint_child') {
-          const parentA = people.find(p => p.id === pendingLink.parentId);
-          const parentB = pendingLink.partnerId ? people.find(p => p.id === pendingLink.partnerId) : null;
-          if (isFemale(parentA)) {
-            insertMotherId = parentA?.id || null;
-            insertFatherId = parentB?.id || null;
-          } else {
-            insertFatherId = parentA?.id || null;
-            insertMotherId = parentB?.id || null;
-          }
-        }
-
         await db.runAsync(
-          "INSERT INTO entities (id, type, name, metadata, father_id, mother_id, birth_date, is_confirmed) VALUES (?, 'PERSON', ?, ?, ?, ?, ?, 1)",
-          targetEntityId,
+          "INSERT INTO entities (id, type, name, metadata, birth_date, is_confirmed) VALUES (?, 'PERSON', ?, ?, ?, 1)",
+          personId,
           finalName,
-          JSON.stringify(meta),
-          insertFatherId,
-          insertMotherId,
-          finalBirthDate
+          JSON.stringify(metadata),
+          birthYear,
         );
-
-        // If we opened this modal via a '+' direct link bubble, link it up now
-        if (pendingLink) {
-          if (pendingLink.role === 'father') {
-            await db.runAsync("UPDATE entities SET father_id = ? WHERE id = ?", targetEntityId, pendingLink.childId ?? null);
-          } else if (pendingLink.role === 'mother') {
-            await db.runAsync("UPDATE entities SET mother_id = ? WHERE id = ?", targetEntityId, pendingLink.childId ?? null);
-          } else if (pendingLink.role === 'partner') {
-            // Reciprocal partner linking
-            const newPartnerId = pendingLink.parentId;
-            if (newPartnerId) {
-              const targetPartners = meta.partner_ids || [];
-              if (meta.partner_id && !targetPartners.includes(meta.partner_id)) {
-                targetPartners.push(meta.partner_id);
-              }
-              if (!targetPartners.includes(newPartnerId)) {
-                targetPartners.push(newPartnerId);
-              }
-              meta.partner_ids = targetPartners;
-              meta.partner_id = newPartnerId; // fallback
-              await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(meta), targetEntityId);
-              
-              const spouseNode = people.find(x => x.id === newPartnerId);
-              if (spouseNode) {
-                const spouseMeta = spouseNode.metadata ? JSON.parse(spouseNode.metadata) : {};
-                const spousePartners = spouseMeta.partner_ids || [];
-                if (spouseMeta.partner_id && !spousePartners.includes(spouseMeta.partner_id)) {
-                  spousePartners.push(spouseMeta.partner_id);
-                }
-                if (!spousePartners.includes(targetEntityId)) {
-                  spousePartners.push(targetEntityId);
-                }
-                spouseMeta.partner_ids = spousePartners;
-                spouseMeta.partner_id = targetEntityId; // fallback
-                await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(spouseMeta), newPartnerId);
-              }
-            }
-          } else if (pendingLink.role === 'child' && pendingLink.parentId) {
-            // Check if parent is female or male to assign correctly
-            const parent = people.find(p => p.id === pendingLink.parentId);
-            if (isFemale(parent)) {
-              await db.runAsync("UPDATE entities SET mother_id = ? WHERE id = ?", pendingLink.parentId, targetEntityId);
-            } else {
-              await db.runAsync("UPDATE entities SET father_id = ? WHERE id = ?", pendingLink.parentId, targetEntityId);
-            }
-          }
-        }
       }
 
-      // Sync nicknames with entity_aliases
-      const newNicknames = editNickname.split(',').map(n => n.trim()).filter(Boolean);
-      const oldNicknameStr = selectedPerson ? (JSON.parse(selectedPerson.metadata || '{}').nickname || '') : '';
-      const oldNicknames = oldNicknameStr.split(',').map((n: string) => n.trim()).filter(Boolean);
+      await syncAliases(
+        personId,
+        previousMetadata.nickname,
+        values.nickname,
+      );
 
-      const deletedNicknames = oldNicknames.filter((n: string) => !newNicknames.some((newN: string) => newN.toLowerCase() === n.toLowerCase()));
-      for (const alias of deletedNicknames) {
-        await db.runAsync("DELETE FROM entity_aliases WHERE entity_id = ? AND alias = ? COLLATE NOCASE", targetEntityId, alias);
+      if (
+        !editorPerson &&
+        editorState.pendingKind &&
+        editorState.anchorId
+      ) {
+        await linkPeople(
+          editorState.pendingKind,
+          editorState.anchorId,
+          personId,
+        );
       }
 
-      const addedNicknames = newNicknames.filter((n: string) => !oldNicknames.some((oldN: string) => oldN.toLowerCase() === n.toLowerCase()));
-      for (const alias of addedNicknames) {
-        try {
-          const aliasId = uuidv4();
-          await db.runAsync("INSERT INTO entity_aliases (id, alias, entity_id) VALUES (?, ?, ?)", aliasId, alias, targetEntityId);
-        } catch (_) {}
-      }
-
-      setModalVisible(false);
-      setPendingLink(null);
+      setEditorState(null);
       await loadPeople();
-      // Keep the current focusedNodeId so the rest of the tree remains visible and the new node is drawn in context.
-    } catch (e) {
-      console.error(e);
-      Alert.alert('Error', 'No se pudo guardar.');
+      if (!focusedId) setFocusedId(personId);
+    } catch (error) {
+      console.error('[Relationship tree] Save failed:', error);
+      Alert.alert('No se pudo guardar la persona');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    const person = people.find(p => p.id === id);
-    const meta = person && person.metadata ? JSON.parse(person.metadata) : {};
-    const targetUserId = meta.user_id;
+  const handleDeletePerson = () => {
+    if (!editorPerson || editorPerson.id === myId) return;
 
     Alert.alert(
-      'Eliminar Persona',
-      '¿Estás seguro de que quieres eliminar a esta persona del árbol?',
+      'Eliminar persona',
+      `Se eliminará a ${editorPerson.name} del árbol. Sus recuerdos no se borrarán, pero dejarán de estar asociados a esta persona.`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Eliminar',
           style: 'destructive',
           onPress: async () => {
+            setSaving(true);
             try {
-              if (targetUserId && myId) {
+              const metadata = parsePersonMetadata(editorPerson.metadata);
+              const remoteUserId =
+                typeof metadata.user_id === 'string'
+                  ? metadata.user_id
+                  : null;
+              if (remoteUserId && myId) {
                 await supabase
                   .from('connections')
                   .delete()
-                  .or(`and(sender_id.eq.${myId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${myId})`);
+                  .or(
+                    `and(sender_id.eq.${myId},receiver_id.eq.${remoteUserId}),and(sender_id.eq.${remoteUserId},receiver_id.eq.${myId})`,
+                  );
               }
 
               const db = await getDb();
-              await db.runAsync("DELETE FROM entity_aliases WHERE entity_id = ?", id);
-              await db.runAsync("DELETE FROM memory_entities WHERE entity_id = ?", id);
-              // Clean father/mother references pointing to this person
-              await db.runAsync("UPDATE entities SET father_id = NULL WHERE father_id = ?", id);
-              await db.runAsync("UPDATE entities SET mother_id = NULL WHERE mother_id = ?", id);
-              await db.runAsync("DELETE FROM entities WHERE id = ?", id);
-              
-              setModalVisible(false);
-              if (focusedNodeId === id) {
-                setFocusedNodeId(myId || null);
+              for (const person of people) {
+                if (getExplicitPartnerIds(person).includes(editorPerson.id)) {
+                  const updated = getPartnerMetadata(
+                    person,
+                    getExplicitPartnerIds(person).filter(
+                      (id) => id !== editorPerson.id,
+                    ),
+                  );
+                  await db.runAsync(
+                    'UPDATE entities SET metadata = ? WHERE id = ?',
+                    JSON.stringify(updated),
+                    person.id,
+                  );
+                }
+              }
+              await db.runAsync(
+                'DELETE FROM entity_aliases WHERE entity_id = ?',
+                editorPerson.id,
+              );
+              await db.runAsync(
+                'DELETE FROM memory_entities WHERE entity_id = ?',
+                editorPerson.id,
+              );
+              await db.runAsync(
+                'UPDATE entities SET father_id = NULL WHERE father_id = ?',
+                editorPerson.id,
+              );
+              await db.runAsync(
+                'UPDATE entities SET mother_id = NULL WHERE mother_id = ?',
+                editorPerson.id,
+              );
+              await db.runAsync(
+                'DELETE FROM entities WHERE id = ?',
+                editorPerson.id,
+              );
+
+              setEditorState(null);
+              if (focusedId === editorPerson.id) {
+                setFocusedId(myId ?? null);
               }
               await loadPeople();
-            } catch (err) {
-              console.error(err);
+            } catch (error) {
+              console.error('[Relationship tree] Delete failed:', error);
+              Alert.alert('No se pudo eliminar la persona');
+            } finally {
+              setSaving(false);
             }
-          }
-        }
-      ]
+          },
+        },
+      ],
     );
   };
 
-  const handleUnlink = (id: string) => {
-    const person = people.find(p => p.id === id);
-    const meta = person && person.metadata ? JSON.parse(person.metadata) : {};
-    const targetUserId = meta.user_id;
-
+  const handleUnlinkAccount = () => {
+    if (!editorPerson) return;
     Alert.alert(
-      'Desvincular de la App',
-      '¿Estás seguro de que quieres desvincular a esta persona?',
+      'Desvincular cuenta',
+      'La persona y sus relaciones permanecerán en el árbol, pero dejarán de sincronizarse con esa cuenta.',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Desvincular',
           style: 'destructive',
           onPress: async () => {
+            setSaving(true);
             try {
-              if (targetUserId && myId) {
+              const metadata = parsePersonMetadata(editorPerson.metadata);
+              const remoteUserId =
+                typeof metadata.user_id === 'string'
+                  ? metadata.user_id
+                  : null;
+              if (remoteUserId && myId) {
                 await supabase
                   .from('connections')
                   .delete()
-                  .or(`and(sender_id.eq.${myId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${myId})`);
+                  .or(
+                    `and(sender_id.eq.${myId},receiver_id.eq.${remoteUserId}),and(sender_id.eq.${remoteUserId},receiver_id.eq.${myId})`,
+                  );
               }
 
+              const nextMetadata = {
+                ...metadata,
+                user_id: null,
+                username: '',
+                is_linked: false,
+                connection_status: null,
+              };
               const db = await getDb();
-              meta.is_linked = false;
-              meta.user_id = null;
-              meta.username = '';
-              await db.runAsync("UPDATE entities SET metadata = ? WHERE id = ?", JSON.stringify(meta), id);
-              setModalVisible(false);
+              await db.runAsync(
+                'UPDATE entities SET metadata = ? WHERE id = ?',
+                JSON.stringify(nextMetadata),
+                editorPerson.id,
+              );
+              setEditorState(null);
               await loadPeople();
-            } catch (err) {
-              console.error(err);
+            } catch (error) {
+              console.error('[Relationship tree] Account unlink failed:', error);
+              Alert.alert('No se pudo desvincular la cuenta');
+            } finally {
+              setSaving(false);
             }
-          }
-        }
-      ]
+          },
+        },
+      ],
     );
   };
 
-  const openEditModal = (person: any) => {
-    setSelectedPerson(person);
-    const meta = person.metadata ? JSON.parse(person.metadata) : {};
-    setEditName(person.name);
-    setEditNickname(meta.nickname || '');
-    setEditRelationship(meta.relationship || '');
-    setEditAvatarUrl(meta.avatar_url || '');
-    setEditUsername(meta.username || '');
-    setEditFatherId(person.father_id || null);
-    setEditMotherId(person.mother_id || null);
-    setIsLinked(!!meta.is_linked);
-    
-    if (meta.birth_decade) {
-      setEditDecade(meta.birth_decade);
-      setEditBirthDate('');
-    } else {
-      setEditBirthDate(person.birth_date || '');
-      setEditDecade('');
-    }
-    
-    setModalVisible(true);
+  const handleCreateFromManager = (kind: RelationshipKind) => {
+    if (!snapshot) return;
+    setManagerVisible(false);
+    openCreateEditor(kind, snapshot.focus.id);
   };
 
-  const openCreateModal = (preLink: typeof pendingLink = null) => {
-    setPendingLink(preLink);
-    setSelectedPerson(null);
-    setEditName('');
-    setEditNickname('');
-    setEditRelationship('');
-    setEditAvatarUrl('');
-    setEditUsername('');
-    setEditBirthDate('');
-    setEditDecade('');
-    setEditFatherId(null);
-    setEditMotherId(null);
-    setIsLinked(false);
-
-    // Pre-fill fields if we have a direct tree link context
-    if (preLink) {
-      if (preLink.childId && (preLink.role === 'father' || preLink.role === 'mother')) {
-        setEditRelationship(getRelationForParent(preLink.childId, preLink.role));
-      } else if (preLink.role === 'partner') {
-        setEditRelationship(getRelationForPartner(preLink.parentId || ''));
-      } else if (preLink.role === 'joint_child' && preLink.parentId) {
-        setEditRelationship(getRelationForChild(preLink.parentId));
-      } else if (preLink.role === 'child' && preLink.parentId) {
-        setEditRelationship(getRelationForChild(preLink.parentId));
-
-        // Set father/mother reference
-        const parent = people.find(p => p.id === preLink.parentId);
-        const parentMeta = parent?.metadata ? JSON.parse(parent.metadata) : {};
-        const rel = (parentMeta.relationship || '').toLowerCase();
-        const isFemale = rel.includes('madre') || rel.includes('tía') || rel.includes('tia') || rel.includes('abuela') || rel.includes('prima') || rel.includes('hermana') || rel.includes('mujer');
-        if (isFemale) {
-          setEditMotherId(preLink.parentId);
-        } else {
-          setEditFatherId(preLink.parentId);
-        }
-      }
-    }
-    setModalVisible(true);
+  const focusPerson = (personId: string) => {
+    setFocusedId(personId);
+    setDirectoryVisible(false);
   };
-const filteredList = useMemo(() => {
-  if (!searchQuery.trim()) return people;
-  const q = searchQuery.toLowerCase().trim();
-  return people.filter(p => p.name.toLowerCase().includes(q) || 
-    (p.metadata && JSON.parse(p.metadata).nickname?.toLowerCase().includes(q))
-  );
-}, [people, searchQuery]);
 
-  const panGesture = Gesture.Pan()
-    .minDistance(10)
-    .onUpdate((event) => {
-      translateX.value = savedTranslateX.value + event.translationX;
-      translateY.value = savedTranslateY.value + event.translationY;
-    })
-    .onEnd(() => {
-      savedTranslateX.value = translateX.value;
-      savedTranslateY.value = translateY.value;
-    });
-
-  const pinchGesture = Gesture.Pinch()
-    .onUpdate((event) => {
-      scale.value = Math.max(0.4, Math.min(3, savedScale.value * event.scale));
-    })
-    .onEnd(() => {
-      savedScale.value = scale.value;
-    });
-
-  const combinedGesture = Gesture.Simultaneous(panGesture, pinchGesture);
-
-  const animatedStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateX: translateX.value },
-        { translateY: translateY.value },
-        { scale: scale.value }
-      ],
-    };
-  });
-
-  const animatedBadgeStyle = useAnimatedStyle(() => {
-    const yoX = 700;
-    const yoY = 600;
-
-    const yoScreenX = yoX + translateX.value;
-    const yoScreenY = yoY + translateY.value;
-
-    const w = containerWidth;
-    const h = containerHeight;
-    const margin = 24;
-
-    const isOffScreen = yoScreenX < 0 || yoScreenX > w || yoScreenY < 0 || yoScreenY > h;
-
-    const badgeX = Math.max(margin, Math.min(w - margin - 40, yoScreenX));
-    const hasPanel = focusedNodeId !== null;
-    const bottomMargin = hasPanel ? 160 : 100;
-    const badgeY = Math.max(margin, Math.min(h - bottomMargin - 40, yoScreenY));
-
-    const opacity = withTiming(isOffScreen ? 1 : 0, { duration: 200 });
-    const scaleVal = withTiming(isOffScreen ? 1 : 0, { duration: 200 });
-
-    return {
-      position: 'absolute',
-      left: badgeX,
-      top: badgeY,
-      opacity: opacity,
-      transform: [{ scale: scaleVal }],
-    };
-  });
+  const focusedMetadata = snapshot
+    ? parsePersonMetadata(snapshot.focus.metadata)
+    : {};
+  const connectionLabel =
+    focusedMetadata.connection_status === 'PENDING_SENT'
+      ? 'Solicitud pendiente'
+      : focusedMetadata.is_linked
+        ? 'Cuenta conectada'
+        : null;
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <View style={styles.container}>
-        <Appbar.Header style={styles.appbar}>
-          <IconButton icon="menu" iconColor="#6200ee" onPress={() => setSidebarOpen(true)} />
-          <Appbar.Content title="Red Social y Árbol" titleStyle={styles.headerTitle} />
-          {focusedNodeId !== myId && (
-            <Button mode="text" compact textColor="#6200ee" onPress={() => myId && setFocusedNodeId(myId)}>
-              Ver Mi Árbol (Yo)
-            </Button>
-          )}
-        </Appbar.Header>
-
-        {/* Modern Mind Map Canvas (2D Free Pan and Zoom) */}
-        <View style={styles.canvasContainer} onLayout={handleContainerLayout}>
-          <GestureDetector gesture={combinedGesture}>
-            <Animated.View style={[styles.mapCanvas, animatedStyle]}>
-              {/* Dotted Grid Background */}
-              <View style={styles.gridOverlay} />
-
-              {/* Connecting lines */}
-              {renderAllLines()}
-
-              {/* RENDER ALL PEOPLE IN FIXED COORDINATES */}
-              {visiblePeople.map((person) => {
-                const pos = nodePositions[person.id];
-                if (!pos) return null;
-                const isFocused = focusedNodeId === person.id;
-                const meta = person.metadata ? JSON.parse(person.metadata) : {};
-
-                return (
-                  <TouchableOpacity 
-                    key={`node-${person.id}`} 
-                    activeOpacity={0.8}
-                    onPress={() => handleNodePress(person.id)}
-                    style={[
-                      styles.nodeWrapper, 
-                      { left: pos.x - 37.5, top: pos.y - 37.5 },
-                      isFocused && { zIndex: 10 }
-                    ]}
-                  >
-                    <View 
-                      style={[
-                        styles.nodeBubble,
-                        isFocused && styles.focusedBubble,
-                        pos.label === 'Yo' && styles.yoBubble,
-                        !['Yo', 'Padre', 'Madre', 'Hermano/a', 'Hijo/a', 'Abuelo', 'Abuela', 'Nieto/a'].includes(pos.label) && styles.floatingBubble
-                      ]}
-                    >
-                      <Image 
-                        source={{ uri: meta.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + person.name }} 
-                        style={styles.nodeAvatar} 
-                      />
-                      {person.id === myId && <View style={styles.meBadge}><Text style={styles.meBadgeText}>Yo</Text></View>}
-                    </View>
-                    <ZoomCompensatedText 
-                      scale={scale} 
-                      name={person.name} 
-                      subtitle={meta.nickname || displayLabels[person.id] || ''} 
-                      isZoomedOut={isZoomedOut} 
-                    />
-                  </TouchableOpacity>
-                );
-              })}
-
-              {/* DYNAMIC ADD BRANCH (+) BUBBLES */}
-              {!isZoomedOut && focusedNodeId && (() => {
-                const p = visiblePeople.find(x => x.id === focusedNodeId);
-                const pos = nodePositions[focusedNodeId];
-                if (!p || !pos) return null;
-
-                const addButtons = [];
-
-                // Re-build partnersMap for checking in branch rendering
-                const partnersMap: { [id: string]: string[] } = {};
-                const addPartnerMapping = (idA: string, idB: string) => {
-                  if (!idA || !idB) return;
-                  if (!partnersMap[idA]) partnersMap[idA] = [];
-                  if (!partnersMap[idA].includes(idB)) partnersMap[idA].push(idB);
-                  if (!partnersMap[idB]) partnersMap[idB] = [];
-                  if (!partnersMap[idB].includes(idA)) partnersMap[idB].push(idA);
-                };
-                visiblePeople.forEach(x => {
-                  const metaPartnerIds = getPartnerIds(x);
-                  metaPartnerIds.forEach(pId => addPartnerMapping(x.id, pId));
-                  if (x.father_id && x.mother_id) {
-                    addPartnerMapping(x.father_id, x.mother_id);
-                  }
-                });
-
-                const partnerIds = partnersMap[p.id] || [];
-
-                if (!p.father_id) {
-                  const freePos = findFreePosition(pos.x - 80, pos.y - 120, 'left', focusedNodeId);
-                  addButtons.push(
-                    <View key="add-father" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
-                      <TouchableOpacity 
-                        activeOpacity={0.8} 
-                        onPress={() => openCreateModal({ childId: p.id, role: 'father' })}
-                        style={styles.plusBubble}
-                      >
-                        <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
-                      </TouchableOpacity>
-                      <ZoomCompensatedLabel scale={scale} label="Asignar Padre" />
-                    </View>
-                  );
-                }
-
-                if (!p.mother_id) {
-                  const freePos = findFreePosition(pos.x + 80, pos.y - 120, 'right', focusedNodeId);
-                  addButtons.push(
-                    <View key="add-mother" style={[styles.nodeWrapper, { left: freePos.x - 37.5, top: freePos.y - 37.5 }]}>
-                      <TouchableOpacity 
-                        activeOpacity={0.8} 
-                        onPress={() => openCreateModal({ childId: p.id, role: 'mother' })}
-                        style={styles.plusBubble}
-                      >
-                        <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
-                      </TouchableOpacity>
-                      <ZoomCompensatedLabel scale={scale} label="Asignar Madre" />
-                    </View>
-                  );
-                }
-
-                // Always allow adding a partner (Añadir Pareja)
-                let searchPartnerX = pos.x;
-                partnerIds.forEach(pId => {
-                  const partnerPos = nodePositions[pId];
-                  if (partnerPos && partnerPos.x > searchPartnerX) {
-                    searchPartnerX = partnerPos.x;
-                  }
-                });
-                const freePartnerPos = findFreePosition(searchPartnerX + 115, pos.y, 'right', focusedNodeId);
-                addButtons.push(
-                  <View key="add-partner" style={[styles.nodeWrapper, { left: freePartnerPos.x - 37.5, top: freePartnerPos.y - 37.5 }]}>
-                    <TouchableOpacity 
-                      activeOpacity={0.8} 
-                      onPress={() => openCreateModal({ parentId: p.id, role: 'partner' })}
-                      style={styles.plusBubble}
-                    >
-                      <IconButton icon="plus" size={24} iconColor="#7b1fa2" />
-                    </TouchableOpacity>
-                    <ZoomCompensatedLabel scale={scale} label="Añadir Pareja" />
-                  </View>
-                );
-
-                // Render Hijo en Común for all partners
-                partnerIds.forEach(partnerId => {
-                  const partnerPos = nodePositions[partnerId];
-                  if (partnerPos) {
-                    const midX = (pos.x + partnerPos.x) / 2;
-                    const midY = pos.y;
-                    const coupleKey = [p.id, partnerId].sort().join('-');
-                    addButtons.push(
-                      <View key={`add-joint-child-${coupleKey}`} style={[styles.nodeWrapper, { left: midX - 37.5, top: midY - 37.5 }]}>
-                        <TouchableOpacity 
-                          activeOpacity={0.8} 
-                          onPress={() => openCreateModal({ parentId: p.id, partnerId: partnerId, role: 'joint_child' })}
-                          style={[styles.plusBubble, { backgroundColor: '#e8def8', borderColor: '#6200ee' }]}
-                        >
-                          <IconButton icon="account-multiple-plus" size={24} iconColor="#6200ee" />
-                        </TouchableOpacity>
-                        <ZoomCompensatedLabel scale={scale} label="Hijo en Común" />
-                      </View>
-                    );
-                  }
-                });
-
-                return addButtons;
-              })()}
-
-            </Animated.View>
-          </GestureDetector>
-
-          {/* Floating Zoom Controls */}
-          <View style={styles.zoomControls}>
-            <IconButton
-              icon="plus"
-              mode="contained"
-              containerColor="#ffffff"
-              iconColor="#6200ee"
-              size={22}
-              onPress={handleZoomIn}
-              style={styles.zoomBtn}
-            />
-            <IconButton
-              icon="minus"
-              mode="contained"
-              containerColor="#ffffff"
-              iconColor="#6200ee"
-              size={22}
-              onPress={handleZoomOut}
-              style={styles.zoomBtn}
-            />
-          </View>
-
-          {/* Retorno Rápido (Centering shortcut) */}
-          {myId && (() => {
-            const yoNode = people.find(p => p.id === myId);
-            const yoMeta = yoNode?.metadata ? JSON.parse(yoNode.metadata) : {};
-            const yoAvatarUrl = yoMeta.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + (yoNode?.name || 'Yo');
-            return (
-              <Animated.View style={[styles.floatingYoBadge, animatedBadgeStyle]}>
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => centerOnNode(700, 600)}
-                  style={styles.floatingYoBadgeButton}
-                >
-                  <Image
-                    source={{ uri: yoAvatarUrl }}
-                    style={styles.floatingYoBadgeAvatar}
-                  />
-                  <View style={styles.floatingYoBadgeIndicator}>
-                    <IconButton icon="home" size={10} iconColor="#ffffff" style={{ margin: 0, padding: 0 }} />
-                  </View>
-                </TouchableOpacity>
-              </Animated.View>
-            );
-          })()}
-        </View>
-
-    {/* Floating Bottom Panel for Selected / Focused Node Controls */}
-    {focusedNode && (
-      <Card style={styles.controlPanel} mode="elevated">
-        <View style={styles.panelRow}>
-          <Image 
-            source={{ uri: JSON.parse(focusedNode.metadata || '{}').avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + focusedNode.name }} 
-            style={styles.panelAvatar} 
-          />
-          <View style={styles.panelTextWrap}>
-            <Text style={styles.panelTitle}>{focusedNode.name}</Text>
-            <Text style={styles.panelSubtitle}>{focusedNode.mentions} recuerdos • {focusedNode.birth_date ? `Nac: ${focusedNode.birth_date.substring(0, 4)}` : 'Sin año'}</Text>
-          </View>
-          <View style={styles.panelActions}>
-            <Button 
-              mode="contained" 
-              buttonColor="#6200ee" 
-              compact
-              style={styles.actionBtn}
-              onPress={() => navigation.navigate('EntityMemories', { entityId: focusedNode.id })}
-            >
-              Recuerdos
-            </Button>
-            <IconButton icon="pencil-outline" size={20} iconColor="#6200ee" onPress={() => openEditModal(focusedNode)} />
-          </View>
-        </View>
-      </Card>
-    )}
-
-    {/* Floating Action Button for freeform creations */}
-    <FAB
-      icon="account-plus-outline"
-      style={styles.fab}
-      color="#ffffff"
-      onPress={() => openCreateModal(null)}
-      label="Nuevo"
-    />
-
-    {/* Sidebar Contacts List Overlay / Drawer */}
-    <Portal>
-      <Modal visible={sidebarOpen} onDismiss={() => setSidebarOpen(false)} contentContainerStyle={styles.sidebarContent}>
-        <Appbar.Header style={styles.sidebarHeader}>
-          <Appbar.Content title="Todos los Miembros" titleStyle={styles.sidebarTitle} />
-          <IconButton icon="close" onPress={() => setSidebarOpen(false)} />
-        </Appbar.Header>
-        
-        <TextInput
-          placeholder="Buscar por nombre o apodo..."
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          mode="outlined"
-          activeOutlineColor="#6200ee"
-          dense
-          style={styles.sidebarSearch}
-          left={<TextInput.Icon icon="magnify" />}
+    <View style={styles.container}>
+      <Appbar.Header style={styles.appbar}>
+        <Appbar.Action
+          icon="account-search-outline"
+          color="#6037a7"
+          onPress={() => setDirectoryVisible(true)}
+          accessibilityLabel="Abrir directorio de personas"
         />
-        
-        <ScrollView contentContainerStyle={styles.sidebarList}>
-          {filteredList.map((p) => {
-            const meta = p.metadata ? JSON.parse(p.metadata) : {};
-            return (
-              <TouchableOpacity 
-                key={`list-item-${p.id}`} 
-                style={[styles.sidebarItem, focusedNodeId === p.id && styles.sidebarItemFocused]}
-                onPress={() => {
-                  setFocusedNodeId(p.id);
-                  setSidebarOpen(false);
-                }}
-              >
-                <Image source={{ uri: meta.avatar_url || 'https://api.dicebear.com/7.x/adventurer/png?seed=' + p.name }} style={styles.sidebarAvatar} />
-                <View style={styles.sidebarItemText}>
-                  <Text style={styles.sidebarItemName}>{p.name} {meta.nickname ? `(${meta.nickname})` : ''}</Text>
-                  <Text style={styles.sidebarItemRel}>{meta.relationship || 'Contacto'}</Text>
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </Modal>
-    </Portal>
+        <Appbar.Content
+          title="Árbol relacional"
+          subtitle={`${people.length} ${
+            people.length === 1 ? 'persona' : 'personas'
+          } en tu red`}
+          titleStyle={styles.headerTitle}
+        />
+        <Appbar.Action
+          icon="refresh"
+          color="#6037a7"
+          disabled={refreshing}
+          onPress={() => void refresh(true)}
+          accessibilityLabel="Sincronizar árbol"
+        />
+      </Appbar.Header>
 
-    {/* Creation & Editing Portal Modal */}
-    <Portal>
-      <Modal visible={modalVisible} onDismiss={() => setModalVisible(false)} contentContainerStyle={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Appbar.Header style={styles.modalHeader}>
-            <Appbar.Content title={selectedPerson ? "Editar Perfil" : "Añadir al Árbol / Red"} titleStyle={styles.modalTitle} />
-            <IconButton icon="close" disabled={saving} onPress={() => setModalVisible(false)} />
-            {selectedPerson && selectedPerson.id !== myId && (
-              <IconButton icon="delete-outline" iconColor="#d32f2f" disabled={saving} onPress={() => handleDelete(selectedPerson.id)} />
-            )}
-          </Appbar.Header>
-
-          <ScrollView contentContainerStyle={styles.modalScroll}>
-            <View style={styles.avatarUploadContainer}>
-              <TouchableOpacity onPress={pickImage} disabled={isLinked || saving} style={styles.avatarPicker}>
-                <Image
-                  source={{ uri: editAvatarUrl || 'https://api.dicebear.com/7.x/adventurer/png?seed=avatar' }}
-                  style={[styles.largeAvatar, isLinked && { opacity: 0.7 }]}
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void refresh(true)}
+            tintColor="#6840b2"
+          />
+        }
+      >
+        {snapshot ? (
+          <>
+            <Surface mode="flat" style={styles.focusSummary}>
+              <Image
+                source={{ uri: getAvatarUri(snapshot.focus) }}
+                style={styles.focusAvatar}
+              />
+              <View style={styles.focusInfo}>
+                <Text style={styles.focusEyebrow}>Explorando desde</Text>
+                <Text style={styles.focusName} numberOfLines={2}>
+                  {snapshot.focus.name}
+                </Text>
+                <Text style={styles.focusMeta}>
+                  {getBirthLabel(snapshot.focus)}
+                  {'  ·  '}
+                  {snapshot.focus.mentions}{' '}
+                  {snapshot.focus.mentions === 1
+                    ? 'recuerdo'
+                    : 'recuerdos'}
+                </Text>
+                {connectionLabel ? (
+                  <Text style={styles.connectionLabel}>
+                    {connectionLabel}
+                  </Text>
+                ) : null}
+              </View>
+              <View style={styles.focusActions}>
+                <IconButton
+                  icon="pencil-outline"
+                  mode="contained-tonal"
+                  iconColor="#6037a7"
+                  containerColor="#eee6ff"
+                  onPress={() =>
+                    setEditorState({ personId: snapshot.focus.id })
+                  }
+                  accessibilityLabel="Editar persona"
                 />
-                {!isLinked && (
-                  <View style={styles.cameraIconBadge}>
-                    <IconButton icon="camera" size={16} iconColor="#ffffff" />
-                  </View>
-                )}
-              </TouchableOpacity>
-              {isLinked && (
-                <Text style={styles.linkedText}>Sincronizado con el usuario remoto</Text>
-              )}
-            </View>
+                <IconButton
+                  icon="book-open-variant"
+                  mode="contained-tonal"
+                  iconColor="#6037a7"
+                  containerColor="#eee6ff"
+                  onPress={() =>
+                    navigation.navigate('EntityMemories', {
+                      entityId: snapshot.focus.id,
+                    })
+                  }
+                  accessibilityLabel="Ver recuerdos"
+                />
+              </View>
+              <Button
+                mode="contained"
+                icon="link-variant-plus"
+                textColor="#ffffff"
+                onPress={() => showManager()}
+                style={styles.manageButton}
+                contentStyle={styles.manageButtonContent}
+              >
+                Gestionar vínculos
+              </Button>
+            </Surface>
 
-            <TextInput
-              label="Nombre Completo"
-              value={editName}
-              onChangeText={setEditName}
-              style={styles.input}
-              mode="outlined"
-              activeOutlineColor="#6200ee"
-              disabled={isLinked || saving}
+            <RelationshipBoard
+              snapshot={snapshot}
+              onFocusPerson={focusPerson}
+              onAddRelation={showManager}
             />
-
-            <TextInput
-              label="Apodos (Separar por comas)"
-              value={editNickname}
-              onChangeText={setEditNickname}
-              style={styles.input}
-              mode="outlined"
-              activeOutlineColor="#6200ee"
-              disabled={saving}
-              placeholder="Ej: Beto, Rober, Robertito"
-            />
-
-            <TextInput
-              label="Año de Nacimiento (AAAA)"
-              value={editBirthDate}
-              onChangeText={(text) => {
-                setEditBirthDate(text);
-                if (text) setEditDecade('');
-              }}
-              style={styles.input}
-              mode="outlined"
-              activeOutlineColor="#6200ee"
-              disabled={saving}
-              placeholder="Ej: 1995"
-              keyboardType="numeric"
-              maxLength={4}
-            />
-
-            <Text style={styles.inputLabel}>O elegir década aproximada:</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.chipScroll}
-              onScroll={handleDecadeScroll}
-              scrollEventThrottle={16}
-            >
-              {isLoadingDecades && (
-                <View style={{ justifyContent: 'center', paddingHorizontal: 8 }}>
-                  <Text style={{ fontSize: 11, color: '#6c757d', fontStyle: 'italic' }}>Cargando...</Text>
-                </View>
-              )}
-              {decadesList.map((dec) => {
-                const isSelected = editDecade === dec;
-                return (
-                  <Chip
-                    key={dec}
-                    selected={isSelected}
-                    onPress={() => {
-                      setEditDecade(isSelected ? '' : dec);
-                      setEditBirthDate('');
-                    }}
-                    style={[styles.decadeChip, isSelected && styles.decadeChipSelected]}
-                    textStyle={[styles.decadeChipText, isSelected && styles.decadeChipTextSelected]}
-                  >
-                    {dec}
-                  </Chip>
-                );
-              })}
-            </ScrollView>
-            <View style={styles.dropdownWrap}>
-              <SmartDropdown
-                label="Parentesco o Relación"
-                value={editRelationship}
-                items={RELATIONSHIP_ITEMS}
-                onSelect={(item) => {
-                  if (item) setEditRelationship(item.name);
-                }}
-                onCreateNew={(name) => setEditRelationship(name)}
-                placeholder="Selecciona relación"
-                enablePlaces={false}
+          </>
+        ) : (
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIconCircle}>
+              <IconButton
+                icon="family-tree"
+                size={40}
+                iconColor="#6840b2"
+                style={styles.emptyIcon}
               />
             </View>
-
-
-
-            <Divider style={styles.divider} />
-            <Text style={styles.sectionHeader}>🔗 Vinculación con Mnemósine</Text>
-            <Text style={styles.hintText}>
-              Si esta persona usa la app, coloca su nombre de usuario para vincular su cuenta.
+            <Text style={styles.emptyTitle}>
+              Tu árbol relacional empieza aquí
             </Text>
-
-            <TextInput
-              label="Nombre de Usuario de la App (@)"
-              value={editUsername}
-              onChangeText={setEditUsername}
-              style={styles.input}
-              mode="outlined"
-              activeOutlineColor="#6200ee"
-              autoCapitalize="none"
-              disabled={isLinked || saving}
-              placeholder="Ej: sofiagomez"
-            />
-
-            {isLinked && selectedPerson && (
-              <Button
-                mode="outlined"
-                onPress={() => handleUnlink(selectedPerson.id)}
-                style={{ borderColor: '#d32f2f', marginBottom: 12, borderRadius: 8 }}
-                color="#d32f2f"
-                disabled={saving}
-              >
-                Desvincular de la App
-              </Button>
-            )}
-
+            <Text style={styles.emptyDescription}>
+              Añade la primera persona y luego conecta progenitores, parejas y
+              descendientes de forma ordenada.
+            </Text>
             <Button
               mode="contained"
-              onPress={handleSave}
-              style={styles.saveBtn}
-              color="#6200ee"
-              loading={saving}
-              disabled={saving}
+              icon="account-plus-outline"
+              textColor="#ffffff"
+              onPress={() => openCreateEditor()}
+              style={styles.emptyButton}
             >
-              Guardar Cambios
+              Añadir primera persona
             </Button>
+          </View>
+        )}
+      </ScrollView>
+
+      {snapshot ? (
+        <FAB
+          icon="account-plus-outline"
+          label="Persona"
+          color="#ffffff"
+          style={styles.fab}
+          onPress={() => openCreateEditor()}
+        />
+      ) : null}
+
+      <DirectoryModal
+        visible={directoryVisible}
+        people={filteredDirectory}
+        focusedId={focusedId}
+        query={directoryQuery}
+        onQueryChange={setDirectoryQuery}
+        onDismiss={() => setDirectoryVisible(false)}
+        onSelect={focusPerson}
+        onCreate={() => {
+          setDirectoryVisible(false);
+          openCreateEditor();
+        }}
+      />
+
+      <RelationshipManagerModal
+        visible={managerVisible}
+        snapshot={snapshot}
+        people={people}
+        initialKind={managerKind}
+        busy={relationshipBusy}
+        onDismiss={() => setManagerVisible(false)}
+        onLink={handleLinkExisting}
+        onCreate={handleCreateFromManager}
+        onRemove={handleRemoveRelationship}
+      />
+
+      <PersonEditorModal
+        visible={Boolean(editorState)}
+        person={editorPerson}
+        suggestedRelationship={editorState?.suggestedRelationship}
+        saving={saving}
+        isCurrentUser={Boolean(editorPerson && editorPerson.id === myId)}
+        onDismiss={() => setEditorState(null)}
+        onSave={handleSavePerson}
+        onDelete={editorPerson ? handleDeletePerson : undefined}
+        onUnlink={editorPerson ? handleUnlinkAccount : undefined}
+      />
+
+      {loading && people.length === 0 ? (
+        <View pointerEvents="none" style={styles.loadingOverlay}>
+          <Text style={styles.loadingText}>Organizando relaciones…</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+interface DirectoryModalProps {
+  visible: boolean;
+  people: PersonRecord[];
+  focusedId: string | null;
+  query: string;
+  onQueryChange: (value: string) => void;
+  onDismiss: () => void;
+  onSelect: (personId: string) => void;
+  onCreate: () => void;
+}
+
+function DirectoryModal({
+  visible,
+  people,
+  focusedId,
+  query,
+  onQueryChange,
+  onDismiss,
+  onSelect,
+  onCreate,
+}: DirectoryModalProps) {
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onDismiss}
+    >
+      <SafeAreaView style={styles.directorySafeArea}>
+        <Appbar.Header style={styles.directoryHeader}>
+          <Appbar.Action icon="close" onPress={onDismiss} />
+          <Appbar.Content
+            title="Directorio"
+            subtitle="Elige una persona para centrar sus relaciones"
+            titleStyle={styles.headerTitle}
+          />
+          <Appbar.Action icon="account-plus-outline" onPress={onCreate} />
+        </Appbar.Header>
+        <View style={styles.directoryContent}>
+          <Searchbar
+            placeholder="Buscar por nombre, apodo o relación"
+            value={query}
+            onChangeText={onQueryChange}
+            style={styles.directorySearch}
+          />
+          <ScrollView
+            contentContainerStyle={styles.directoryList}
+            keyboardShouldPersistTaps="handled"
+          >
+            {people.map((person) => {
+              const metadata = parsePersonMetadata(person.metadata);
+              const subtitle =
+                (typeof metadata.nickname === 'string' &&
+                  metadata.nickname) ||
+                (typeof metadata.relationship === 'string' &&
+                  metadata.relationship) ||
+                getBirthLabel(person);
+
+              return (
+                <Surface
+                  key={person.id}
+                  mode="flat"
+                  style={[
+                    styles.directoryPerson,
+                    person.id === focusedId &&
+                      styles.directoryPersonFocused,
+                  ]}
+                >
+                  <TouchableRipple
+                    onPress={() => onSelect(person.id)}
+                    accessibilityRole="button"
+                  >
+                    <View style={styles.directoryRow}>
+                      <Image
+                        source={{ uri: getAvatarUri(person) }}
+                        style={styles.directoryAvatar}
+                      />
+                      <View style={styles.directoryText}>
+                        <Text style={styles.directoryName}>
+                          {person.name}
+                        </Text>
+                        <Text style={styles.directorySubtitle}>
+                          {subtitle}
+                        </Text>
+                      </View>
+                      {person.id === focusedId ? (
+                        <IconButton
+                          icon="target"
+                          iconColor="#6840b2"
+                          size={20}
+                        />
+                      ) : (
+                        <IconButton
+                          icon="chevron-right"
+                          iconColor="#746d79"
+                          size={20}
+                        />
+                      )}
+                    </View>
+                  </TouchableRipple>
+                </Surface>
+              );
+            })}
+            {people.length === 0 ? (
+              <Text style={styles.directoryEmpty}>
+                No hay personas que coincidan con la búsqueda.
+              </Text>
+            ) : null}
           </ScrollView>
         </View>
-      </Modal>
-    </Portal>
-  </View>
-  </GestureHandlerRootView>
-);
+      </SafeAreaView>
+    </Modal>
+  );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f6f7fb',
+    backgroundColor: '#f6f2f8',
   },
   appbar: {
     backgroundColor: '#ffffff',
-    elevation: 0,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f3f5',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e7e0e9',
   },
   headerTitle: {
-    fontWeight: 'bold',
-    fontSize: 18,
-    color: '#212529',
+    color: '#2c2730',
+    fontWeight: '800',
   },
-  canvasContainer: {
+  scroll: {
     flex: 1,
-    overflow: 'hidden',
-    position: 'relative',
   },
-  mapCanvas: {
-    width: CANVAS_WIDTH,
-    height: CANVAS_HEIGHT,
-    position: 'relative',
-    backgroundColor: '#fcfdff',
-  },
-  gridOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    opacity: 0.05,
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#212529',
-    borderStyle: 'dashed',
-  },
-  connectorLine: {
-    position: 'absolute',
-    backgroundColor: '#7b1fa2',
-    opacity: 0.35,
-  },
-  dashedConnector: {
-    borderStyle: 'dashed',
-    borderColor: '#7b1fa2',
-    borderWidth: 1,
-    backgroundColor: 'transparent',
-  },
-  nodeWrapper: {
-    position: 'absolute',
-    width: 75,
-    alignItems: 'center',
-  },
-  nodeBubble: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    borderWidth: 3,
-    borderColor: '#ffffff',
-    backgroundColor: '#ffffff',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 3.84,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  yoBubble: {
-    borderColor: '#6200ee',
-    borderWidth: 3,
-  },
-  focusedBubble: {
-    borderColor: '#6200ee',
-    borderWidth: 4,
-    elevation: 8,
-    shadowColor: '#6200ee',
-    shadowOpacity: 0.4,
-    shadowRadius: 5.46,
-  },
-  floatingBubble: {
-    borderColor: '#ff4081',
-    borderWidth: 2.5,
-  },
-  plusBubble: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    borderWidth: 2,
-    borderColor: '#7b1fa2',
-    borderStyle: 'dashed',
-    backgroundColor: '#f3e5f5',
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 1,
-  },
-  smallPlusBubble: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#7b1fa2',
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 2,
-  },
-  zoomControls: {
-    position: 'absolute',
-    right: 16,
-    bottom: 180,
-    flexDirection: 'column',
-  },
-  zoomBtn: {
-    marginVertical: 4,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 3.84,
-  },
-  nodeAvatar: {
+  scrollContent: {
+    flexGrow: 1,
     width: '100%',
-    height: '100%',
-    borderRadius: 35,
+    maxWidth: 980,
+    alignSelf: 'center',
+    paddingTop: 16,
   },
-  meBadge: {
-    position: 'absolute',
-    bottom: 0,
-    backgroundColor: '#6200ee',
-    paddingHorizontal: 8,
-    paddingVertical: 1,
-    borderRadius: 10,
-  },
-  meBadgeText: {
-    fontSize: 9,
-    color: '#ffffff',
-    fontWeight: 'bold',
-  },
-  nodeName: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: '#212529',
-    textAlign: 'center',
-  },
-  nodeSubtitle: {
-    fontSize: 9,
-    color: '#6c757d',
-    textAlign: 'center',
-  },
-  textContainer: {
-    alignItems: 'center',
-    marginTop: 6,
-    width: 100,
-  },
-  floatingYoBadge: {
-    position: 'absolute',
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    elevation: 10,
-    shadowColor: '#6200ee',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4.65,
-    backgroundColor: '#ffffff',
-    borderWidth: 2,
-    borderColor: '#6200ee',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 999,
-  },
-  floatingYoBadgeButton: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  floatingYoBadgeAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-  },
-  floatingYoBadgeIndicator: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    backgroundColor: '#6200ee',
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  // Floating bottom control panel
-  controlPanel: {
-    position: 'absolute',
-    bottom: 16,
-    left: 16,
-    right: 16,
-    borderRadius: 16,
-    backgroundColor: '#ffffff',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4.65,
-  },
-  panelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-  },
-  panelAvatar: {
-    width: 48,
-    height: 48,
+  focusSummary: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 16,
     borderRadius: 24,
-    marginRight: 12,
-  },
-  panelTextWrap: {
-    flex: 1,
-  },
-  panelTitle: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#212529',
-  },
-  panelSubtitle: {
-    fontSize: 12,
-    color: '#6c757d',
-  },
-  panelActions: {
+    borderWidth: 1,
+    borderColor: '#dfd5e6',
+    backgroundColor: '#ffffff',
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
   },
-  actionBtn: {
-    borderRadius: 10,
+  focusAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#ece6ef',
+  },
+  focusInfo: {
+    flex: 1,
+    minWidth: 150,
+    paddingHorizontal: 14,
+  },
+  focusEyebrow: {
+    color: '#7650ad',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  focusName: {
+    marginTop: 2,
+    color: '#2b2630',
+    fontSize: 20,
+    fontWeight: '800',
+    lineHeight: 24,
+  },
+  focusMeta: {
+    marginTop: 4,
+    color: '#716a76',
+    fontSize: 12,
+  },
+  connectionLabel: {
+    marginTop: 4,
+    color: '#4f7d4a',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  focusActions: {
+    flexDirection: 'row',
+  },
+  manageButton: {
+    width: '100%',
+    marginTop: 14,
+    borderRadius: 13,
+    backgroundColor: '#6740b2',
+  },
+  manageButtonContent: {
+    minHeight: 46,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 34,
+    paddingBottom: 60,
+  },
+  emptyIconCircle: {
+    width: 92,
+    height: 92,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 46,
+    backgroundColor: '#ebe1f7',
+  },
+  emptyIcon: {
+    margin: 0,
+  },
+  emptyTitle: {
+    marginTop: 22,
+    color: '#2d2831',
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  emptyDescription: {
+    maxWidth: 420,
+    marginTop: 9,
+    color: '#706976',
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
+  },
+  emptyButton: {
+    marginTop: 22,
+    borderRadius: 13,
+    backgroundColor: '#6740b2',
   },
   fab: {
     position: 'absolute',
-    margin: 16,
-    right: 0,
-    bottom: 90, // Positioned above the bottom card panel
-    backgroundColor: '#6200ee',
-    borderRadius: 28,
+    right: 18,
+    bottom: 18,
+    backgroundColor: '#6740b2',
   },
-  // Sidebar contacts list styles
-  sidebarContent: {
-    backgroundColor: '#ffffff',
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: '80%',
-    maxWidth: 320,
-    height: '100%',
-    elevation: 16,
-  },
-  sidebarHeader: {
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f3f5',
-    elevation: 0,
-  },
-  sidebarTitle: {
-    fontWeight: 'bold',
-  },
-  sidebarSearch: {
-    margin: 12,
-    backgroundColor: '#ffffff',
-  },
-  sidebarList: {
-    paddingBottom: 24,
-  },
-  sidebarItem: {
-    flexDirection: 'row',
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f8f9fa',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(250, 248, 252, 0.86)',
   },
-  sidebarItemFocused: {
-    backgroundColor: '#f3e5f5',
-  },
-  sidebarAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 12,
-  },
-  sidebarItemText: {
-    flex: 1,
-  },
-  sidebarItemName: {
+  loadingText: {
+    color: '#6740b2',
     fontSize: 14,
-    fontWeight: 'bold',
-    color: '#212529',
+    fontWeight: '700',
   },
-  sidebarItemRel: {
-    fontSize: 11,
-    color: '#6c757d',
-  },
-  // Modal layout
-  modalOverlay: {
+  directorySafeArea: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
+    backgroundColor: '#f8f5fa',
   },
-  modalContent: {
+  directoryHeader: {
     backgroundColor: '#ffffff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    height: '92%',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e7e0e9',
   },
-  modalHeader: {
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f3f5',
-    elevation: 0,
+  directoryContent: {
+    flex: 1,
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+    padding: 16,
   },
-  modalTitle: {
-    fontWeight: 'bold',
-  },
-  modalScroll: {
-    padding: 20,
-  },
-  avatarUploadContainer: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  avatarPicker: {
-    position: 'relative',
-  },
-  largeAvatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#f1f3f9',
-    borderWidth: 2,
-    borderColor: '#e9ecef',
-  },
-  cameraIconBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: '#6200ee',
-    width: 32,
-    height: 32,
+  directorySearch: {
+    marginBottom: 14,
     borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  linkedText: {
-    fontSize: 12,
-    color: '#868e96',
-    marginTop: 8,
-  },
-  input: {
-    marginBottom: 16,
     backgroundColor: '#ffffff',
   },
-  dropdownWrap: {
-    marginBottom: 16,
+  directoryList: {
+    paddingBottom: 36,
   },
-  divider: {
-    marginVertical: 16,
-  },
-  sectionHeader: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#212529',
-    marginBottom: 12,
-  },
-  hintText: {
-    fontSize: 12,
-    color: '#6c757d',
-    lineHeight: 18,
-    marginBottom: 16,
-  },
-  saveBtn: {
-    marginTop: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    marginBottom: 40,
-  },
-  inputLabel: {
-    fontSize: 12,
-    color: '#6c757d',
+  directoryPerson: {
     marginBottom: 8,
-  },
-  chipScroll: {
-    flexDirection: 'row',
-    marginBottom: 16,
-  },
-  decadeChip: {
-    marginRight: 8,
-    backgroundColor: '#f1f3f9',
-    height: 32,
     borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e7e0ea',
+    backgroundColor: '#ffffff',
+    overflow: 'hidden',
+  },
+  directoryPersonFocused: {
+    borderColor: '#9271c5',
+    backgroundColor: '#faf7ff',
+  },
+  directoryRow: {
+    minHeight: 72,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingLeft: 12,
+    paddingRight: 2,
   },
-  decadeChipSelected: {
-    backgroundColor: '#e8def8',
+  directoryAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#ece6ef',
   },
-  decadeChipText: {
+  directoryText: {
+    flex: 1,
+    paddingHorizontal: 12,
+  },
+  directoryName: {
+    color: '#302b34',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  directorySubtitle: {
+    marginTop: 3,
+    color: '#766f7a',
     fontSize: 12,
-    color: '#49454f',
   },
-  decadeChipTextSelected: {
-    color: '#1d192b',
-    fontWeight: 'bold',
+  directoryEmpty: {
+    paddingVertical: 40,
+    color: '#736c78',
+    fontSize: 14,
+    textAlign: 'center',
   },
 });
-
-const ZoomCompensatedText = ({ scale, name, subtitle, isZoomedOut }: { scale: any, name: string, subtitle: string, isZoomedOut: boolean }) => {
-  const animatedTextStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ scale: 1 / scale.value }],
-    };
-  });
-
-  const displayName = isZoomedOut ? name.split(' ')[0] : name;
-
-  return (
-    <Animated.View style={[styles.textContainer, animatedTextStyle]}>
-      <RNText style={styles.nodeName} numberOfLines={1}>{displayName}</RNText>
-      <RNText style={styles.nodeSubtitle}>{subtitle}</RNText>
-    </Animated.View>
-  );
-};
-
-const ZoomCompensatedLabel = ({ scale, label }: { scale: any, label: string }) => {
-  const animatedTextStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ scale: 1 / scale.value }],
-    };
-  });
-  return (
-    <Animated.View style={[styles.textContainer, animatedTextStyle]}>
-      <RNText style={styles.nodeName}>{label}</RNText>
-    </Animated.View>
-  );
-};

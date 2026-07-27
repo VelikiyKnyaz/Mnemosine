@@ -41,7 +41,7 @@ function MainTabs() {
   const isAdmin = session?.user?.role === 'admin';
 
   return (
-    <Tab.Navigator>
+    <Tab.Navigator screenOptions={{ headerShown: false }}>
       <Tab.Screen name="Timeline" component={TimelineScreen} options={{ title: 'Línea de Tiempo' }} />
       <Tab.Screen name="Atlas" component={AtlasScreen} options={{ title: 'Atlas' }} />
       <Tab.Screen name="FamilyTree" component={FamilyTreeScreen} options={{ title: 'Red Social' }} />

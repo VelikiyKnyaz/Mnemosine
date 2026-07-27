@@ -20,7 +20,8 @@
         {
           "microphonePermission": "Permite que Mnemósine use el micrófono para grabar recuerdos."
         }
-      ]
+      ],
+      "expo-font"
     ]
   }
 }
