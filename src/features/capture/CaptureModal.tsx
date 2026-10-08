@@ -15,7 +15,7 @@ interface CaptureModalProps {
 
 export default function CaptureModal({ visible, onDismiss, initialQuestion }: CaptureModalProps) {
   const [text, setText] = useState('');
-  const { isRecording, recordUri, startRecording, stopRecording, cancelRecording, setRecordUri } = useAudioRecorder();
+  const { isRecording, isBusy, recordUri, recordingError, startRecording, stopRecording, cancelRecording, setRecordUri } = useAudioRecorder();
   const inputRef = useRef<RNTextInput>(null);
 
   // Force keyboard open when modal becomes visible
@@ -27,7 +27,7 @@ export default function CaptureModal({ visible, onDismiss, initialQuestion }: Ca
   }, [visible]);
 
   const handleSave = async () => {
-    if (!text.trim() && !recordUri) return;
+    if (isBusy || (!text.trim() && !recordUri)) return;
 
     try {
       const db = await getDb();
@@ -51,8 +51,8 @@ export default function CaptureModal({ visible, onDismiss, initialQuestion }: Ca
     }
   };
 
-  const handleClose = () => {
-    cancelRecording();
+  const handleClose = async () => {
+    await cancelRecording();
     setText('');
     setRecordUri(null);
     onDismiss();
@@ -90,6 +90,9 @@ export default function CaptureModal({ visible, onDismiss, initialQuestion }: Ca
           </View>
         )}
 
+        {recordingError && <Text style={styles.recordingError}>{recordingError}</Text>}
+        {!recordUri && <Text>Mantén pulsado el micrófono para grabar.</Text>}
+
         <View style={styles.footer}>
           {!recordUri && (
             <TouchableOpacity 
@@ -97,12 +100,12 @@ export default function CaptureModal({ visible, onDismiss, initialQuestion }: Ca
               onPressOut={stopRecording}
               style={[styles.micButton, isRecording && styles.micRecording]}
             >
-              <IconButton icon="microphone" iconColor={isRecording ? '#fff' : '#000'} size={32} />
+              <IconButton pointerEvents="none" icon="microphone" iconColor={isRecording ? '#fff' : '#000'} size={32} />
               {isRecording && <Text style={{color: 'white'}}>Grabando...</Text>}
             </TouchableOpacity>
           )}
 
-          <Button mode="contained" onPress={handleSave} disabled={(!text.trim() && !recordUri) || isRecording}>
+          <Button mode="contained" onPress={handleSave} disabled={(!text.trim() && !recordUri) || isBusy}>
             Guardar
           </Button>
         </View>
@@ -146,6 +149,10 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 8,
     marginVertical: 10,
+  },
+  recordingError: {
+    color: '#b00020',
+    marginBottom: 10,
   },
   footer: {
     flexDirection: 'row',

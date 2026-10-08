@@ -28,7 +28,7 @@ export default function SmartDropdown({
   const [query, setQuery] = useState(value || '');
   const [placeResults, setPlaceResults] = useState<PlaceSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const filtered = useMemo(() => {
     if (!query.trim()) {

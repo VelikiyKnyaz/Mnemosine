@@ -399,7 +399,7 @@ const styles = StyleSheet.create({
   empty: { padding: 20, alignItems: 'center' },
   
   resolveOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center', alignItems: 'center', zIndex: 10,
   },

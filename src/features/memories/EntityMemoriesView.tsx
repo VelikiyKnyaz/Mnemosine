@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, SectionList, KeyboardAvoidingView, Platform, Modal, Alert, TouchableOpacity } from 'react-native';
 import { Text, Card, TextInput, Button, IconButton } from 'react-native-paper';
 import { getDb } from '../../core/database';
-import { Audio } from 'expo-av';
+import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import MemoryEditModal from '../../components/MemoryEditModal';
 import { useAuthStore } from '../../core/store';
 
@@ -82,7 +82,10 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
   const [sections, setSections] = useState<any[]>([]);
   
   // Audio playback state
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const player = useAudioPlayer(null);
+  const playbackStatus = useAudioPlayerStatus(player);
+  const playbackRequest = useRef(0);
+  const activeMemoryId = useRef<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
 
   // Edit state
@@ -153,30 +156,51 @@ export default function EntityMemoriesView({ entityId, onRootNameLoaded, style }
 
   useEffect(() => {
     loadMemories();
+    player.pause();
+    activeMemoryId.current = null;
+    setPlayingId(null);
     return () => {
-      if (sound) sound.unloadAsync();
+      // Invalida cualquier inicio pendiente. Expo libera el player al desmontar.
+      playbackRequest.current += 1;
     };
-  }, [entityId]);
+  }, [entityId, player]);
+
+  useEffect(() => {
+    if (playbackStatus.didJustFinish || playbackStatus.error) {
+      activeMemoryId.current = null;
+      setPlayingId(null);
+    }
+    if (playbackStatus.error) {
+      Alert.alert('Audio no disponible', 'No se pudo reproducir el audio de este recuerdo.');
+    }
+  }, [playbackStatus.didJustFinish, playbackStatus.error]);
 
   const playAudio = async (uri: string, memoryId: string) => {
+    const request = ++playbackRequest.current;
+    player.pause();
+    if (activeMemoryId.current === memoryId) {
+      activeMemoryId.current = null;
+      setPlayingId(null);
+      return;
+    }
+    activeMemoryId.current = memoryId;
+    setPlayingId(memoryId);
     try {
-      if (sound) {
-        await sound.unloadAsync();
-        setSound(null);
-        setPlayingId(null);
-        if (playingId === memoryId) return; // Toggle off
-      }
-      const { sound: newSound } = await Audio.Sound.createAsync({ uri });
-      setSound(newSound);
-      setPlayingId(memoryId);
-      await newSound.playAsync();
-      newSound.setOnPlaybackStatusUpdate((status: any) => {
-        if (status.didJustFinish) {
-          setPlayingId(null);
-        }
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        interruptionMode: 'doNotMix',
+        shouldPlayInBackground: false,
       });
+      if (request !== playbackRequest.current) return;
+      player.replace({ uri });
+      player.play();
     } catch (e) {
-      console.error("Error playing audio", e);
+      if (request !== playbackRequest.current) return;
+      activeMemoryId.current = null;
+      setPlayingId(null);
+      console.error('Error playing audio', e);
+      Alert.alert('Audio no disponible', 'No se pudo reproducir el audio de este recuerdo.');
     }
   };
 

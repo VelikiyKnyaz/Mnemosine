@@ -2,7 +2,7 @@
 
 Prototipo móvil para capturar recuerdos en texto o audio y organizarlos por
 tiempo, lugares, personas y relaciones. El proyecto usa React Native con Expo
-SDK 54, SQLite local y Supabase para las funciones de cuenta y conexión social.
+SDK 57, SQLite local y Supabase para las funciones de cuenta y conexión social.
 
 El norte de producto y diseño está definido en el Documento Maestro v0.1.
 Consulta las [notas de documentación](docs/README.md) para acceder al original.
@@ -25,13 +25,33 @@ por cuenta y controles de privacidad por recuerdo.
 
 ## Ejecutar localmente
 
-Requisitos: Node.js y una versión reciente de Expo Go compatible con SDK 54.
+Requisitos: Node.js 22 LTS (22.13 o posterior) y Expo Go compatible con SDK 57.
 
 ```bash
 npm install
 npm run typecheck
 npm start
 ```
+
+### Abrir en un iPhone físico
+
+1. Conecta el computador y el iPhone a la misma red Wi-Fi.
+2. Desde la carpeta `app`, ejecuta `npm start -- --clear`.
+3. Escanea el QR de la terminal con la cámara del iPhone y abre el enlace en Expo Go.
+4. Acepta el permiso de red local de Expo Go y el de micrófono al grabar.
+
+Expo Go y el proyecto deben usar el mismo SDK. Si Snack conserva una copia
+antigua, vuelve a importar `app` desde el repositorio y selecciona SDK 57 en
+el editor, si está disponible. Cambiar solo el selector de Snack no migra el código
+ni sus dependencias. Si aún no ofrece SDK 57, usa el servidor local anterior.
+
+Si la red bloquea la conexión local, prueba `npm start -- --tunnel` y sigue la
+instalación del soporte de túnel que solicite Expo. `npm run ios` abre el simulador
+en macOS; no es el comando para abrir un iPhone desde Windows.
+
+La grabación y reproducción utilizan `expo-audio`, incluido en Expo Go SDK 57.
+Los nuevos audios se guardan en el directorio de documentos de la aplicación,
+no en una caché que iOS pueda limpiar.
 
 También están disponibles:
 

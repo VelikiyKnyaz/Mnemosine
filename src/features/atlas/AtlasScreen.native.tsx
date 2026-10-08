@@ -64,8 +64,8 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [autoTopResult, setAutoTopResult] = useState<any | null>(null);
   const [loadingAutoTop, setLoadingAutoTop] = useState(false);
   const [addressQuery, setAddressQuery] = useState('');
-  const searchDebounce = useRef<NodeJS.Timeout | null>(null);
-  const addressDebounce = useRef<NodeJS.Timeout | null>(null);
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const addressDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isFocused = useIsFocused();
   const mapRef = useRef<MapView>(null);
@@ -1837,10 +1837,10 @@ export default function AtlasScreen({ route, navigation }: any) {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   mapContainer: { flex: 1, position: 'relative' },
-  map: { ...StyleSheet.absoluteFillObject },
+  map: { ...StyleSheet.absoluteFill },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   staticPinContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'center',
     alignItems: 'center',
   },
