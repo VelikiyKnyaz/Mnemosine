@@ -104,15 +104,21 @@ export default function DebugScreen() {
       {/* ── SECCIÓN: CONFIGURACIÓN DE CLAVES ── */}
       <Card style={styles.configCard}>
         <Card.Content>
-          <Title style={{fontSize: 16}}>🔑 Configuración de Claves</Title>
+          <Title style={{fontSize: 16}}>🔑 Configuración heredada del prototipo</Title>
+          <Text style={styles.configHint}>
+            Este panel no es una bóveda de secretos. OpenAI y Google Places/Geocoding todavía se llaman desde el dispositivo y deben migrar a un backend. El acceso con 66 es solo para diagnóstico local, no una autorización del servidor.
+          </Text>
           
           {(isEnvOpenai || isEnvGoogleMaps || isEnvSupabaseUrl || isEnvSupabaseKey) && (
             <View style={styles.envActiveBanner}>
               <Text style={styles.envActiveBannerText}>
-                🎉 Variables de entorno de Expo detectadas. Las claves marcadas con [Entorno] se cargan automáticamente desde la consola de Expo.
+                Variables de Expo detectadas. Los valores [Entorno] tienen prioridad y se incluyen en la app: no son privados aunque el archivo .env no esté en Git.
               </Text>
             </View>
           )}
+          <Text style={styles.configHint}>
+            La conexión activa de Supabase se inicializa desde el entorno de Expo o la configuración de respaldo. Estos campos heredados no cambian ese cliente: configura .env y recarga la app.
+          </Text>
 
           {configSaved ? (
             <View>
@@ -252,7 +258,7 @@ const styles = StyleSheet.create({
   },
   configHint: {
     fontSize: 12,
-    color: '#666',
+    color: '#8a3b00',
     marginBottom: 10,
     fontStyle: 'italic',
   },

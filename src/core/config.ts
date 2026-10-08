@@ -1,5 +1,5 @@
-// Configuración de claves en runtime. Se guardan en AsyncStorage del dispositivo o se obtienen de variables de entorno de Expo.
-// Nunca se suben a Git ni se hardcodean en el código.
+// Configuración heredada del prototipo: AsyncStorage y EXPO_PUBLIC_ son accesibles en el cliente.
+// Ignorar .env en Git no protege el bundle. OpenAI y Google REST deben migrar a un backend autenticado.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEYS = {

@@ -1,0 +1,43 @@
+name: Comprobaciones de la app
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: '1'
+      # Bundling must not load local credentials or require any API account.
+      EXPO_NO_DOTENV: '1'
+      EXPO_NO_CLIENT_ENV_VARS: '1'
+    steps:
+      - name: Obtener el repositorio
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Preparar Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Instalar dependencias bloqueadas
+        run: npm ci --no-audit --no-fund
+      - name: Comprobar tipos
+        run: npm run typecheck
+      - name: Ejecutar pruebas unitarias
+        run: node --test tests/*.test.cjs
+      - name: Generar bundles de iOS, Android y web
+        run: npx expo export --platform all
+      # No deployment or artifact upload: exported client files remain in this job.

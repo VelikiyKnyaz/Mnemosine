@@ -2,6 +2,7 @@
   "expo": {
     "name": "Mnemosine",
     "slug": "mnemosine-prototype",
+    "scheme": "mnemosine",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -22,7 +23,8 @@
         }
       ],
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      "expo-dev-client"
     ]
   }
 }

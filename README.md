@@ -29,21 +29,22 @@ Requisitos: Node.js 22 LTS (22.13 o posterior) y Expo Go compatible con SDK 57.
 
 ```bash
 npm install
+npm run check:env
 npm run typecheck
-npm start
+npm test
+npm run start:go:clear
 ```
 
 ### Abrir en un iPhone físico
 
 1. Conecta el computador y el iPhone a la misma red Wi-Fi.
-2. Desde la carpeta `app`, ejecuta `npm start -- --clear`.
+2. Desde la carpeta `app`, ejecuta `npm run start:go:clear`.
 3. Escanea el QR de la terminal con la cámara del iPhone y abre el enlace en Expo Go.
 4. Acepta el permiso de red local de Expo Go y el de micrófono al grabar.
 
-Expo Go y el proyecto deben usar el mismo SDK. Si Snack conserva una copia
-antigua, vuelve a importar `app` desde el repositorio y selecciona SDK 57 en
-el editor, si está disponible. Cambiar solo el selector de Snack no migra el código
-ni sus dependencias. Si aún no ofrece SDK 57, usa el servidor local anterior.
+Expo Go y el proyecto deben usar el mismo SDK. En este flujo no hace falta
+importar el repositorio en Snack: Expo sirve directamente los archivos de tu
+computador. Mantén la terminal abierta mientras pruebas.
 
 Si la red bloquea la conexión local, prueba `npm start -- --tunnel` y sigue la
 instalación del soporte de túnel que solicite Expo. `npm run ios` abre el simulador
@@ -63,28 +64,115 @@ npm run web
 
 El punto de entrada es `index.ts` y registra la raíz mediante Expo, por lo que el
 proyecto puede ejecutarse tanto descargado desde Snack como desde el CLI local.
-La vista web de Snack usa una base efímera sin persistencia; SQLite y el Atlas
+La vista web usa una base efímera sin persistencia; SQLite y el Atlas
 completo se habilitan al abrir el proyecto en Expo Go para Android o iOS.
 
-## Configuración
+## Ciclo de desarrollo
 
-Copia `.env.example` como `.env` y completa las variables necesarias:
+Guarda los cambios de código y Fast Refresh los actualizará en el teléfono.
+No necesitas hacer commit, push ni volver a importar el proyecto para cada
+prueba. Los cambios de variables de entorno requieren una recarga completa
+de la app; si hay una caché problemática, reinicia con `start:go:clear`.
+
+`npm start` sigue abriendo Expo Go aunque `expo-dev-client` esté instalado.
+`npm run start:dev` y `npm run start:dev:clear` están reservados para cuando
+hayamos instalado una development build propia.
+
+### Development build preparada, todavía no instalada
+
+`eas.json` incluye los perfiles `development` (cliente de desarrollo),
+`development-simulator` (simulador iOS) y `preview` (distribución interna).
+No se ha creado un proyecto EAS, configurado identificadores definitivos,
+firmado una app ni iniciado builds en la nube.
+
+Desde Windows, la ruta EAS para instalar esa build en un iPhone requiere
+una cuenta Expo y membresía Apple Developer. Mientras tanto, usa Expo Go
+sin pagar esa membresía. Si más adelante dispones de un Mac con Xcode,
+existe también la alternativa de compilar localmente para tu iPhone.
+Cambiar módulos nativos, permisos nativos o SDK requerirá reconstruir
+la development build; los cambios habituales de JavaScript no.
+Consulta la [guía oficial de development builds](https://docs.expo.dev/develop/development-builds/introduction/).
+
+### Comprobaciones automáticas
+
+```bash
+npm run typecheck
+npm test
+npm run doctor
+```
+
+La integración continua de GitHub ejecuta instalación con el lockfile,
+TypeScript, pruebas unitarias y exportación de bundles iOS,
+Android y web en cada push a `master` y pull request. No necesita claves,
+no carga `.env`, no publica apps ni sube los bundles como artefactos.
+Las pruebas actuales comprueban lógica, no sustituyen una revisión visual
+ni las pruebas de audio, permisos y persistencia en el iPhone.
+
+## Configuración y claves
+
+Para una instalación nueva, copia `.env.example` como `.env`. Si ya existe
+un `.env` local, consérvalo; no lo sobrescribas. El ejemplo solo contiene
+configuración publicable:
 
 ```env
 EXPO_PUBLIC_SUPABASE_URL=
 EXPO_PUBLIC_SUPABASE_ANON_KEY=
-EXPO_PUBLIC_OPENAI_API_KEY=
-EXPO_PUBLIC_GOOGLE_MAPS_KEY=
 ```
 
-En Snack, configura los mismos valores en el entorno del proyecto y reinicia la
-previsualización para limpiar la caché.
+`.env*` está excluido de Git, excepto el ejemplo vacío. Esto evita subir el
+archivo, pero **no protege las variables `EXPO_PUBLIC_*`**, que quedan incluidas
+en la app. Metro es el servidor de desarrollo, no un backend de APIs.
+Así lo explica la [documentación de Expo](https://docs.expo.dev/guides/environment-variables/).
 
-La clave anónima de Supabase puede estar en el cliente únicamente si las tablas
-y el almacenamiento tienen políticas RLS correctas. Las claves de OpenAI y
-Google Maps expuestas como `EXPO_PUBLIC_*` son aceptables solo para probar este
-prototipo controlado: una versión distribuible debe llamar a esos proveedores
-desde un backend autenticado y aplicar límites de uso.
+| Integración actual | Tratamiento previsto |
+| --- | --- |
+| OpenAI: transcripción y extracción de recuerdos | Clave privada del backend; la app envía solicitudes autenticadas. |
+| Google Places y Geocoding REST: búsquedas y coordenadas | Clave privada del backend, restringida por APIs y con límites de uso. |
+| Mapa nativo del Atlas | iOS usa Apple Maps actualmente. Para una build Android propia, configurar aparte una clave del SDK Maps restringida a la app y su certificado. |
+| Supabase: cuenta, perfil, conexiones y recuerdos compartidos | URL y clave `anon` en el cliente, con sesión real y políticas RLS/Storage verificadas. Nunca `service_role` ni una clave secreta en la app. |
+
+La clave de OpenAI no debe vivir en el dispositivo, según la
+[documentación oficial de OpenAI](https://developers.openai.com/api/reference/overview).
+Las claves públicas de Supabase no sustituyen las políticas de autorización;
+consulta su [guía de claves y RLS](https://supabase.com/docs/guides/getting-started/api-keys).
+Las claves del SDK Maps nativo y las llamadas REST tienen restricciones
+distintas; para estas últimas proponemos un proxy autenticado conforme a la
+[guía de seguridad de Google Maps](https://developers.google.com/maps/api-security-best-practices).
+
+### Migración de APIs pendiente
+
+La propuesta es usar Supabase Edge Functions como backend de IA y Google:
+validar una sesión real, exponer acciones concretas (no un relay de URLs o
+modelos arbitrarios), fijar los parámetros permitidos y aplicar límites
+de tamaño, tiempo y consumo. Las claves privadas se configurarían como
+secretos del servidor, sin pegarlas en el chat ni en GitHub.
+
+**Este backend todavía no está implementado.** El código heredado sigue
+leyendo OpenAI/Google desde `EXPO_PUBLIC_*` o AsyncStorage y llamando a los
+proveedores desde la app. Preparar el flujo local no elimina ese riesgo.
+No se han borrado ni cambiado tus claves locales. Antes de distribuir una
+app, migra esas llamadas y rota cualquier secreto que ya haya sido expuesto.
+
+La pestaña Admin y el acceso temporal con `66` se mantienen para diagnóstico
+del prototipo. No son autenticación válida para el futuro backend. Además,
+los campos Supabase de ese panel no reconfiguran el cliente activo, que se
+inicializa desde el entorno de Expo o los valores de respaldo.
+
+`npm run check:env` avisa de secretos evidentes configurados como públicos
+sin imprimir valores. Es informativo por defecto para no bloquear el flujo
+heredado. `npm run check:env -- --strict` devuelve error si los detecta;
+no reemplaza una auditoría de código, RLS, almacenamiento o bundles.
+Por defecto revisa el entorno de desarrollo, sin depender de `NODE_ENV`.
+Antes de una distribución, selecciona producción explícitamente:
+
+```bash
+npm run check:env -- --strict --environment production
+```
+
+Pendiente solicitado por el usuario: **recordar configurar la clave de Google
+cuando implementemos o probemos Places/Geocoding**. No hace falta para arrancar
+Expo ni ejecutar las pruebas unitarias. Se configurará como secreto del backend
+autenticado; no en `EXPO_PUBLIC_*`, en el chat ni en el repositorio.
 
 ## Estructura
 
