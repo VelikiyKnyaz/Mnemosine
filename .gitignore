@@ -41,6 +41,10 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+# Supabase local runtime state; never commit login or linked-project metadata
+supabase/.temp/
+supabase/.branches/
+
 # generated native folders
 /ios
 /android

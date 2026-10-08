@@ -1,0 +1,5 @@
+project_id = "mnemosine"
+
+[functions.mnemosine-api]
+verify_jwt = true
+entrypoint = "./functions/mnemosine-api/index.ts"

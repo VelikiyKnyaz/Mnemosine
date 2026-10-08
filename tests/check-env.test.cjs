@@ -107,6 +107,8 @@ const serviceRole = `FICTITIOUS.${Buffer.from(JSON.stringify({ role: 'service_ro
 for (const [name, value] of [
   ['EXPO_PUBLIC_OPENAI_API_KEY', 'sk-FICTITIOUS-openai-secret'],
   ['EXPO_PUBLIC_GOOGLE_MAPS_KEY', 'FICTITIOUS-google-rest-secret'],
+  ['EXPO_PUBLIC_GOOGLE_MAPS_API_KEY', 'FICTITIOUS-google-rest-secret'],
+  ['EXPO_PUBLIC_GOOGLE_PLACES_API_KEY', 'FICTITIOUS-google-rest-secret'],
   ['EXPO_PUBLIC_SUPABASE_ANON_KEY', serviceRole],
 ]) {
   test(`detects ${name} without printing its value; strict fails and informational mode continues`, (t) => {

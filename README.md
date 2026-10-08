@@ -3,6 +3,9 @@
 Prototipo móvil para capturar recuerdos en texto o audio y organizarlos por
 tiempo, lugares, personas y relaciones. El proyecto usa React Native con Expo
 SDK 57, SQLite local y Supabase para las funciones de cuenta y conexión social.
+El backend de IA y Google está desplegado como una Edge Function de Supabase.
+La infraestructura y el rechazo de llamadas no autenticadas están verificados;
+las pruebas de Google/OpenAI con una cuenta real de la app siguen pendientes.
 
 El norte de producto y diseño está definido en el Documento Maestro v0.1.
 Consulta las [notas de documentación](docs/README.md) para acceder al original.
@@ -105,6 +108,10 @@ La integración continua de GitHub ejecuta instalación con el lockfile,
 TypeScript, pruebas unitarias y exportación de bundles iOS,
 Android y web en cada push a `master` y pull request. No necesita claves,
 no carga `.env`, no publica apps ni sube los bundles como artefactos.
+TypeScript comprueba también el backend. Las pruebas de APIs usan `fetch`
+simulado; las de cuotas ejecutan SQL en PostgreSQL temporal en memoria con
+PGlite (dependencia de desarrollo, no incluida en la app). No llaman proveedores
+ni demuestran concurrencia entre conexiones o permisos del proyecto remoto.
 Las pruebas actuales comprueban lógica, no sustituyen una revisión visual
 ni las pruebas de audio, permisos y persistencia en el iPhone.
 
@@ -116,7 +123,7 @@ configuración publicable:
 
 ```env
 EXPO_PUBLIC_SUPABASE_URL=
-EXPO_PUBLIC_SUPABASE_ANON_KEY=
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 ```
 
 `.env*` está excluido de Git, excepto el ejemplo vacío. Esto evita subir el
@@ -124,39 +131,57 @@ archivo, pero **no protege las variables `EXPO_PUBLIC_*`**, que quedan incluidas
 en la app. Metro es el servidor de desarrollo, no un backend de APIs.
 Así lo explica la [documentación de Expo](https://docs.expo.dev/guides/environment-variables/).
 
-| Integración actual | Tratamiento previsto |
+| Integración | Tratamiento implementado |
 | --- | --- |
 | OpenAI: transcripción y extracción de recuerdos | Clave privada del backend; la app envía solicitudes autenticadas. |
 | Google Places y Geocoding REST: búsquedas y coordenadas | Clave privada del backend, restringida por APIs y con límites de uso. |
 | Mapa nativo del Atlas | iOS usa Apple Maps actualmente. Para una build Android propia, configurar aparte una clave del SDK Maps restringida a la app y su certificado. |
-| Supabase: cuenta, perfil, conexiones y recuerdos compartidos | URL y clave `anon` en el cliente, con sesión real y políticas RLS/Storage verificadas. Nunca `service_role` ni una clave secreta en la app. |
+| Supabase: cuenta, perfil, conexiones y recuerdos compartidos | URL y clave pública en el cliente (`publishable` o `anon` heredada), con sesión real. Las políticas RLS/Storage del proyecto existente requieren revisión; nunca `service_role` ni una clave secreta en la app. |
 
 La clave de OpenAI no debe vivir en el dispositivo, según la
 [documentación oficial de OpenAI](https://developers.openai.com/api/reference/overview).
 Las claves públicas de Supabase no sustituyen las políticas de autorización;
 consulta su [guía de claves y RLS](https://supabase.com/docs/guides/getting-started/api-keys).
 Las claves del SDK Maps nativo y las llamadas REST tienen restricciones
-distintas; para estas últimas proponemos un proxy autenticado conforme a la
+distintas; para estas últimas usamos un proxy autenticado conforme a la
 [guía de seguridad de Google Maps](https://developers.google.com/maps/api-security-best-practices).
 
-### Migración de APIs pendiente
+### Backend de IA y Google: desplegado, pendiente de prueba en iPhone
 
-La propuesta es usar Supabase Edge Functions como backend de IA y Google:
-validar una sesión real, exponer acciones concretas (no un relay de URLs o
-modelos arbitrarios), fijar los parámetros permitidos y aplicar límites
-de tamaño, tiempo y consumo. Las claves privadas se configurarían como
-secretos del servidor, sin pegarlas en el chat ni en GitHub.
+`mnemosine-api` valida el JWT consultando Supabase Auth, rechaza usuarios
+anónimos y permite únicamente transcripción, segmentación, extracción,
+Places y Geocoding. Modelos, prompts, URLs, máscaras de campos y cuotas
+se fijan en el servidor. No acepta una identidad, URL o clave del cliente.
+Los errores de los proveedores no se reenvían al teléfono ni se registran
+con textos, audios o secretos. La captura y los recuerdos siguen en SQLite;
+esto no migra el almacenamiento de recuerdos a la nube ni añade cifrado local.
+Para procesarlos, sus textos/audios se envían a OpenAI; consultas y coordenadas
+de búsqueda se envían a Google a través del backend autenticado.
 
-**Este backend todavía no está implementado.** El código heredado sigue
-leyendo OpenAI/Google desde `EXPO_PUBLIC_*` o AsyncStorage y llamando a los
-proveedores desde la app. Preparar el flujo local no elimina ese riesgo.
-No se han borrado ni cambiado tus claves locales. Antes de distribuir una
-app, migra esas llamadas y rota cualquier secreto que ya haya sido expuesto.
+La app ya no lee las claves antiguas de `EXPO_PUBLIC_*` o AsyncStorage, y
+Admin ya no permite editarlas. **No se han borrado ni modificado tus claves
+locales.** Retira los secretos del entorno de Expo cuando hayas conservado
+una copia segura; rota cualquier clave distribuida previamente en una app.
 
 La pestaña Admin y el acceso temporal con `66` se mantienen para diagnóstico
-del prototipo. No son autenticación válida para el futuro backend. Además,
-los campos Supabase de ese panel no reconfiguran el cliente activo, que se
-inicializa desde el entorno de Expo o los valores de respaldo.
+local. El panel también aparece con una cuenta real en desarrollo (Expo Go)
+y permite comprobar la función sin consumir Google/OpenAI. Esta comprobación
+solo confirma que existen secretos, no que sean válidos. El acceso `66` no
+autoriza ninguna llamada al backend. Para usar APIs, inicia sesión en
+Mnemósine con una cuenta de Supabase, distinta de tu cuenta de Expo CLI.
+
+`mnemosine-api` y sus cuotas están desplegadas en `eknupuhacgqfgmbrxrys`
+desde el 8 de octubre de 2026. Se verificaron permisos y rechazo sin sesión,
+con `66` y con una clave pública `anon` usada como identidad. No se consumieron
+proveedores ni se alteraron recuerdos/perfiles/Storage durante estas pruebas.
+Recarga Expo Go, inicia sesión en Mnemósine con una cuenta real y consulta
+Admin → Comprobar backend. Después prueba un lugar, un texto y un audio breves.
+
+Si se cambia de proyecto sin desplegar la función, las APIs mostrarán un error
+explícito y la IA dejará los recuerdos pendientes. No se usa una clave local
+como alternativa. Consulta [la preparación y el despliegue](supabase/README.md).
+No hay despliegue
+automático ni ejecución de migraciones en CI.
 
 `npm run check:env` avisa de secretos evidentes configurados como públicos
 sin imprimir valores. Es informativo por defecto para no bloquear el flujo
@@ -169,10 +194,10 @@ Antes de una distribución, selecciona producción explícitamente:
 npm run check:env -- --strict --environment production
 ```
 
-Pendiente solicitado por el usuario: **recordar configurar la clave de Google
-cuando implementemos o probemos Places/Geocoding**. No hace falta para arrancar
-Expo ni ejecutar las pruebas unitarias. Se configurará como secreto del backend
-autenticado; no en `EXPO_PUBLIC_*`, en el chat ni en el repositorio.
+El usuario confirmó que guardó ambas claves en Supabase. Antes de probar
+Google, verificar el proyecto, Places API (New), Geocoding y la facturación.
+No hacen falta claves para arrancar Expo ni ejecutar las pruebas unitarias.
+Las integraciones reales no se consideran verificadas hasta probarlas.
 
 ## Estructura
 
@@ -183,6 +208,8 @@ src/core/               SQLite, IA, configuración y sincronización
 src/features/           Pantallas agrupadas por capacidad
 src/components/         Componentes reutilizables
 src/navigation/         Navegación de autenticación, pestañas y detalle
+shared/                 Contratos y taxonomía de emociones compartidos
+supabase/               Backend de APIs y migración de cuotas
 docs/                   Documentación maestra del producto
 ```
 
@@ -194,6 +221,6 @@ personales reales. Antes de producción se deben completar, como mínimo:
 - retirar el acceso administrativo temporal mediante la contraseña `66`;
 - bóveda local cifrada y bloqueo de aplicación;
 - separación o limpieza de datos locales al cambiar de cuenta;
-- backend para IA y geocodificación sin secretos en el dispositivo;
+- verificar las APIs con una cuenta real, rotar secretos expuestos y revisar cuotas;
 - esquema remoto versionado, políticas RLS y pruebas de autorización;
 - exportación, borrado, procedencia y revisiones de accesibilidad.

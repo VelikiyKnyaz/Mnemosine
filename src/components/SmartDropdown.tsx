@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { View, StyleSheet, FlatList, TouchableOpacity, Keyboard, Modal, SafeAreaView, Platform, KeyboardAvoidingView } from 'react-native';
 import { TextInput, Text, Chip, Appbar } from 'react-native-paper';
-import { getConfig } from '../core/config';
+import { searchPlacesText } from '../core/backend';
 
 export interface PlaceSuggestion {
   displayName: string;
@@ -28,6 +28,7 @@ export default function SmartDropdown({
   const [query, setQuery] = useState(value || '');
   const [placeResults, setPlaceResults] = useState<PlaceSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const filtered = useMemo(() => {
@@ -53,33 +54,23 @@ export default function SmartDropdown({
   const exactMatch = items.find(i => i.name.toLowerCase() === query.toLowerCase());
 
   useEffect(() => {
-    if (!enablePlaces || !query.trim() || query.trim().length < 3) {
+    setSearchError('');
+    if (!modalVisible || !enablePlaces || !query.trim() || query.trim().length < 3) {
       setPlaceResults([]);
+      setSearching(false);
       return;
     }
+
+    let active = true;
+    const controller = new AbortController();
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     debounceRef.current = setTimeout(async () => {
       try {
         setSearching(true);
-        const apiKey = await getConfig('GOOGLE_MAPS_KEY');
-        if (!apiKey) {
-          setPlaceResults([]);
-          return;
-        }
-
-        const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': 'places.displayName,places.location,places.addressComponents',
-          },
-          body: JSON.stringify({ textQuery: query.trim(), maxResultCount: 5 }),
-        });
-
-        const data = await res.json();
+        const data = await searchPlacesText(query.trim(), 5, controller.signal);
+        if (!active) return;
         if (data.places && data.places.length > 0) {
           const mapped: PlaceSuggestion[] = data.places.map((p: any) => ({
             displayName: p.displayName?.text || '',
@@ -92,15 +83,20 @@ export default function SmartDropdown({
           setPlaceResults([]);
         }
       } catch (e) {
-        console.log('Places search failed:', e);
+        if (!active) return;
+        setSearchError(e instanceof Error ? e.message : 'No se pudo buscar en Google.');
         setPlaceResults([]);
       } finally {
-        setSearching(false);
+        if (active) setSearching(false);
       }
     }, 500);
 
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [query, enablePlaces]);
+    return () => {
+      active = false;
+      controller.abort();
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query, enablePlaces, modalVisible]);
 
   const handleSubmit = () => {
     const trimmed = query.trim();
@@ -160,6 +156,7 @@ export default function SmartDropdown({
           </Appbar.Header>
 
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+            {!!searchError && <Text style={{ color: '#B00020', padding: 12 }}>{searchError}</Text>}
             <View style={styles.searchHeader}>
               <TextInput
                 autoFocus

@@ -1,29 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Alert } from 'react-native';
-import { Button, Text, Card, Title, Paragraph, Divider, TextInput } from 'react-native-paper';
+import { Button, Text, Card, Title, Paragraph, Divider } from 'react-native-paper';
 import { getDb } from '../../core/database';
 import { processPendingMemories } from '../../core/ai_processor';
 import { useAuthStore } from '../../core/store';
-import { getAllConfig, setConfig } from '../../core/config';
+import { getBackendStatus } from '../../core/backend';
+import { SUPABASE_URL } from '../../core/config';
+import { supabase } from '../../core/supabase';
+import type { BackendStatus } from '../../../shared/api';
 
 export default function DebugScreen() {
   const [memories, setMemories] = useState<any[]>([]);
   const [entities, setEntities] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const setSession = useAuthStore(state => state.setSession);
-
-  // Config keys state
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [googleMapsKey, setGoogleMapsKey] = useState('');
-  const [supabaseUrl, setSupabaseUrl] = useState('');
-  const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
-  const [configSaved, setConfigSaved] = useState(false);
-
-  // Variables de entorno de Expo activas
-  const isEnvOpenai = !!process.env.EXPO_PUBLIC_OPENAI_API_KEY;
-  const isEnvGoogleMaps = !!process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY;
-  const isEnvSupabaseUrl = !!process.env.EXPO_PUBLIC_SUPABASE_URL;
-  const isEnvSupabaseKey = !!process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  const session = useAuthStore(state => state.session);
+  const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
+  const [backendError, setBackendError] = useState('');
+  const [checkingBackend, setCheckingBackend] = useState(false);
+  const isDiagnostic = session?.access_token === 'debug';
 
   const loadData = async () => {
     try {
@@ -37,27 +32,21 @@ export default function DebugScreen() {
     }
   };
 
-  const loadConfig = async () => {
-    const cfg = await getAllConfig();
-    setOpenaiKey(cfg.OPENAI_API_KEY || '');
-    setGoogleMapsKey(cfg.GOOGLE_MAPS_KEY || '');
-    setSupabaseUrl(cfg.SUPABASE_URL || '');
-    setSupabaseAnonKey(cfg.SUPABASE_ANON_KEY || '');
-    setConfigSaved(!!cfg.OPENAI_API_KEY);
-  };
-
   useEffect(() => {
     loadData();
-    loadConfig();
   }, []);
 
-  const handleSaveConfig = async () => {
-    await setConfig('OPENAI_API_KEY', openaiKey.trim());
-    await setConfig('GOOGLE_MAPS_KEY', googleMapsKey.trim());
-    await setConfig('SUPABASE_URL', supabaseUrl.trim());
-    await setConfig('SUPABASE_ANON_KEY', supabaseAnonKey.trim());
-    setConfigSaved(true);
-    Alert.alert('Guardado', 'Claves guardadas localmente en el dispositivo.');
+  const checkBackend = async () => {
+    setCheckingBackend(true);
+    setBackendError('');
+    setBackendStatus(null);
+    try {
+      setBackendStatus(await getBackendStatus());
+    } catch (error: any) {
+      setBackendError(error.message || 'No se pudo consultar el backend.');
+    } finally {
+      setCheckingBackend(false);
+    }
   };
 
   const handleClearDb = async () => {
@@ -80,9 +69,23 @@ export default function DebugScreen() {
   const handleProcessAI = async () => {
     setLoading(true);
     try {
+      const status = await getBackendStatus();
+      setBackendStatus(status);
+      if (!status.quotaReady || !status.secrets.openai) {
+        throw new Error('Falta activar las cuotas o configurar OpenAI en Supabase.');
+      }
       await processPendingMemories();
-      Alert.alert('IA Procesada', 'Se procesaron las memorias pendientes con éxito.');
-      loadData();
+      const db = await getDb();
+      const remaining = await db.getFirstAsync<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM memories WHERE sync_status IN ('PENDING_AI', 'PROCESSING_AI')"
+      );
+      Alert.alert(
+        remaining?.count ? 'Procesamiento pendiente' : 'IA procesada',
+        remaining?.count
+          ? `Quedan ${remaining.count} memorias pendientes. Revisa tu conexión y el estado del servicio antes de reintentar.`
+          : 'No quedan memorias pendientes de procesar.'
+      );
+      await loadData();
     } catch (e: any) {
       console.error(e);
       Alert.alert('Error', e.message || 'Fallo al procesar IA.');
@@ -91,93 +94,50 @@ export default function DebugScreen() {
     }
   };
   
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (!isDiagnostic) {
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      if (error) {
+        Alert.alert('Error', 'No se pudo cerrar la sesión. Vuelve a intentarlo.');
+        return;
+      }
+    }
     setSession(null);
   };
-
-  const maskKey = (key: string) => key ? key.slice(0, 8) + '...' + key.slice(-4) : '(vacía)';
 
   return (
     <ScrollView style={styles.container}>
       <Title style={styles.title}>Panel Técnico (Admin)</Title>
 
-      {/* ── SECCIÓN: CONFIGURACIÓN DE CLAVES ── */}
+      {/* Las claves privadas se administran únicamente en Supabase. */}
       <Card style={styles.configCard}>
         <Card.Content>
-          <Title style={{fontSize: 16}}>🔑 Configuración heredada del prototipo</Title>
+          <Title style={{fontSize: 16}}>Backend seguro</Title>
           <Text style={styles.configHint}>
-            Este panel no es una bóveda de secretos. OpenAI y Google Places/Geocoding todavía se llaman desde el dispositivo y deben migrar a un backend. El acceso con 66 es solo para diagnóstico local, no una autorización del servidor.
+            OpenAI y Google se consultan mediante una función de Supabase. Administra las claves en Edge Functions → Secrets, no en este dispositivo.
           </Text>
-          
-          {(isEnvOpenai || isEnvGoogleMaps || isEnvSupabaseUrl || isEnvSupabaseKey) && (
-            <View style={styles.envActiveBanner}>
-              <Text style={styles.envActiveBannerText}>
-                Variables de Expo detectadas. Los valores [Entorno] tienen prioridad y se incluyen en la app: no son privados aunque el archivo .env no esté en Git.
-              </Text>
-            </View>
+          <Text style={styles.savedKey}>Proyecto: {SUPABASE_URL}</Text>
+          <Text style={styles.savedKey}>
+            Sesión: {isDiagnostic ? 'diagnóstico local (66)' : session ? 'cuenta de Supabase' : 'sin sesión'}
+          </Text>
+          {isDiagnostic && (
+            <Text style={styles.configHint}>
+              El acceso 66 conserva el diagnóstico local. Para usar las APIs o comprobar el backend, sal e inicia sesión con una cuenta real.
+            </Text>
           )}
-          <Text style={styles.configHint}>
-            La conexión activa de Supabase se inicializa desde el entorno de Expo o la configuración de respaldo. Estos campos heredados no cambian ese cliente: configura .env y recarga la app.
-          </Text>
-
-          {configSaved ? (
+          <Button mode="outlined" onPress={checkBackend} loading={checkingBackend} disabled={checkingBackend || loading} style={{marginVertical: 10}}>
+            Comprobar backend
+          </Button>
+          {!!backendError && <Text style={styles.configHint}>{backendError}</Text>}
+          {backendStatus && (
             <View>
-              <Text style={styles.savedKey}>
-                OpenAI: {maskKey(openaiKey)} {isEnvOpenai && <Text style={styles.envTag}>[Entorno]</Text>}
+              <Text style={styles.savedKey}>Función: conectada · versión {backendStatus.version}</Text>
+              <Text style={styles.savedKey}>Cuotas: {backendStatus.quotaReady ? 'activas' : 'falta aplicar la migración'}</Text>
+              <Text style={styles.savedKey}>Secreto OpenAI: {backendStatus.secrets.openai ? 'configurado' : 'falta configurar'}</Text>
+              <Text style={styles.savedKey}>Secreto Google: {backendStatus.secrets.googleMaps ? 'configurado' : 'falta configurar'}</Text>
+              <Text style={styles.configHint}>
+                Esta comprobación no consume las APIs y no verifica si las claves son válidas. Las claves antiguas locales se conservan, pero la app ya no las usa.
               </Text>
-              <Text style={styles.savedKey}>
-                Google Maps: {maskKey(googleMapsKey)} {isEnvGoogleMaps && <Text style={styles.envTag}>[Entorno]</Text>}
-              </Text>
-              <Text style={styles.savedKey}>
-                Supabase URL: {maskKey(supabaseUrl)} {isEnvSupabaseUrl && <Text style={styles.envTag}>[Entorno]</Text>}
-              </Text>
-              <Text style={styles.savedKey}>
-                Supabase Key: {maskKey(supabaseAnonKey)} {isEnvSupabaseKey && <Text style={styles.envTag}>[Entorno]</Text>}
-              </Text>
-              <Button mode="text" onPress={() => setConfigSaved(false)} style={{marginTop: 5}}>
-                Editar / Sobrescribir Claves
-              </Button>
-            </View>
-          ) : (
-            <View>
-              <TextInput
-                label={`OpenAI API Key (sk-proj-...)${isEnvOpenai ? ' [Entorno]' : ''}`}
-                value={openaiKey}
-                onChangeText={setOpenaiKey}
-                style={styles.input}
-                secureTextEntry
-                dense
-                disabled={isEnvOpenai}
-              />
-              <TextInput
-                label={`Google Maps API Key${isEnvGoogleMaps ? ' [Entorno]' : ''}`}
-                value={googleMapsKey}
-                onChangeText={setGoogleMapsKey}
-                style={styles.input}
-                secureTextEntry
-                dense
-                disabled={isEnvGoogleMaps}
-              />
-              <TextInput
-                label={`Supabase URL${isEnvSupabaseUrl ? ' [Entorno]' : ''}`}
-                value={supabaseUrl}
-                onChangeText={setSupabaseUrl}
-                style={styles.input}
-                dense
-                disabled={isEnvSupabaseUrl}
-              />
-              <TextInput
-                label={`Supabase Anon Key${isEnvSupabaseKey ? ' [Entorno]' : ''}`}
-                value={supabaseAnonKey}
-                onChangeText={setSupabaseAnonKey}
-                style={styles.input}
-                secureTextEntry
-                dense
-                disabled={isEnvSupabaseKey}
-              />
-              <Button mode="contained" onPress={handleSaveConfig} style={{marginTop: 10}} buttonColor="#2e7d32">
-                Guardar Sobrescritura en Dispositivo
-              </Button>
             </View>
           )}
         </Card.Content>
@@ -195,7 +155,10 @@ export default function DebugScreen() {
         </Button>
       </View>
       <View style={styles.buttonRow}>
-        <Button mode="outlined" onPress={handleClearDb} disabled={loading} style={[styles.actionBtn, {borderColor: '#B00020'}]} textColor="#B00020">
+        <Button mode="outlined" onPress={() => Alert.alert('Borrar datos locales', 'Esta acción borra las memorias, entidades y tareas de este dispositivo. No se puede deshacer.', [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Borrar', style: 'destructive', onPress: handleClearDb },
+        ])} disabled={loading} style={[styles.actionBtn, {borderColor: '#B00020'}]} textColor="#B00020">
           Borrar BD
         </Button>
         <Button mode="text" onPress={handleLogout} disabled={loading} style={styles.actionBtn}>
@@ -229,7 +192,7 @@ export default function DebugScreen() {
             <Paragraph><Text style={{fontWeight: 'bold'}}>Tipo:</Text> {e.type}</Paragraph>
             <Paragraph><Text style={{fontWeight: 'bold'}}>Padre:</Text> {e.parent_id || 'Raíz'}</Paragraph>
             {e.type === 'LOCATION' && (
-              <Paragraph><Text style={{fontWeight: 'bold'}}>Coords:</Text> {e.latitude ? `${e.latitude}, ${e.longitude}` : 'Sin ubicar'}</Paragraph>
+              <Paragraph><Text style={{fontWeight: 'bold'}}>Coords:</Text> {e.latitude != null && e.longitude != null ? `${e.latitude}, ${e.longitude}` : 'Sin ubicar'}</Paragraph>
             )}
           </Card.Content>
         </Card>

@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { getConfig } from './config';
+import { createClient } from '@supabase/supabase-js';
+import { SUPABASE_URL, SUPABASE_PUBLIC_KEY } from './config';
 
 // Polyfill simple para decodificar base64 a Uint8Array sin dependencias externas (compatible con Snack)
 const decodeBase64 = (base64: string): Uint8Array => {
@@ -30,10 +30,7 @@ const decodeBase64 = (base64: string): Uint8Array => {
 };
 
 // Inicialización estática preferida desde variables de entorno de Expo, con fallbacks para Expo Snack
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://eknupuhacgqfgmbrxrys.supabase.co';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVrbnVwdWhhY2dxZmdtYnJ4cnlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1MTA5MDEsImV4cCI6MjA5MzA4NjkwMX0.HYcHhS7P36D-QOoonosyil8779iUG-fT-iHbIdOZjK4';
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLIC_KEY, {
   auth: {
     storage: AsyncStorage,
     autoRefreshToken: true,
@@ -42,36 +39,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
-let _supabase: SupabaseClient | null = null;
-
-// Inicialización lazy: lee las claves de AsyncStorage si no hay variables de entorno
-export const getSupabase = async (): Promise<SupabaseClient> => {
-  if (_supabase) return _supabase;
-
-  // Si las variables de entorno de Expo ya están configuradas, usamos la instancia estática principal
-  if (process.env.EXPO_PUBLIC_SUPABASE_URL && process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY) {
-    _supabase = supabase;
-    return _supabase;
-  }
-
-  const url = await getConfig('SUPABASE_URL');
-  const anonKey = await getConfig('SUPABASE_ANON_KEY');
-
-  if (!url || !anonKey) {
-    throw new Error('Supabase no configurado. Configura las variables de entorno en el panel de Expo.');
-  }
-
-  _supabase = createClient(url, anonKey, {
-    auth: {
-      storage: AsyncStorage,
-      autoRefreshToken: true,
-      persistSession: true,
-      detectSessionInUrl: false,
-    },
-  });
-
-  return _supabase;
-};
+// Una sola instancia de Auth evita que el backend y las pantallas usen sesiones distintas.
+export const getSupabase = async () => supabase;
 
 /**
  * Uploads a local file (from gallery) to Supabase storage bucket 'user_assets' and returns its public URL.

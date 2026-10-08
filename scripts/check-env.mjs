@@ -83,7 +83,7 @@ for (const [name, value] of variables) {
   if (!name.startsWith('EXPO_PUBLIC_')) continue;
   const privateName = /(?:OPENAI.*(?:KEY|TOKEN)|SECRET|SERVICE_ROLE|PRIVATE|PASSWORD|ACCESS_TOKEN)/i.test(name);
   // This app uses this key for Places/Geocoding REST requests, not the native maps SDK.
-  const googleRestKey = name === 'EXPO_PUBLIC_GOOGLE_MAPS_KEY';
+  const googleRestKey = /^EXPO_PUBLIC_GOOGLE_(?:MAPS|PLACES|GEOCODING)(?:_API)?_KEY$/.test(name);
   if (isPrivateValue(value) || googleRestKey || (!publicAllowlist.has(name) && privateName)) {
     unsafePublicVariables.push(name);
   }
@@ -105,7 +105,7 @@ if (unsafePublicVariables.length) {
   console.log('No se detectaron secretos evidentes bajo EXPO_PUBLIC_. Esta comprobación no sustituye una auditoría.');
 }
 
-if (variables.has('EXPO_PUBLIC_GOOGLE_MAPS_KEY')) {
+if ([...variables.keys()].some(name => /^EXPO_PUBLIC_GOOGLE_(?:MAPS|PLACES|GEOCODING)(?:_API)?_KEY$/.test(name))) {
   console.log('Google Places/Geocoding REST debe usar una clave del backend. No es una clave SDK nativa publicable.');
   console.log('Las claves para SDK Maps nativo son distintas: restringirlas por aplicación/plataforma y API.');
 }

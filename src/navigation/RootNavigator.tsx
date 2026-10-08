@@ -38,7 +38,7 @@ function AuthStack() {
 
 function MainTabs() {
   const session = useAuthStore(state => state.session);
-  const isAdmin = session?.user?.role === 'admin';
+  const isAdmin = __DEV__ || session?.user?.role === 'admin';
 
   return (
     <Tab.Navigator screenOptions={{ headerShown: false }}>
@@ -125,10 +125,12 @@ export default function RootNavigator() {
       setIsLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (useAuthStore.getState().session?.access_token === 'debug' && _event === 'TOKEN_REFRESHED') return;
       setSession(session);
       if (session?.user) {
-        await checkProfileStatus(session.user.id);
+        // No ejecutar consultas Supabase dentro del bloqueo del callback de Auth.
+        setTimeout(() => { void checkProfileStatus(session.user.id); }, 0);
       }
     });
 

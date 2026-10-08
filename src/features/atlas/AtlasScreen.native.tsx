@@ -10,7 +10,7 @@ import { useIsFocused } from '@react-navigation/native';
 import SmartDropdown from '../../components/SmartDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { generateTerritorialHierarchy } from '../../core/ai_processor';
-import { getConfig } from '../../core/config';
+import { autocompletePlaces, getPlaceDetails, geocodeAddress, reverseGeocode } from '../../core/backend';
 import EntityMemoriesView from '../memories/EntityMemoriesView';
 
 const getDeltaForGeoLevel = (level: number) => {
@@ -57,6 +57,7 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [suggestionLimit, setSuggestionLimit] = useState(4);
   const [selectedPlace, setSelectedPlace] = useState<any | null>(null);
   const [searchingPlaces, setSearchingPlaces] = useState(false);
+  const [placesError, setPlacesError] = useState('');
   const [showParentAssign, setShowParentAssign] = useState(false);
   const [allLocations, setAllLocations] = useState<any[]>([]);
   const [confirmMode, setConfirmMode] = useState<'none' | 'quick' | 'precise'>('none');
@@ -65,6 +66,9 @@ export default function AtlasScreen({ route, navigation }: any) {
   const [loadingAutoTop, setLoadingAutoTop] = useState(false);
   const [addressQuery, setAddressQuery] = useState('');
   const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchGeneration = useRef(0);
+  const searchAbort = useRef<AbortController | null>(null);
+  const topSuggestionGeneration = useRef(0);
   const addressDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isFocused = useIsFocused();
@@ -72,6 +76,13 @@ export default function AtlasScreen({ route, navigation }: any) {
   const isProgrammaticMove = useRef(false);
 
   const closePanel = () => {
+    searchGeneration.current++;
+    topSuggestionGeneration.current++;
+    searchAbort.current?.abort();
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    setPlacesError('');
+    setSearchingPlaces(false);
+    setLoadingAutoTop(false);
     setPanelMode('hidden');
     setActionEntity(null);
     setMemoryEntityId(null);
@@ -344,6 +355,13 @@ export default function AtlasScreen({ route, navigation }: any) {
     }
   }, [isFocused, route.params?.placingEntityId]);
 
+  useEffect(() => () => {
+    searchGeneration.current++;
+    topSuggestionGeneration.current++;
+    searchAbort.current?.abort();
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+  }, []);
+
   const startEditing = (entity: any) => {
     setEditingEntity(entity);
     if (entity.coordinate) {
@@ -414,21 +432,19 @@ export default function AtlasScreen({ route, navigation }: any) {
 
   const fetchPlaceDetails = async (placeId: string) => {
     try {
-      const apiKey = await getConfig('GOOGLE_MAPS_KEY');
-      const res = await fetch(`https://places.googleapis.com/v1/places/${placeId}?fields=id,displayName,formattedAddress,location,addressComponents,types`, {
-        headers: { 'X-Goog-Api-Key': apiKey }
-      });
-      return await res.json();
+      return await getPlaceDetails(placeId);
     } catch (e) {
-      console.error('fetchPlaceDetails error:', e);
+      setPlacesError(e instanceof Error ? e.message : 'No se pudo consultar el lugar.');
       return null;
     }
   };
 
   const fetchTopSuggestion = async (entity: any, level: number = targetGeoLevel) => {
+    const generation = ++topSuggestionGeneration.current;
     try {
       setLoadingAutoTop(true);
       setAutoTopResult(null);
+      setPlacesError('');
 
       if (entity.metadata) {
         try {
@@ -454,9 +470,6 @@ export default function AtlasScreen({ route, navigation }: any) {
           }
         } catch (e) { }
       }
-
-      const apiKey = await getConfig('GOOGLE_MAPS_KEY');
-      if (!apiKey) { setLoadingAutoTop(false); return; }
 
       let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
       let validCoords = false;
@@ -484,7 +497,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       const unbiasedBody: any = { ...autoBody };
       const biasedBody: any = { ...autoBody };
 
-      if (entity.coordinate?.latitude) {
+      if (entity.coordinate?.latitude != null && entity.coordinate?.longitude != null) {
         biasedBody.locationBias = {
           circle: {
             center: { latitude: entity.coordinate.latitude, longitude: entity.coordinate.longitude },
@@ -500,21 +513,10 @@ export default function AtlasScreen({ route, navigation }: any) {
         };
       }
 
-      const unbiasedReq = fetch('https://places.googleapis.com/v1/places:autocomplete', {
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
-        body: JSON.stringify(unbiasedBody),
-      });
-
-      const biasedReq = fetch('https://places.googleapis.com/v1/places:autocomplete', {
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
-        body: JSON.stringify(biasedBody),
-      });
-
-      const [unbiasedRes, biasedRes] = await Promise.all([unbiasedReq, biasedReq]);
-      const unbiasedData = await unbiasedRes.json();
-      const biasedData = await biasedRes.json();
+      const unbiasedReq = autocompletePlaces(unbiasedBody);
+      const biasedReq = biasedBody.locationBias ? autocompletePlaces(biasedBody) : unbiasedReq;
+      const [unbiasedData, biasedData] = await Promise.all([unbiasedReq, biasedReq]);
+      if (generation !== topSuggestionGeneration.current) return;
 
       let unbiasedSuggestions = unbiasedData.suggestions || [];
       let biasedSuggestions = biasedData.suggestions || [];
@@ -536,6 +538,7 @@ export default function AtlasScreen({ route, navigation }: any) {
         const topSuggestion = finalSuggestions[0];
         
         const details = await fetchPlaceDetails(topSuggestion.placePrediction.placeId);
+        if (generation !== topSuggestionGeneration.current) return;
         
         if (details) {
           const topResult = { ...topSuggestion, details };
@@ -553,33 +556,30 @@ export default function AtlasScreen({ route, navigation }: any) {
         }
       }
     } catch (e) {
-      console.error('Auto top suggestion error:', e);
+      if (generation === topSuggestionGeneration.current) setPlacesError(e instanceof Error ? e.message : 'No se pudo buscar una sugerencia.');
     } finally {
-      setLoadingAutoTop(false);
+      if (generation === topSuggestionGeneration.current) setLoadingAutoTop(false);
     }
   };
 
   const searchPlaces = async (query: string, level: number = targetGeoLevel) => {
+    const generation = ++searchGeneration.current;
+    searchAbort.current?.abort();
+    setPlacesError('');
     setSearchQuery(query);
     if (searchDebounce.current) clearTimeout(searchDebounce.current);
 
     if (!query.trim() || query.trim().length < 2) {
       setPlaceSuggestions([]);
+      setSearchingPlaces(false);
       return;
     }
 
     searchDebounce.current = setTimeout(async () => {
+      const controller = new AbortController();
+      searchAbort.current = controller;
       try {
         setSearchingPlaces(true);
-        const apiKey = await getConfig('GOOGLE_MAPS_KEY');
-        if (!apiKey) { setSearchingPlaces(false); return; }
-
-        const headers = {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': apiKey,
-          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.addressComponents,places.types',
-        };
-
         // Compute Global Bounding Box of all user's confirmed locations
         let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
         let validCoords = false;
@@ -630,21 +630,10 @@ export default function AtlasScreen({ route, navigation }: any) {
           };
         }
 
-        const unbiasedReq = fetch('https://places.googleapis.com/v1/places:autocomplete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
-          body: JSON.stringify(unbiasedBody),
-        });
-
-        const biasedReq = fetch('https://places.googleapis.com/v1/places:autocomplete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
-          body: JSON.stringify(biasedBody),
-        });
-
-        const [unbiasedRes, biasedRes] = await Promise.all([unbiasedReq, biasedReq]);
-        const unbiasedData = await unbiasedRes.json();
-        const biasedData = await biasedRes.json();
+        const unbiasedReq = autocompletePlaces(unbiasedBody, controller.signal);
+        const biasedReq = biasedBody.locationBias ? autocompletePlaces(biasedBody, controller.signal) : unbiasedReq;
+        const [unbiasedData, biasedData] = await Promise.all([unbiasedReq, biasedReq]);
+        if (generation !== searchGeneration.current) return;
 
         let unbiasedSuggestions = unbiasedData.suggestions || [];
         let biasedSuggestions = biasedData.suggestions || [];
@@ -678,10 +667,11 @@ export default function AtlasScreen({ route, navigation }: any) {
         setSuggestionLimit(5);
         setPlaceSuggestions(finalSuggestions);
       } catch (e) {
-        console.error('Places search error:', e);
+        if (generation !== searchGeneration.current) return;
+        setPlacesError(e instanceof Error ? e.message : 'No se pudo buscar el lugar.');
         setPlaceSuggestions([]);
       } finally {
-        setSearchingPlaces(false);
+        if (generation === searchGeneration.current) setSearchingPlaces(false);
       }
     }, 600);
   };
@@ -692,12 +682,7 @@ export default function AtlasScreen({ route, navigation }: any) {
     const query = addressQuery.trim();
     if (!query || query.length < 3) return;
     try {
-      const apiKey = await getConfig('GOOGLE_MAPS_KEY');
-      if (!apiKey) { Alert.alert('Error', 'API key no configurada.'); return; }
-
-      const encoded = encodeURIComponent(query);
-      const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}&key=${apiKey}`);
-      const data = await res.json();
+      const data = await geocodeAddress(query);
 
       if (data.status === 'OK' && data.results?.length > 0) {
         const loc = data.results[0].geometry.location;
@@ -712,7 +697,7 @@ export default function AtlasScreen({ route, navigation }: any) {
       }
     } catch (e) {
       console.error('Geocode error:', e);
-      Alert.alert('Error', 'No se pudo geocodificar la dirección.');
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo geocodificar la dirección.');
     }
   };
 
@@ -876,10 +861,8 @@ export default function AtlasScreen({ route, navigation }: any) {
 
       // Reverse geocode to auto-assign territorial parent
       try {
-        const apiKey = await getConfig('GOOGLE_MAPS_KEY');
-        if (apiKey) {
-          const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lon}&key=${apiKey}`);
-          const data = await res.json();
+        {
+          const data = await reverseGeocode(lat, lon);
           if (data.status === 'OK' && data.results?.length > 0) {
             const components = data.results[0].address_components || [];
             const getComp = (type: string) => components.find((c: any) => c.types?.includes(type))?.long_name || '';
@@ -1572,6 +1555,7 @@ export default function AtlasScreen({ route, navigation }: any) {
 
             {panelType === 'action' && actionEntity && (
               <View style={{ flex: 1 }}>
+                {!!placesError && <Text style={{ color: '#B00020', padding: 12 }}>{placesError}</Text>}
                 <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, padding: 15 }} contentContainerStyle={{ paddingBottom: 80 }}>
                   <Text style={{ fontWeight: 'bold', fontSize: 16, marginBottom: 4 }}>
                     Confirmar: {actionEntity.title}

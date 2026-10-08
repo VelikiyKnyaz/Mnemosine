@@ -10,7 +10,6 @@ import MemoryEditModal from '../../components/MemoryEditModal';
 import { getDb } from '../../core/database';
 import { processPendingMemories } from '../../core/ai_processor';
 import { calculateDatesFromMarkers } from '../../core/chrono_engine';
-import { getConfig } from '../../core/config';
 
 // ── Helpers ──
 
@@ -95,32 +94,6 @@ const parseTimeMarkersLocal = (text: string): string[] => {
   if (/adolescencia|teenage/.test(t)) markers.push('life_stage:teenage');
   
   return markers;
-};
-
-const resolveTimeMarkersWithAI = async (text: string): Promise<string[]> => {
-  const apiKey = await getConfig('OPENAI_API_KEY');
-  if (!apiKey) throw new Error('API Key no configurada');
-  
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'Extract time_markers from user text. Return JSON: {"time_markers": [...]}. Formats: "exact_year:YYYY", "exact_date:YYYY-MM-DD", "exact_age:N", "age_range:N-M", "relative_years:-N", "life_stage:childhood|teenage|adulthood".' },
-        { role: 'user', content: text },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-    }),
-  });
-  
-  const data = await res.json();
-  const parsed = JSON.parse(data.choices[0].message.content);
-  return parsed.time_markers || [];
 };
 
 // ── Component ──

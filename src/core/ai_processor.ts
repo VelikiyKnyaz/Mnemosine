@@ -2,7 +2,7 @@ import { getDb, inheritCoordinatesFromParent } from './database';
 import { transcribeAudio, extractMemoryData, segmentMemoryText } from './ai_service';
 import { ALL_EMOTION_NAMES } from './emotions';
 import { calculateDatesFromMarkers, generateLifecycleStages } from './chrono_engine';
-import { getConfig } from './config';
+import { searchPlacesText } from './backend';
 import { checkAndCreateShareTasks } from './socialSync';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
@@ -63,39 +63,14 @@ function deriveTimeMarker(startDate: string | null, endDate: string | null): str
 // Helper: buscar coordenadas con Google Places API (Text Search)
 export const geocodeLocation = async (name: string, hometownContext: string): Promise<{lat: number, lon: number, address?: any, placeData?: any} | null> => {
   try {
-    const apiKey = await getConfig('GOOGLE_MAPS_KEY');
-    if (!apiKey) {
-      console.log('Google Maps API Key not configured, skipping geocoding');
-      return null;
-    }
-
     // 1. First try: global clean search
-    const globalRes = await fetch('https://places.googleapis.com/v1/places:searchText', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': apiKey,
-        'X-Goog-FieldMask': 'places.displayName,places.location,places.addressComponents',
-      },
-      body: JSON.stringify({ textQuery: name, maxResultCount: 1 }),
-    });
-
-    let data = await globalRes.json();
+    let data = await searchPlacesText(name, 1);
     let places = data.places || [];
 
     // 2. Fallback: if no results, try with hometown context
     if (places.length === 0 && hometownContext) {
       const textQuery = `${name}${hometownContext}`;
-      const fallbackRes = await fetch('https://places.googleapis.com/v1/places:searchText', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': apiKey,
-          'X-Goog-FieldMask': 'places.displayName,places.location,places.addressComponents',
-        },
-        body: JSON.stringify({ textQuery, maxResultCount: 1 }),
-      });
-      data = await fallbackRes.json();
+      data = await searchPlacesText(textQuery, 1);
       places = data.places || [];
     }
 
